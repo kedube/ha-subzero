@@ -131,9 +131,7 @@ class SubZeroCancelWashButton(SubZeroEntity, ButtonEntity):
         )
 
     async def async_press(self) -> None:
-        # Like the app, cancel even when the cycle already reports off, as it may
-        # during a delayed start.
-        await self.coordinator.async_set_properties({"wash_cycle_on": False}, force=True)
+        await self.coordinator.async_cancel_wash()
 
 
 class SubZeroAirFilterResetButton(SubZeroEntity, ButtonEntity):
@@ -176,6 +174,5 @@ class SubZeroTimerDismissButton(SubZeroEntity, ButtonEntity):
         )
 
     async def async_press(self) -> None:
-        # Like the app's "Tap to Dismiss", writing 0 clears a finished timer.
         prefix = self.entity_description.key.removeprefix("dismiss_")
-        await self.coordinator.async_set_properties({f"{prefix}_duration": 0})
+        await self.coordinator.async_dismiss_timer(f"{prefix}_duration")

@@ -892,6 +892,29 @@ async def test_dismiss_button_clears_a_finished_timer(hass, appliances, prefix, 
     assert hass.states.get(entity_id).state == "unavailable"
 
 
+async def test_queued_timer_dismiss_spares_a_restarted_timer(hass, appliances):
+    await appliances.update("oven", {"kitchen_timer_active": False, "kitchen_timer_complete": True})
+    coordinator = appliances.entry.runtime_data.coordinators["oven"]
+    async with coordinator._command_lock:
+        tasks = [
+            asyncio.create_task(hass.services.async_call(domain, service, data, blocking=True))
+            for domain, service, data in (
+                (
+                    "number",
+                    "set_value",
+                    {"entity_id": "number.oven_kitchen_timer_duration", "value": 5},
+                ),
+                ("button", "press", {"entity_id": "button.oven_dismiss_kitchen_timer"}),
+            )
+        ]
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+    await tasks[0]
+    with pytest.raises(ServiceValidationError, match="has not finished"):
+        await tasks[1]
+    appliances.client.set_property.assert_awaited_once_with("oven", "kitchen_timer_duration", 5)
+
+
 @pytest.mark.parametrize(
     ("domain", "service", "data"),
     [
@@ -1113,6 +1136,17 @@ async def test_failed_cancel_is_not_confirmed_by_a_cycle_already_off(hass, appli
         == [call("dishwasher", "wash_cycle_on", False)] * 3
     )
     assert hass.states.get(entity_id).state != "unavailable"
+
+
+async def test_queued_cancel_rechecks_the_wash_status(appliances):
+    await appliances.update("dishwasher", {"wash_cycle_on": True, "wash_status": 2})
+    coordinator = appliances.entry.runtime_data.coordinators["dishwasher"]
+    async with coordinator._command_lock:
+        task = asyncio.create_task(coordinator.async_cancel_wash())
+        await appliances.update("dishwasher", {"wash_cycle_on": False, "wash_status": 6})
+    with pytest.raises(ServiceValidationError, match="no wash cycle to cancel"):
+        await task
+    appliances.client.set_property.assert_not_awaited()
 
 
 async def test_dishwasher_modes_follow_capability_and_block_start_in_sabbath(hass, appliances):

@@ -57,6 +57,7 @@ from .controls import (
     start_properties,
     supports_air_filter_reset,
     validate_control_properties,
+    wash_cancel_enabled,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -186,6 +187,25 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
                 await self._async_write({**properties, key: True})
             else:
                 await self._async_write(start_properties(self.data, key, temperature), force=True)
+
+    async def async_cancel_wash(self) -> None:
+        async with self._command_lock:
+            if not self.last_update_success:
+                raise ServiceValidationError("The appliance is unavailable.")
+            if not wash_cancel_enabled(self.data):
+                raise ServiceValidationError("There is no wash cycle to cancel.")
+            # Like the app, cancel even when the cycle already reports off, as it
+            # may during a delayed start.
+            await self._async_write({"wash_cycle_on": False}, force=True)
+
+    async def async_dismiss_timer(self, key: str) -> None:
+        async with self._command_lock:
+            if not self.last_update_success:
+                raise ServiceValidationError("The appliance is unavailable.")
+            if self.data.get(f"{KITCHEN_TIMERS[key]}_complete") is not True:
+                raise ServiceValidationError("The kitchen timer has not finished.")
+            # Like the app's "Tap to Dismiss", writing 0 clears a finished timer.
+            await self._async_write({key: 0})
 
     async def _async_write(self, properties: dict, *, force: bool = False) -> None:
         if not self.last_update_success:
