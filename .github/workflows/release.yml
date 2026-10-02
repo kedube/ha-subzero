@@ -1,0 +1,42 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  checks:
+    uses: ./.github/workflows/validate.yml
+  release:
+    name: Prepare release
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check manifest version
+        run: |
+          version=$(jq -r .version custom_components/subzero/manifest.json)
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::manifest version $version does not match tag $TAG"
+            exit 1
+          fi
+      # HACS extracts the zip into custom_components/subzero, so the
+      # integration files must sit at the root of the archive.
+      - name: Build the zip
+        run: git archive --format=zip -o ha_subzero.zip HEAD:custom_components/subzero
+      # A new tag gets a draft release for the notes. A moved tag replaces
+      # the zip on its existing release.
+      - name: Upload zip to release
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" ha_subzero.zip --clobber
+          else
+            flags=(--draft --verify-tag --title "$TAG" --notes "")
+            if [[ "$TAG" == *b* ]]; then
+              flags+=(--prerelease)
+            fi
+            gh release create "$TAG" ha_subzero.zip "${flags[@]}"
+          fi
