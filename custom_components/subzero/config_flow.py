@@ -1,5 +1,7 @@
 """Sign in once and manage the account's appliance selection in Home Assistant."""
 
+import asyncio
+
 import aiohttp
 import voluptuous as vol
 from homeassistant import config_entries
@@ -16,7 +18,16 @@ from homeassistant.helpers.selector import (
 
 from .api import ApiError, RateLimited, SubZeroClient
 from .app_config import SUBSCRIPTION_KEY
-from .auth import InvalidAuth, LoginChallenge, LoginError, SubZeroLogin
+from .auth import (
+    InvalidAuth,
+    InvalidCaptcha,
+    InvalidVerificationCode,
+    LoginChallenge,
+    LoginError,
+    LoginRateLimited,
+    MfaCallTimeout,
+    SubZeroLogin,
+)
 from .const import DOMAIN
 from .coordinator import selected_devices
 
@@ -51,74 +62,129 @@ class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     MINOR_VERSION = 3
     _client: SubZeroClient
     _devices: dict[str, dict]
-    _title: str
+    _title: str | None = None
+    _login: SubZeroLogin | None = None
+    _login_session: aiohttp.ClientSession | None = None
+    _call_task: asyncio.Task[dict] | None = None
+    _mfa_tokens: dict | None = None
+    _mfa_error: str = ""
+    _user_error: str = ""
 
     @staticmethod
     @callback
     def async_get_options_flow(config_entry):
         return SubZeroOptionsFlow()
 
+    def _cleanup_login(self) -> None:
+        if self._call_task is not None:
+            self._call_task.cancel()
+            self._call_task = None
+        if self._login_session is not None:
+            self._login_session.detach()
+            self._login_session = None
+        self._login = None
+        self._mfa_tokens = None
+        self._mfa_error = ""
+
+    @callback
+    def async_remove(self) -> None:
+        self._cleanup_login()
+
+    async def _async_return_to_user(self, error: str):
+        self._cleanup_login()
+        self._user_error = error
+        return await self.async_step_user()
+
+    async def _async_finish_login(self, tokens: dict):
+        self._cleanup_login()
+        try:
+            self._client = SubZeroClient(
+                async_get_clientsession(self.hass), SUBSCRIPTION_KEY, tokens
+            )
+            user_id = self._client.tokens["user_id"].lower()
+            if self.source == config_entries.SOURCE_REAUTH:
+                original = self._get_reauth_entry()
+                if user_id != original.data["tokens"]["user_id"].lower():
+                    return self.async_abort(reason="wrong_account")
+                return self.async_update_reload_and_abort(
+                    original,
+                    data_updates={
+                        "tokens": self._client.tokens,
+                        "username": self._title,
+                    },
+                )
+            await self.async_set_unique_id(user_id)
+            if any(
+                entry.data["tokens"]["user_id"].lower() == user_id
+                for entry in self._async_current_entries()
+            ):
+                return self.async_abort(reason="already_configured")
+            appliances = await self._client.appliances()
+        except InvalidAuth:
+            return await self._async_return_to_user("invalid_auth")
+        except RateLimited:
+            return await self._async_return_to_user("rate_limited")
+        except ApiError, aiohttp.ClientError, TimeoutError:
+            return await self._async_return_to_user("cannot_connect")
+        if not appliances:
+            return self.async_abort(reason="no_appliances")
+        configured = configured_devices(self.hass)
+        self._devices = {
+            appliance.id: {
+                "name": appliance.name,
+                "temperature_unit": appliance.temperature_unit,
+            }
+            for appliance in appliances
+            if appliance.id not in configured
+        }
+        if not self._devices:
+            return self.async_abort(reason="all_configured")
+        return await self.async_step_device()
+
     async def async_step_user(self, user_input=None):
         errors = {}
+        if self._user_error:
+            errors["base"] = self._user_error
+            self._user_error = ""
         if user_input is not None:
+            self._cleanup_login()
+            self._title = user_input["username"]
             session = async_create_clientsession(
                 self.hass,
                 auto_cleanup=False,
                 cookie_jar=aiohttp.CookieJar(quote_cookie=False),
                 timeout=aiohttp.ClientTimeout(total=40),
             )
+            login = SubZeroLogin(session, async_get_clientsession(self.hass))
+            keep_session = False
             try:
-                tokens = await SubZeroLogin(session, async_get_clientsession(self.hass)).login(
-                    user_input["username"], user_input["password"]
-                )
-                self._client = SubZeroClient(
-                    async_get_clientsession(self.hass), SUBSCRIPTION_KEY, tokens
-                )
-                user_id = self._client.tokens["user_id"].lower()
-                if self.source == config_entries.SOURCE_REAUTH:
-                    original = self._get_reauth_entry()
-                    if user_id != original.data["tokens"]["user_id"].lower():
-                        return self.async_abort(reason="wrong_account")
-                    return self.async_update_reload_and_abort(
-                        original,
-                        data_updates={
-                            "tokens": self._client.tokens,
-                            "username": user_input["username"],
-                        },
-                    )
-                await self.async_set_unique_id(user_id)
-                if any(
-                    entry.data["tokens"]["user_id"].lower() == user_id
-                    for entry in self._async_current_entries()
-                ):
-                    return self.async_abort(reason="already_configured")
-                appliances = await self._client.appliances()
-                if not appliances:
-                    return self.async_abort(reason="no_appliances")
-                configured = configured_devices(self.hass)
-                self._devices = {
-                    appliance.id: {
-                        "name": appliance.name,
-                        "temperature_unit": appliance.temperature_unit,
-                    }
-                    for appliance in appliances
-                    if appliance.id not in configured
-                }
-                if not self._devices:
-                    return self.async_abort(reason="all_configured")
-                self._title = user_input["username"]
-                return await self.async_step_device()
+                tokens = await login.login(user_input["username"], user_input["password"])
             except LoginChallenge:
-                errors["base"] = "verification_required"
+                if login.is_phonefactor_challenge:
+                    try:
+                        if login.captcha_required:
+                            await login.get_captcha_challenge()
+                    except LoginError, aiohttp.ClientError, TimeoutError:
+                        errors["base"] = "cannot_connect"
+                    else:
+                        self._login_session = session
+                        self._login = login
+                        keep_session = True
+                        return await self.async_step_mfa_challenge()
+                else:
+                    errors["base"] = "verification_required"
             except InvalidAuth:
                 errors["base"] = "invalid_auth"
-            except RateLimited:
+            except LoginRateLimited, RateLimited:
                 errors["base"] = "rate_limited"
             except LoginError, ApiError, aiohttp.ClientError, TimeoutError:
                 errors["base"] = "cannot_connect"
+            else:
+                return await self._async_finish_login(tokens)
             finally:
-                session.detach()
-        username = (user_input or {}).get("username")
+                if not keep_session:
+                    session.detach()
+        username = (user_input or {}).get("username") or self._title
         if username is None and self.source == config_entries.SOURCE_REAUTH:
             entry = self._get_reauth_entry()
             try:
@@ -139,6 +205,148 @@ class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             ),
             errors=errors,
         )
+
+    async def async_step_mfa_challenge(self, user_input=None):
+        if self._login is None:
+            return await self.async_step_user()
+        errors = {}
+        if self._mfa_error:
+            errors["base"] = self._mfa_error
+            self._mfa_error = ""
+        login = self._login
+        if user_input is not None:
+            auth_type = user_input.get("method", "onewaysms")
+            captcha_code = user_input.get("captcha", "")
+            try:
+                await login.request_mfa_verification(auth_type=auth_type, captcha_code=captcha_code)
+            except InvalidCaptcha:
+                errors["base"] = "invalid_captcha"
+                try:
+                    await login.get_captcha_challenge()
+                except LoginError, aiohttp.ClientError, TimeoutError:
+                    errors["base"] = "cannot_connect"
+            except LoginRateLimited, RateLimited:
+                errors["base"] = "rate_limited"
+            except InvalidAuth:
+                return await self._async_return_to_user("invalid_auth")
+            except LoginError, ApiError, aiohttp.ClientError, TimeoutError:
+                errors["base"] = "cannot_connect"
+            else:
+                login.captcha_solved = not login.captcha_required
+                login.captcha_image = ""
+                if auth_type == "dialphone":
+                    return await self.async_step_mfa_call()
+                return await self.async_step_mfa_code()
+
+        show_captcha = login.captcha_required and not login.captcha_solved
+        if show_captcha and not login.captcha_image and errors.get("base") != "cannot_connect":
+            try:
+                await login.get_captcha_challenge()
+            except LoginError, aiohttp.ClientError, TimeoutError:
+                errors["base"] = "cannot_connect"
+
+        fields: dict = {}
+        if show_captcha:
+            fields[vol.Required("captcha")] = TextSelector(
+                TextSelectorConfig(type=TextSelectorType.TEXT)
+            )
+        fields[vol.Required("method", default="onewaysms")] = SelectSelector(
+            SelectSelectorConfig(
+                options=[
+                    {"value": "onewaysms", "label": "Text message (SMS)"},
+                    {"value": "dialphone", "label": "Phone call"},
+                ],
+                mode=SelectSelectorMode.LIST,
+            )
+        )
+        captcha_image = (
+            f"\n\n![CAPTCHA]({login.captcha_image})" if show_captcha and login.captcha_image else ""
+        )
+        return self.async_show_form(
+            step_id="mfa_challenge",
+            data_schema=vol.Schema(fields),
+            errors=errors,
+            description_placeholders={
+                "masked_phone": login.masked_phone,
+                "captcha_image": captcha_image,
+            },
+        )
+
+    async def async_step_mfa_code(self, user_input=None):
+        if self._login is None:
+            return await self.async_step_user()
+        errors = {}
+        login = self._login
+        if user_input is not None:
+            code = user_input.get("code", "").strip()
+            if not code:
+                return await self.async_step_mfa_challenge()
+            try:
+                tokens = await login.verify_mfa_code(code)
+            except MfaCallTimeout:
+                self._mfa_error = "mfa_code_expired"
+                return await self.async_step_mfa_challenge()
+            except InvalidVerificationCode:
+                errors["base"] = "invalid_mfa_code"
+            except LoginRateLimited, RateLimited:
+                errors["base"] = "rate_limited"
+            except InvalidAuth:
+                return await self._async_return_to_user("invalid_auth")
+            except LoginError, ApiError, aiohttp.ClientError, TimeoutError:
+                errors["base"] = "cannot_connect"
+            else:
+                return await self._async_finish_login(tokens)
+
+        return self.async_show_form(
+            step_id="mfa_code",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional("code", default=""): TextSelector(
+                        TextSelectorConfig(type=TextSelectorType.TEXT)
+                    ),
+                }
+            ),
+            errors=errors,
+            description_placeholders={"masked_phone": login.masked_phone},
+        )
+
+    async def async_step_mfa_call(self, user_input=None):
+        if self._login is None:
+            return await self.async_step_user()
+        if self._call_task is None:
+            self._call_task = self.hass.async_create_task(self._login.poll_mfa_call())
+        if not self._call_task.done():
+            return self.async_show_progress(
+                step_id="mfa_call",
+                progress_action="wait_for_call",
+                progress_task=self._call_task,
+                description_placeholders={"masked_phone": self._login.masked_phone},
+            )
+        task = self._call_task
+        self._call_task = None
+        try:
+            self._mfa_tokens = task.result()
+        except MfaCallTimeout:
+            self._mfa_error = "mfa_call_failed"
+            return self.async_show_progress_done(next_step_id="mfa_challenge")
+        except LoginRateLimited, RateLimited:
+            self._mfa_error = "rate_limited"
+            return self.async_show_progress_done(next_step_id="mfa_challenge")
+        except InvalidAuth:
+            self._cleanup_login()
+            self._user_error = "invalid_auth"
+            return self.async_show_progress_done(next_step_id="user")
+        except LoginError, ApiError, aiohttp.ClientError, TimeoutError:
+            self._mfa_error = "cannot_connect"
+            return self.async_show_progress_done(next_step_id="mfa_challenge")
+        return self.async_show_progress_done(next_step_id="mfa_finish")
+
+    async def async_step_mfa_finish(self, user_input=None):
+        tokens = self._mfa_tokens
+        self._mfa_tokens = None
+        if tokens is None:
+            return await self.async_step_user()
+        return await self._async_finish_login(tokens)
 
     async def async_step_device(self, user_input=None):
         errors = {}

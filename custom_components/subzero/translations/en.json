@@ -6,14 +6,34 @@
         "description": "Use the email and password for your Sub-Zero Group Owner account. Your password is used to sign in and is not saved.",
         "data": {"username": "Email", "password": "Password"}
       },
+      "mfa_challenge": {
+        "title": "Multi-factor authentication",
+        "description": "Sub-Zero requires verification for {masked_phone}. Choose how to receive your verification code.{captcha_image}",
+        "data": {"captcha": "CAPTCHA characters", "method": "Verification method"}
+      },
+      "mfa_code": {
+        "title": "Enter verification code",
+        "description": "Enter the 6-digit verification code sent to {masked_phone}, or leave it blank to request a new code.",
+        "data": {"code": "Verification code"}
+      },
+      "mfa_call": {
+        "title": "Phone call verification"
+      },
       "device": {
         "title": "Select appliances",
         "description": "Choose the appliances to include in Home Assistant. You can change this selection later using Configure.",
         "data": {"device_ids": "Appliances"}
       }
     },
+    "progress": {
+      "wait_for_call": "Answer the call to {masked_phone} and press # to verify."
+    },
     "error": {
       "invalid_auth": "Sub-Zero did not accept the sign-in details, or the session expired. Start setup again if needed.",
+      "invalid_captcha": "The characters did not match the CAPTCHA challenge. Please try again with the new image.",
+      "invalid_mfa_code": "The verification code was not accepted. Check the code and try again, or leave it blank to request a new code.",
+      "mfa_code_expired": "The verification code expired or was rejected too many times. Request a new code to try again.",
+      "mfa_call_failed": "The verification phone call was not completed in time. Please try again.",
       "cannot_connect": "Could not connect to Sub-Zero or read the appliance. Try again later.",
       "rate_limited": "Sub-Zero asked us to slow down. Wait before trying again.",
       "verification_required": "This account requires an additional verification step that this release does not yet support.",

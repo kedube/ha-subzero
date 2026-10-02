@@ -1,5 +1,6 @@
 """Account setup, appliance selection and reauthentication through HA."""
 
+import asyncio
 from unittest.mock import patch
 
 import pytest
@@ -7,13 +8,22 @@ from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.subzero.api import ApiError, Appliance, RateLimited, token_state
-from custom_components.subzero.auth import InvalidAuth, LoginChallenge, LoginError
+from custom_components.subzero.auth import (
+    InvalidAuth,
+    InvalidCaptcha,
+    InvalidVerificationCode,
+    LoginChallenge,
+    LoginError,
+    LoginRateLimited,
+    MfaCallTimeout,
+)
 from custom_components.subzero.const import DOMAIN
 
 from .conftest import make_tokens
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 CREDENTIALS = {"username": "owner@example.test", "password": "test-only-password"}
+CAPTCHA_IMAGE = "data:image/png;base64,iVBORw0KGgo="
 DEVICES = {
     "test-fridge": {"name": "Kitchen", "temperature_unit": "F"},
     "test-oven": {"name": "Wall oven", "temperature_unit": "C"},
@@ -22,6 +32,27 @@ APPLIANCES = [
     Appliance("test-fridge", "Kitchen", "F"),
     Appliance("test-oven", "Wall oven", "C"),
 ]
+
+
+def _phonefactor_login(*, captcha_required: bool = True):
+    async def _login(self, username, password):
+        self.settings = {"api": "Phonefactor"}
+        self.phone_numbers = [{"Id": 1, "MaskedNumber": "XXX-XXX-4550"}]
+        self.captcha_required = captcha_required
+        self.captcha_solved = not captcha_required
+        raise LoginChallenge("MFA required")
+
+    return _login
+
+
+def _captcha_loader(*images: str):
+    iterator = iter(images)
+
+    async def _get_captcha(self):
+        self.captcha_image = next(iterator, CAPTCHA_IMAGE)
+        return self.captcha_image
+
+    return _get_captcha
 
 
 @pytest.mark.parametrize("selected", [["test-fridge"], ["test-fridge", "test-oven"]])
@@ -68,6 +99,305 @@ async def test_login_failure_keeps_the_form(hass, error, message):
         )
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": message}
+
+
+async def test_mfa_sms_login_and_wrong_code(hass, tokens):
+    with (
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.login",
+            autospec=True,
+            side_effect=_phonefactor_login(),
+        ),
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.get_captcha_challenge",
+            autospec=True,
+            side_effect=_captcha_loader(),
+        ),
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.request_mfa_verification",
+            return_value=None,
+        ) as request_mfa,
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.verify_mfa_code",
+            side_effect=[
+                InvalidVerificationCode("Wrong code"),
+                MfaCallTimeout("Expired"),
+                tokens,
+            ],
+        ),
+        patch("custom_components.subzero.api.SubZeroClient.appliances", return_value=APPLIANCES),
+        patch("custom_components.subzero.async_setup_entry", return_value=True),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": "user"}, data=CREDENTIALS
+        )
+        assert result["type"] is FlowResultType.FORM
+        assert result["step_id"] == "mfa_challenge"
+        assert [field.schema for field in result["data_schema"].schema] == ["captcha", "method"]
+        assert result["description_placeholders"] == {
+            "masked_phone": "XXX-XXX-4550",
+            "captcha_image": f"\n\n![CAPTCHA]({CAPTCHA_IMAGE})",
+        }
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"captcha": "ABCD", "method": "onewaysms"}
+        )
+        request_mfa.assert_awaited_once_with(auth_type="onewaysms", captcha_code="ABCD")
+        assert result["type"] is FlowResultType.FORM
+        assert result["step_id"] == "mfa_code"
+        assert result["description_placeholders"] == {"masked_phone": "XXX-XXX-4550"}
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"code": "000000"}
+        )
+        assert result["type"] is FlowResultType.FORM
+        assert result["step_id"] == "mfa_code"
+        assert result["errors"] == {"base": "invalid_mfa_code"}
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"code": "000000"}
+        )
+        assert result["type"] is FlowResultType.FORM
+        assert result["step_id"] == "mfa_challenge"
+        assert result["errors"] == {"base": "mfa_code_expired"}
+        assert [field.schema for field in result["data_schema"].schema] == ["captcha", "method"]
+        assert result["description_placeholders"]["captcha_image"] == (
+            f"\n\n![CAPTCHA]({CAPTCHA_IMAGE})"
+        )
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"captcha": "ABCD", "method": "onewaysms"}
+        )
+        assert result["step_id"] == "mfa_code"
+
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {"code": ""})
+        assert result["step_id"] == "mfa_challenge"
+        assert result["errors"] == {}
+        assert [field.schema for field in result["data_schema"].schema] == ["captcha", "method"]
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"captcha": "ABCD", "method": "onewaysms"}
+        )
+        assert result["step_id"] == "mfa_code"
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"code": "123456"}
+        )
+        assert result["step_id"] == "device"
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"device_ids": ["test-fridge"]}
+        )
+        await hass.async_block_till_done()
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+
+
+async def test_mfa_wrong_captcha_and_solved_captcha_hides_image(hass):
+    new_captcha = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+
+    async def request_mfa(self, auth_type="onewaysms", captcha_code="", phone_id=None):
+        if captcha_code == "WRONG":
+            raise InvalidCaptcha("Wrong answer")
+        self.captcha_solved = True
+        raise LoginRateLimited("Too many requests")
+
+    with (
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.login",
+            autospec=True,
+            side_effect=_phonefactor_login(),
+        ),
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.get_captcha_challenge",
+            autospec=True,
+            side_effect=_captcha_loader(CAPTCHA_IMAGE, new_captcha),
+        ),
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.request_mfa_verification",
+            autospec=True,
+            side_effect=request_mfa,
+        ),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": "user"}, data=CREDENTIALS
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"captcha": "WRONG", "method": "onewaysms"}
+        )
+        assert result["step_id"] == "mfa_challenge"
+        assert result["errors"] == {"base": "invalid_captcha"}
+        assert [field.schema for field in result["data_schema"].schema] == ["captcha", "method"]
+        assert result["description_placeholders"]["captcha_image"] == (
+            f"\n\n![CAPTCHA]({new_captcha})"
+        )
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"captcha": "ABCD", "method": "onewaysms"}
+        )
+        assert result["step_id"] == "mfa_challenge"
+        assert result["errors"] == {"base": "rate_limited"}
+        assert [field.schema for field in result["data_schema"].schema] == ["method"]
+        assert result["description_placeholders"]["captcha_image"] == ""
+
+
+async def test_mfa_phone_call_progress_and_timeout(hass, tokens):
+    call_attempt = 0
+
+    async def poll_call(self):
+        nonlocal call_attempt
+        call_attempt += 1
+        await asyncio.sleep(0)
+        if call_attempt == 1:
+            raise MfaCallTimeout("Timed out")
+        return tokens
+
+    with (
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.login",
+            autospec=True,
+            side_effect=_phonefactor_login(captcha_required=False),
+        ),
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.request_mfa_verification",
+            return_value=None,
+        ),
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.poll_mfa_call",
+            autospec=True,
+            side_effect=poll_call,
+        ),
+        patch("custom_components.subzero.api.SubZeroClient.appliances", return_value=APPLIANCES),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": "user"}, data=CREDENTIALS
+        )
+        assert result["step_id"] == "mfa_challenge"
+        assert [field.schema for field in result["data_schema"].schema] == ["method"]
+        assert result["description_placeholders"]["captcha_image"] == ""
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"method": "dialphone"}
+        )
+        assert result["type"] is FlowResultType.SHOW_PROGRESS
+        assert result["step_id"] == "mfa_call"
+        assert result["progress_action"] == "wait_for_call"
+        await hass.async_block_till_done()
+
+        result = await hass.config_entries.flow.async_configure(result["flow_id"])
+        assert result["type"] is FlowResultType.FORM
+        assert result["step_id"] == "mfa_challenge"
+        assert result["errors"] == {"base": "mfa_call_failed"}
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"method": "dialphone"}
+        )
+        assert result["type"] is FlowResultType.SHOW_PROGRESS
+        await hass.async_block_till_done()
+
+        result = await hass.config_entries.flow.async_configure(result["flow_id"])
+        assert result["type"] is FlowResultType.FORM
+        assert result["step_id"] == "device"
+
+
+@pytest.mark.parametrize(
+    ("code_side_effect", "appliances_side_effect", "expected_error"),
+    [
+        (InvalidAuth("Expired"), APPLIANCES, "invalid_auth"),
+        (None, InvalidAuth("Rejected token"), "invalid_auth"),
+        (None, ApiError("Unavailable"), "cannot_connect"),
+        (None, RateLimited(300), "rate_limited"),
+    ],
+)
+async def test_mfa_errors_after_verification_return_to_user_form(
+    hass, tokens, code_side_effect, appliances_side_effect, expected_error
+):
+    with (
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.login",
+            autospec=True,
+            side_effect=_phonefactor_login(captcha_required=False),
+        ),
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.request_mfa_verification",
+            return_value=None,
+        ),
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.verify_mfa_code",
+            side_effect=code_side_effect or [tokens],
+        ),
+        patch(
+            "custom_components.subzero.api.SubZeroClient.appliances",
+            side_effect=(
+                appliances_side_effect
+                if isinstance(appliances_side_effect, Exception)
+                else [appliances_side_effect]
+            ),
+        ),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": "user"}, data=CREDENTIALS
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"method": "onewaysms"}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"code": "123456"}
+        )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "user"
+    assert result["errors"] == {"base": expected_error}
+    fields = {field.schema: field for field in result["data_schema"].schema}
+    assert fields["username"].description["suggested_value"] == CREDENTIALS["username"]
+
+
+async def test_closing_mfa_dialog_detaches_session_and_cancels_call_poll(hass):
+    poll_started = asyncio.Event()
+    poll_cancelled = False
+
+    async def slow_poll(self):
+        nonlocal poll_cancelled
+        poll_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            poll_cancelled = True
+            raise
+
+    with (
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.login",
+            autospec=True,
+            side_effect=_phonefactor_login(captcha_required=False),
+        ),
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.request_mfa_verification",
+            return_value=None,
+        ),
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.poll_mfa_call",
+            autospec=True,
+            side_effect=slow_poll,
+        ),
+        patch.object(
+            aiohttp.ClientSession, "detach", autospec=True, wraps=aiohttp.ClientSession.detach
+        ) as detach,
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": "user"}, data=CREDENTIALS
+        )
+        assert result["step_id"] == "mfa_challenge"
+        assert detach.call_count == 0
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"method": "dialphone"}
+        )
+        assert result["type"] is FlowResultType.SHOW_PROGRESS
+        await poll_started.wait()
+
+        hass.config_entries.flow.async_abort(result["flow_id"])
+        await hass.async_block_till_done()
+
+    assert detach.call_count == 1
+    assert poll_cancelled
 
 
 async def test_no_appliances(hass, tokens):
