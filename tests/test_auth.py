@@ -185,8 +185,7 @@ async def login_server(aiohttp_server, monkeypatch, socket_enabled):
     app.router.add_post("/policy/SelfAsserted", form)
     app.router.add_get("/policy/api/CombinedSigninAndSignup/confirmed", confirmed)
     app.router.add_get(
-        "/policy/SelfAsserted/DisplayControlAction/vbeta/"
-        "captchaControlChallengeCode/GetChallenge",
+        "/policy/SelfAsserted/DisplayControlAction/vbeta/captchaControlChallengeCode/GetChallenge",
         get_captcha,
     )
     app.router.add_post(

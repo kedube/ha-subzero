@@ -3,6 +3,7 @@
 import asyncio
 from unittest.mock import patch
 
+import aiohttp
 import pytest
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
