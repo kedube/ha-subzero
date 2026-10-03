@@ -299,6 +299,55 @@ async def test_mfa_phone_call_progress_and_timeout(hass, tokens):
         assert result["step_id"] == "device"
 
 
+async def test_mfa_call_finish_reached_twice_completes_the_same_sign_in(hass, tokens):
+    release = asyncio.Event()
+    lookups = 0
+
+    async def slow_appliances(self):
+        nonlocal lookups
+        lookups += 1
+        await release.wait()
+        return APPLIANCES
+
+    with (
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.login",
+            autospec=True,
+            side_effect=_phonefactor_login(captcha_required=False),
+        ),
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.request_mfa_verification",
+            return_value=None,
+        ),
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.poll_mfa_call",
+            return_value=tokens,
+        ),
+        patch(
+            "custom_components.subzero.api.SubZeroClient.appliances",
+            autospec=True,
+            side_effect=slow_appliances,
+        ),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": "user"}, data=CREDENTIALS
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"method": "dialphone"}
+        )
+        await hass.async_block_till_done()
+
+        # The frontend and the call task's callback can both advance the flow to mfa_finish.
+        first = asyncio.ensure_future(hass.config_entries.flow.async_configure(result["flow_id"]))
+        second = asyncio.ensure_future(hass.config_entries.flow.async_configure(result["flow_id"]))
+        async with asyncio.timeout(5):
+            while not (second.done() or lookups == 2):
+                await asyncio.sleep(0)
+        release.set()
+        results = await asyncio.gather(first, second)
+    assert [result["step_id"] for result in results] == ["device", "device"]
+
+
 async def test_mfa_call_that_fails_at_once_requests_one_call(hass):
     async def failing_poll(self):
         raise LoginError("Invalid poll settings")

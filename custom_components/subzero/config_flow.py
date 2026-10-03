@@ -83,7 +83,6 @@ class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._login_session.detach()
             self._login_session = None
         self._login = None
-        self._mfa_tokens = None
         self._mfa_error = ""
 
     @callback
@@ -98,10 +97,8 @@ class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def _async_finish_login(self, tokens: dict):
         self._cleanup_login()
         try:
-            self._client = SubZeroClient(
-                async_get_clientsession(self.hass), SUBSCRIPTION_KEY, tokens
-            )
-            user_id = self._client.tokens["user_id"].lower()
+            client = SubZeroClient(async_get_clientsession(self.hass), SUBSCRIPTION_KEY, tokens)
+            user_id = client.tokens["user_id"].lower()
             if self.source == config_entries.SOURCE_REAUTH:
                 original = self._get_reauth_entry()
                 if user_id != original.data["tokens"]["user_id"].lower():
@@ -109,7 +106,7 @@ class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return self.async_update_reload_and_abort(
                     original,
                     data_updates={
-                        "tokens": self._client.tokens,
+                        "tokens": client.tokens,
                         "username": self._title,
                     },
                 )
@@ -119,7 +116,7 @@ class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 for entry in self._async_current_entries()
             ):
                 return self.async_abort(reason="already_configured")
-            appliances = await self._client.appliances()
+            appliances = await client.appliances()
         except InvalidAuth:
             return await self._async_return_to_user("invalid_auth")
         except RateLimited:
@@ -129,6 +126,9 @@ class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if not appliances:
             return self.async_abort(reason="no_appliances")
         configured = configured_devices(self.hass)
+        # Set together after the lookup, so a finish that overlaps another can't pair one
+        # sign-in's tokens with another's appliances.
+        self._client = client
         self._devices = {
             appliance.id: {
                 "name": appliance.name,
@@ -148,6 +148,7 @@ class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._user_error = ""
         if user_input is not None:
             self._cleanup_login()
+            self._mfa_tokens = None
             self._title = user_input["username"]
             session = async_create_clientsession(
                 self.hass,
@@ -347,11 +348,11 @@ class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_progress_done(next_step_id="mfa_finish")
 
     async def async_step_mfa_finish(self, user_input=None):
-        tokens = self._mfa_tokens
-        self._mfa_tokens = None
-        if tokens is None:
+        # The tokens are kept until the next sign-in. The frontend and the call task's
+        # callback can both advance the flow here, and both must finish the same sign-in.
+        if self._mfa_tokens is None:
             return await self.async_step_user()
-        return await self._async_finish_login(tokens)
+        return await self._async_finish_login(self._mfa_tokens)
 
     async def async_step_device(self, user_input=None):
         errors = {}
