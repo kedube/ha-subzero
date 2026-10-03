@@ -299,6 +299,41 @@ async def test_mfa_phone_call_progress_and_timeout(hass, tokens):
         assert result["step_id"] == "device"
 
 
+async def test_mfa_call_that_fails_at_once_requests_one_call(hass):
+    async def failing_poll(self):
+        raise LoginError("Invalid poll settings")
+
+    with (
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.login",
+            autospec=True,
+            side_effect=_phonefactor_login(captcha_required=False),
+        ),
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.request_mfa_verification",
+            side_effect=[None, None, LoginRateLimited("Too many requests")],
+        ) as request_mfa,
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.poll_mfa_call",
+            autospec=True,
+            side_effect=failing_poll,
+        ),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": "user"}, data=CREDENTIALS
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"method": "dialphone"}
+        )
+        assert result["type"] is FlowResultType.SHOW_PROGRESS
+        await hass.async_block_till_done()
+
+        result = await hass.config_entries.flow.async_configure(result["flow_id"])
+    assert request_mfa.await_count == 1
+    assert result["step_id"] == "mfa_challenge"
+    assert result["errors"] == {"base": "cannot_connect"}
+
+
 @pytest.mark.parametrize(
     ("code_side_effect", "appliances_side_effect", "expected_error"),
     [

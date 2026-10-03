@@ -314,7 +314,12 @@ class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if self._login is None:
             return await self.async_step_user()
         if self._call_task is None:
-            self._call_task = self.hass.async_create_task(self._login.poll_mfa_call())
+            # Started lazily so this always shows progress first. A poll that failed before
+            # its first wait would otherwise end here, and Home Assistant would resubmit the
+            # challenge form with the same input, requesting another call.
+            self._call_task = self.hass.async_create_task(
+                self._login.poll_mfa_call(), eager_start=False
+            )
         if not self._call_task.done():
             return self.async_show_progress(
                 step_id="mfa_call",
