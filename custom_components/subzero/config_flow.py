@@ -1,6 +1,7 @@
 """Sign in once and manage the account's appliance selection in Home Assistant."""
 
 import asyncio
+from functools import wraps
 
 import aiohttp
 import voluptuous as vol
@@ -57,6 +58,22 @@ def configured_devices(hass, exclude_entry_id=None) -> set[str]:
     }
 
 
+def holds_login_session(step):
+    """Keep the sign-in session until the step returns, even if the flow is removed."""
+
+    @wraps(step)
+    async def wrapper(self, user_input=None):
+        self._running_steps += 1
+        try:
+            return await step(self, user_input)
+        finally:
+            self._running_steps -= 1
+            if self._removed and not self._running_steps:
+                self._cleanup_login()
+
+    return wrapper
+
+
 class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 2
     MINOR_VERSION = 3
@@ -69,6 +86,8 @@ class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     _mfa_tokens: dict | None = None
     _mfa_error: str = ""
     _user_error: str = ""
+    _removed = False
+    _running_steps = 0
 
     @staticmethod
     @callback
@@ -87,7 +106,11 @@ class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     @callback
     def async_remove(self) -> None:
-        self._cleanup_login()
+        # Closing the dialog can remove the flow while a step still waits on Sub-Zero. That
+        # step releases the session when it returns, so its next request doesn't fail.
+        self._removed = True
+        if not self._running_steps:
+            self._cleanup_login()
 
     async def _async_return_to_user(self, error: str):
         self._cleanup_login()
@@ -141,6 +164,7 @@ class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="all_configured")
         return await self.async_step_device()
 
+    @holds_login_session
     async def async_step_user(self, user_input=None):
         errors = {}
         if self._user_error:
@@ -207,6 +231,7 @@ class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    @holds_login_session
     async def async_step_mfa_challenge(self, user_input=None):
         if self._login is None:
             return await self.async_step_user()
@@ -273,6 +298,7 @@ class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             },
         )
 
+    @holds_login_session
     async def async_step_mfa_code(self, user_input=None):
         if self._login is None:
             return await self.async_step_user()

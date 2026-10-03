@@ -1,11 +1,12 @@
 """Account setup, appliance selection and reauthentication through HA."""
 
 import asyncio
+from contextlib import suppress
 from unittest.mock import patch
 
 import aiohttp
 import pytest
-from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.data_entry_flow import FlowResultType, UnknownFlow
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.subzero.api import ApiError, Appliance, RateLimited, token_state
@@ -483,6 +484,95 @@ async def test_closing_mfa_dialog_detaches_session_and_cancels_call_poll(hass):
 
     assert detach.call_count == 1
     assert poll_cancelled
+
+
+async def test_closing_dialog_during_sign_in_detaches_the_session(hass):
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_login(self, username, password):
+        started.set()
+        await release.wait()
+        await _phonefactor_login(captcha_required=False)(self, username, password)
+
+    with (
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.login",
+            autospec=True,
+            side_effect=slow_login,
+        ),
+        patch.object(
+            aiohttp.ClientSession, "detach", autospec=True, wraps=aiohttp.ClientSession.detach
+        ) as detach,
+    ):
+        init = asyncio.ensure_future(
+            hass.config_entries.flow.async_init(
+                DOMAIN, context={"source": "user"}, data=CREDENTIALS
+            )
+        )
+        await started.wait()
+        (flow,) = hass.config_entries.flow.async_progress_by_handler(
+            DOMAIN, include_uninitialized=True
+        )
+        hass.config_entries.flow.async_abort(flow["flow_id"])
+        assert detach.call_count == 0
+
+        release.set()
+        with suppress(UnknownFlow):
+            await init
+    assert detach.call_count == 1
+
+
+async def test_closing_dialog_during_code_check_keeps_the_session_until_it_returns(hass, tokens):
+    started = asyncio.Event()
+    release = asyncio.Event()
+    closed_during_check = None
+
+    async def slow_verify(self, code):
+        nonlocal closed_during_check
+        started.set()
+        await release.wait()
+        closed_during_check = self.session.closed
+        return tokens
+
+    with (
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.login",
+            autospec=True,
+            side_effect=_phonefactor_login(captcha_required=False),
+        ),
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.request_mfa_verification",
+            return_value=None,
+        ),
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.verify_mfa_code",
+            autospec=True,
+            side_effect=slow_verify,
+        ),
+        patch("custom_components.subzero.api.SubZeroClient.appliances", return_value=APPLIANCES),
+        patch.object(
+            aiohttp.ClientSession, "detach", autospec=True, wraps=aiohttp.ClientSession.detach
+        ) as detach,
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": "user"}, data=CREDENTIALS
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"method": "onewaysms"}
+        )
+        check = asyncio.ensure_future(
+            hass.config_entries.flow.async_configure(result["flow_id"], {"code": "123456"})
+        )
+        await started.wait()
+        hass.config_entries.flow.async_abort(result["flow_id"])
+        assert detach.call_count == 0
+
+        release.set()
+        with suppress(UnknownFlow):
+            await check
+    assert closed_during_check is False
+    assert detach.call_count == 1
 
 
 async def test_no_appliances(hass, tokens):
