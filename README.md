@@ -25,7 +25,7 @@ Use the button above, or add the repository manually:
 2. Add `https://github.com/orienw/ha-subzero` with type **Integration**.
 3. Download **Sub-Zero**, then restart Home Assistant.
 4. Open **Settings → Devices & services → Add integration → Sub-Zero**.
-5. Enter your Sub-Zero account email and password, then select the appliances to include.
+5. Enter your Sub-Zero account email and password, then select the appliances to include. If your account uses multi-factor authentication, setup first verifies it by text message code or phone call, and may ask you to type the characters shown in an image.
 
 To change the selection later, open **Settings → Devices & services → Sub-Zero → Configure**. This refreshes the account's appliance list using the saved connection. Deselecting an appliance removes its Home Assistant device and entities.
 
@@ -174,7 +174,7 @@ Enable debug logging for `custom_components.subzero` to record channel-open atte
 
 Other models can be added if the cloud service returns their status. Their entities depend on which recognized properties they report.
 
-Local network access and accounts requiring additional verification or an external sign-in provider are not supported.
+Local network access, verification methods other than text message or phone call, and accounts that sign in through an external provider are not supported.
 
 ## How it works
 

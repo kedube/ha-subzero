@@ -26,7 +26,16 @@ async def login_client():
 
 @pytest.fixture
 async def login_server(aiohttp_server, monkeypatch, socket_enabled):
-    journey = {"failure": None, "form_accepted": False, "exchanged": False, "requests": []}
+    journey = {
+        "failure": None,
+        "form_accepted": False,
+        "exchanged": False,
+        "requests": [],
+        "captcha_required": True,
+        "call_polls": 0,
+        "call_poll_statuses": ["449", "200"],
+        "phone_numbers": [{"Id": 1, "MaskedNumber": "XXX-XXX-4550"}],
+    }
 
     @web.middleware
     async def record_headers(request, handler):
@@ -68,8 +77,93 @@ async def login_server(aiohttp_server, monkeypatch, socket_enabled):
         assert journey["form_accepted"]
         if journey["failure"] == "mfa":
             return web.Response(text='SETTINGS = {"api":"SelfAsserted"};')
+        if journey["failure"] == "phonefactor":
+            settings = {
+                "api": "Phonefactor",
+                "hosts": {"tenant": "/policy", "policy": "test-policy"},
+                "csrf": "mfa-csrf",
+                "transId": "mfa-transaction",
+                "config": {
+                    "enableCaptchaChallenge": str(journey["captcha_required"]).lower(),
+                    "pollIntervalInMilliseconds": "0",
+                    "pollLimit": "2",
+                },
+            }
+            uv_phone = {"PhoneNumbers": journey["phone_numbers"]}
+            return web.Response(
+                text=f"SETTINGS = {json.dumps(settings)}; UV_PHONE = {json.dumps(uv_phone)};"
+            )
         state = "wrong-state" if journey["failure"] == "state" else journey["state"]
         raise web.HTTPFound(auth.REDIRECT_URI + "?" + urlencode({"state": state, "code": "code"}))
+
+    async def get_captcha(request):
+        assert request.headers["X-CSRF-TOKEN"] == "mfa-csrf"
+        assert "Origin" not in request.headers
+        assert request.query == {
+            "tx": "mfa-transaction",
+            "p": "test-policy",
+            "challengeType": "Visual",
+        }
+        return web.json_response(
+            {
+                "status": "200",
+                "challengeId": "challenge-1",
+                "challengeString": "data:image/png;base64,iVBORw0KGgo=",
+                "azureregion": "SouthCentralUS",
+            }
+        )
+
+    async def verify_captcha(request):
+        assert request.headers["X-CSRF-TOKEN"] == "mfa-csrf"
+        assert request.headers["Origin"] == auth.LOGIN_ORIGIN
+        assert request.query == {"tx": "mfa-transaction", "p": "test-policy"}
+        data = await request.post()
+        assert data["challengeId"] == "challenge-1"
+        assert data["challengeType"] == "Visual"
+        solved = data["captchaEntered"] == "ABCD"
+        return web.json_response(
+            {
+                "status": "200",
+                "challengeId": "challenge-1",
+                "isCaptchaSolved": "True" if solved else "False",
+                "reason": "Solved" if solved else "WrongAnswer",
+            }
+        )
+
+    async def phonefactor_verify(request):
+        assert request.headers["X-CSRF-TOKEN"] == "mfa-csrf"
+        assert request.headers["Origin"] == auth.LOGIN_ORIGIN
+        assert request.query == {"tx": "mfa-transaction", "p": "test-policy"}
+        data = await request.post()
+        if data["request_type"] == "VERIFICATION_REQUEST":
+            assert data["id"] == "1"
+            assert data["auth_type"] in ("onewaysms", "dialphone")
+            journey["mfa_requested"] = data["auth_type"]
+            return web.json_response({"status": journey.get("verify_request_status", "200")})
+        assert data["request_type"] == "VALIDATION_REQUEST"
+        if "verification_code" in data:
+            if data["verification_code"] != "123456":
+                return web.json_response({"status": "449"})
+            journey["mfa_validated"] = True
+            return web.json_response({"status": "200"})
+        polls = journey["call_polls"] + 1
+        journey["call_polls"] = polls
+        statuses = journey["call_poll_statuses"]
+        status = statuses[min(polls - 1, len(statuses) - 1)]
+        if status == "200":
+            journey["mfa_validated"] = True
+        return web.json_response({"status": status})
+
+    async def phonefactor_confirmed(request):
+        assert journey.get("mfa_validated")
+        assert request.query == {
+            "csrf_token": "mfa-csrf",
+            "tx": "mfa-transaction",
+            "p": "test-policy",
+        }
+        raise web.HTTPFound(
+            auth.REDIRECT_URI + "?" + urlencode({"state": journey["state"], "code": "code"})
+        )
 
     async def token(request):
         data = await request.post()
@@ -91,6 +185,17 @@ async def login_server(aiohttp_server, monkeypatch, socket_enabled):
     app.router.add_get("/authorize", authorize)
     app.router.add_post("/policy/SelfAsserted", form)
     app.router.add_get("/policy/api/CombinedSigninAndSignup/confirmed", confirmed)
+    app.router.add_get(
+        "/policy/SelfAsserted/DisplayControlAction/vbeta/captchaControlChallengeCode/GetChallenge",
+        get_captcha,
+    )
+    app.router.add_post(
+        "/policy/SelfAsserted/DisplayControlAction/vbeta/"
+        "captchaControlChallengeCode/VerifyChallenge",
+        verify_captcha,
+    )
+    app.router.add_post("/policy/Phonefactor/verify", phonefactor_verify)
+    app.router.add_get("/policy/api/Phonefactor/confirmed", phonefactor_confirmed)
     app.router.add_post("/token", token)
     server = await aiohttp_server(app)
     origin = str(server.make_url("/")).rstrip("/")
@@ -183,3 +288,93 @@ async def test_bad_login_responses_report_connection_failure(
     with pytest.raises(auth.LoginError) as error:
         await login_client.login("owner@example.test", "test-only-password")
     assert type(error.value) is auth.LoginError
+
+
+async def test_phonefactor_sms_login_with_captcha(login_server, login_client):
+    login_server["failure"] = "phonefactor"
+    with pytest.raises(auth.LoginChallenge):
+        await login_client.login("owner@example.test", "test-only-password")
+    assert login_client.is_phonefactor_challenge
+    assert login_client.masked_phone == "XXX-XXX-4550"
+    assert login_client.captcha_required
+    assert not login_client.captcha_solved
+
+    image = await login_client.get_captcha_challenge()
+    assert image == "data:image/png;base64,iVBORw0KGgo="
+
+    with pytest.raises(auth.InvalidCaptcha):
+        await login_client.request_mfa_verification("onewaysms", "WRONG")
+    assert not login_client.captcha_solved
+
+    await login_client.request_mfa_verification("onewaysms", "ABCD")
+    assert not login_client.captcha_solved
+    assert login_client.captcha_image == ""
+    assert login_server["mfa_requested"] == "onewaysms"
+
+    with pytest.raises(auth.InvalidVerificationCode):
+        await login_client.verify_mfa_code("000000")
+    with pytest.raises(auth.InvalidVerificationCode):
+        await login_client.verify_mfa_code("000000")
+    with pytest.raises(auth.MfaCallTimeout):
+        await login_client.verify_mfa_code("000000")
+    assert not login_server["exchanged"]
+
+    await login_client.get_captcha_challenge()
+    await login_client.request_mfa_verification("onewaysms", "ABCD")
+    login_client.mfa_requested_at -= 200
+    with pytest.raises(auth.MfaCallTimeout):
+        await login_client.verify_mfa_code("000000")
+
+    await login_client.get_captcha_challenge()
+    await login_client.request_mfa_verification("onewaysms", "ABCD")
+    tokens = await login_client.verify_mfa_code("123456")
+    assert tokens["refresh_token"] == "test-refresh"
+    assert login_server["exchanged"]
+
+
+@pytest.mark.parametrize(
+    ("phone_numbers", "masked_phone"),
+    [
+        (
+            [None, {"MaskedNumber": "XXX-XXX-0000"}, {"Id": 2, "MaskedNumber": "XXX-XXX-4551"}],
+            "XXX-XXX-4551",
+        ),
+        ([None, "XXX-XXX-4550", {"Id": None}], None),
+    ],
+)
+async def test_phonefactor_ignores_phone_entries_without_an_id(
+    login_server, login_client, phone_numbers, masked_phone
+):
+    login_server["failure"] = "phonefactor"
+    login_server["phone_numbers"] = phone_numbers
+    with pytest.raises(auth.LoginChallenge):
+        await login_client.login("owner@example.test", "test-only-password")
+    assert login_client.is_phonefactor_challenge is (masked_phone is not None)
+    if masked_phone is not None:
+        assert login_client.masked_phone == masked_phone
+
+
+async def test_phonefactor_call_login_and_timeout(login_server, login_client):
+    login_server["failure"] = "phonefactor"
+    login_server["captcha_required"] = False
+    with pytest.raises(auth.LoginChallenge):
+        await login_client.login("owner@example.test", "test-only-password")
+    assert login_client.is_phonefactor_challenge
+    assert not login_client.captcha_required
+    assert login_client.captcha_solved
+
+    await login_client.request_mfa_verification("dialphone")
+    assert login_server["mfa_requested"] == "dialphone"
+
+    login_server["call_poll_statuses"] = ["449", "449"]
+    with pytest.raises(auth.MfaCallTimeout):
+        await login_client.poll_mfa_call()
+    assert login_server["call_polls"] == 2
+    assert not login_server["exchanged"]
+
+    login_server["call_polls"] = 0
+    login_server["call_poll_statuses"] = ["449", "200"]
+    tokens = await login_client.poll_mfa_call()
+    assert login_server["call_polls"] == 2
+    assert tokens["refresh_token"] == "test-refresh"
+    assert login_server["exchanged"]
