@@ -319,6 +319,8 @@ class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "rate_limited"
             except InvalidAuth:
                 return await self._async_return_to_user("invalid_auth")
+            except LoginChallenge:
+                return await self._async_return_to_user("verification_required")
             except LoginError, ApiError, aiohttp.ClientError, TimeoutError:
                 errors["base"] = "cannot_connect"
             else:
@@ -367,6 +369,10 @@ class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         except InvalidAuth:
             self._cleanup_login()
             self._user_error = "invalid_auth"
+            return self.async_show_progress_done(next_step_id="user")
+        except LoginChallenge:
+            self._cleanup_login()
+            self._user_error = "verification_required"
             return self.async_show_progress_done(next_step_id="user")
         except LoginError, ApiError, aiohttp.ClientError, TimeoutError:
             self._mfa_error = "cannot_connect"

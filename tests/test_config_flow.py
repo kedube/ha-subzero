@@ -388,6 +388,7 @@ async def test_mfa_call_that_fails_at_once_requests_one_call(hass):
     ("code_side_effect", "appliances_side_effect", "expected_error"),
     [
         (InvalidAuth("Expired"), APPLIANCES, "invalid_auth"),
+        (LoginChallenge("Another step"), APPLIANCES, "verification_required"),
         (None, InvalidAuth("Rejected token"), "invalid_auth"),
         (None, ApiError("Unavailable"), "cannot_connect"),
         (None, RateLimited(300), "rate_limited"),
@@ -433,6 +434,35 @@ async def test_mfa_errors_after_verification_return_to_user_form(
     assert result["errors"] == {"base": expected_error}
     fields = {field.schema: field for field in result["data_schema"].schema}
     assert fields["username"].description["suggested_value"] == CREDENTIALS["username"]
+
+
+async def test_mfa_call_followed_by_another_step_returns_to_user_form(hass):
+    with (
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.login",
+            autospec=True,
+            side_effect=_phonefactor_login(captcha_required=False),
+        ),
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.request_mfa_verification",
+            return_value=None,
+        ),
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.poll_mfa_call",
+            side_effect=LoginChallenge("Another step"),
+        ),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": "user"}, data=CREDENTIALS
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"method": "dialphone"}
+        )
+        await hass.async_block_till_done()
+
+        result = await hass.config_entries.flow.async_configure(result["flow_id"])
+    assert result["step_id"] == "user"
+    assert result["errors"] == {"base": "verification_required"}
 
 
 async def test_closing_mfa_dialog_detaches_session_and_cancels_call_poll(hass):
