@@ -374,7 +374,11 @@ class SubZeroLogin:
                 try:
                     uv_phone = page_variable(self.last_page, "UV_PHONE")
                     phones = uv_phone.get("PhoneNumbers")
-                    self.phone_numbers = phones if isinstance(phones, list) else []
+                    self.phone_numbers = [
+                        phone
+                        for phone in (phones if isinstance(phones, list) else [])
+                        if isinstance(phone, dict) and phone.get("Id") is not None
+                    ]
                 except LoginError:
                     self.phone_numbers = []
                 config = self.settings.get("config") or {}

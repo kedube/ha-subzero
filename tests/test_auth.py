@@ -34,6 +34,7 @@ async def login_server(aiohttp_server, monkeypatch, socket_enabled):
         "captcha_required": True,
         "call_polls": 0,
         "call_poll_statuses": ["449", "200"],
+        "phone_numbers": [{"Id": 1, "MaskedNumber": "XXX-XXX-4550"}],
     }
 
     @web.middleware
@@ -88,7 +89,7 @@ async def login_server(aiohttp_server, monkeypatch, socket_enabled):
                     "pollLimit": "2",
                 },
             }
-            uv_phone = {"PhoneNumbers": [{"Id": 1, "MaskedNumber": "XXX-XXX-4550"}]}
+            uv_phone = {"PhoneNumbers": journey["phone_numbers"]}
             return web.Response(
                 text=f"SETTINGS = {json.dumps(settings)}; UV_PHONE = {json.dumps(uv_phone)};"
             )
@@ -329,6 +330,28 @@ async def test_phonefactor_sms_login_with_captcha(login_server, login_client):
     tokens = await login_client.verify_mfa_code("123456")
     assert tokens["refresh_token"] == "test-refresh"
     assert login_server["exchanged"]
+
+
+@pytest.mark.parametrize(
+    ("phone_numbers", "masked_phone"),
+    [
+        (
+            [None, {"MaskedNumber": "XXX-XXX-0000"}, {"Id": 2, "MaskedNumber": "XXX-XXX-4551"}],
+            "XXX-XXX-4551",
+        ),
+        ([None, "XXX-XXX-4550", {"Id": None}], None),
+    ],
+)
+async def test_phonefactor_ignores_phone_entries_without_an_id(
+    login_server, login_client, phone_numbers, masked_phone
+):
+    login_server["failure"] = "phonefactor"
+    login_server["phone_numbers"] = phone_numbers
+    with pytest.raises(auth.LoginChallenge):
+        await login_client.login("owner@example.test", "test-only-password")
+    assert login_client.is_phonefactor_challenge is (masked_phone is not None)
+    if masked_phone is not None:
+        assert login_client.masked_phone == masked_phone
 
 
 async def test_phonefactor_call_login_and_timeout(login_server, login_client):
