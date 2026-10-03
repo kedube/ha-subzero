@@ -4,7 +4,8 @@ import asyncio
 import logging
 import random
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
@@ -105,6 +106,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             "last_received": None,
         }
         self._command_lock = asyncio.Lock()
+        self._unsettled = False
         self._state_lock = asyncio.Lock()
         self._read_updates: dict | None = None
         self._read_error: Exception | None = None
@@ -168,6 +170,23 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             sw_version=version.get("fw") if isinstance(version, dict) else None,
         )
 
+    @asynccontextmanager
+    async def _command(self) -> AsyncIterator[None]:
+        """Serialize commands.
+
+        A cancelled command can still change the appliance after the last read, so
+        the next command reads state before deciding what to write.
+        """
+        async with self._command_lock:
+            if self._unsettled:
+                await self.async_refresh()
+                self._unsettled = False
+            try:
+                yield
+            except asyncio.CancelledError:
+                self._unsettled = True
+                raise
+
     async def async_set_properties(self, properties: dict, *, force: bool = False) -> None:
         """Serialize writes and confirm their result from appliance state.
 
@@ -175,12 +194,12 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         which is how the app starts ovens and cancels wash cycles. A value the appliance already reports
         is re-sent as is, without the checks a change needs.
         """
-        async with self._command_lock:
+        async with self._command():
             await self._async_write(dict(properties), force=force)
 
     async def async_start(self, key: str, temperature: int | None = None) -> None:
         """Start with the app's writes, from the state left by earlier commands."""
-        async with self._command_lock:
+        async with self._command():
             if self.data.get(key) is True:
                 prefix = key.removesuffix("_unit_on")
                 properties = {} if temperature is None else {f"{prefix}_set_temp": temperature}
@@ -189,7 +208,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
                 await self._async_write(start_properties(self.data, key, temperature), force=True)
 
     async def async_cancel_wash(self) -> None:
-        async with self._command_lock:
+        async with self._command():
             if not self.last_update_success:
                 raise ServiceValidationError("The appliance is unavailable.")
             if not wash_cancel_enabled(self.data):
@@ -199,7 +218,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             await self._async_write({"wash_cycle_on": False}, force=True)
 
     async def async_dismiss_timer(self, key: str) -> None:
-        async with self._command_lock:
+        async with self._command():
             if not self.last_update_success:
                 raise ServiceValidationError("The appliance is unavailable.")
             if self.data.get(f"{KITCHEN_TIMERS[key]}_complete") is not True:
@@ -248,7 +267,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             raise HomeAssistantError(str(error)) from error
 
     async def async_reset_air_filter(self) -> None:
-        async with self._command_lock:
+        async with self._command():
             if not self.last_update_success:
                 raise ServiceValidationError("The appliance is unavailable.")
             if not supports_air_filter_reset(self.data):
@@ -265,7 +284,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             await self.async_refresh()
 
     async def async_set_ice_mode(self, mode: str) -> None:
-        async with self._command_lock:
+        async with self._command():
             if not self.last_update_success:
                 raise ServiceValidationError("The appliance is unavailable.")
             properties = ice_mode_properties(self.data, mode)
@@ -350,7 +369,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         *,
         end_current: bool = False,
     ) -> None:
-        async with self._command_lock:
+        async with self._command():
             if not self.last_update_success:
                 raise ServiceValidationError("The appliance is unavailable.")
             if not is_ice_maker(self.data) or not ICE_DELAY_KEYS.issubset(self.data):

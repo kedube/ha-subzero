@@ -750,6 +750,62 @@ async def test_queued_start_rechecks_remote_ready(appliances):
 
 
 @pytest.mark.parametrize(
+    ("domain", "entity_id", "key", "requests"),
+    [
+        (
+            "switch",
+            "switch.oven_oven_light",
+            "cav_light_on",
+            [("turn_on", {}, True), ("turn_off", {}, False)],
+        ),
+        (
+            "climate",
+            "climate.oven_oven",
+            "cav_set_temp",
+            [("set_temperature", {"temperature": t}, t) for t in (375, 350)],
+        ),
+    ],
+)
+async def test_command_after_a_cancelled_one_reads_state_first(
+    hass, appliances, domain, entity_id, key, requests
+):
+    await appliances.update("oven", {"cav_unit_on": True})
+    appliances.behavior["push"] = False
+    reading = asyncio.Event()
+    finish_read = asyncio.Event()
+    read = appliances.client.state.side_effect
+
+    async def slow_read(device_id):
+        reading.set()
+        await finish_read.wait()
+        return read(device_id)
+
+    appliances.client.state.side_effect = slow_read
+    tasks = []
+    for service, data, _ in requests:
+        tasks.append(
+            asyncio.create_task(
+                hass.services.async_call(
+                    domain, service, {"entity_id": entity_id, **data}, blocking=True
+                )
+            )
+        )
+        if len(tasks) == 1:
+            # Stopped while confirming, as when a script is stopped or restarted.
+            await reading.wait()
+            tasks[0].cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await tasks[0]
+    await asyncio.sleep(0)
+    finish_read.set()
+    await tasks[1]
+    assert appliances.client.set_property.await_args_list == [
+        call("oven", key, value) for _, _, value in requests
+    ]
+    assert appliances.states["oven"][key] == requests[1][2]
+
+
+@pytest.mark.parametrize(
     "temperature,changed,writes",
     [
         (
