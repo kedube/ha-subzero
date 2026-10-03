@@ -84,6 +84,7 @@ class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     _login_session: aiohttp.ClientSession | None = None
     _call_task: asyncio.Task[dict] | None = None
     _mfa_tokens: dict | None = None
+    _mfa_finish: asyncio.Task | None = None
     _mfa_error: str = ""
     _user_error: str = ""
     _removed = False
@@ -173,6 +174,7 @@ class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             self._cleanup_login()
             self._mfa_tokens = None
+            self._mfa_finish = None
             self._title = user_input["username"]
             session = async_create_clientsession(
                 self.hass,
@@ -261,6 +263,11 @@ class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 login.captcha_solved = not login.captcha_required
                 login.captcha_image = ""
                 if auth_type == "dialphone":
+                    # Each request places a new call, so it gets a new poll. A poll left from
+                    # an overlapping request would otherwise finish this step during the submit.
+                    if self._call_task is not None:
+                        self._call_task.cancel()
+                        self._call_task = None
                     return await self.async_step_mfa_call()
                 return await self.async_step_mfa_code()
 
@@ -377,14 +384,19 @@ class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         except LoginError, ApiError, aiohttp.ClientError, TimeoutError:
             self._mfa_error = "cannot_connect"
             return self.async_show_progress_done(next_step_id="mfa_challenge")
+        self._mfa_finish = None
         return self.async_show_progress_done(next_step_id="mfa_finish")
 
     async def async_step_mfa_finish(self, user_input=None):
-        # The tokens are kept until the next sign-in. The frontend and the call task's
-        # callback can both advance the flow here, and both must finish the same sign-in.
-        if self._mfa_tokens is None:
-            return await self.async_step_user()
-        return await self._async_finish_login(self._mfa_tokens)
+        # The frontend and the call task's callback can both advance the flow here. They
+        # share one finish of the sign-in, so neither can act on a different outcome.
+        if self._mfa_finish is None:
+            if self._mfa_tokens is None:
+                return await self.async_step_user()
+            self._mfa_finish = self.hass.async_create_task(
+                self._async_finish_login(self._mfa_tokens)
+            )
+        return await asyncio.shield(self._mfa_finish)
 
     async def async_step_device(self, user_input=None):
         errors = {}

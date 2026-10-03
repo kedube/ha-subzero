@@ -300,7 +300,7 @@ async def test_mfa_phone_call_progress_and_timeout(hass, tokens):
         assert result["step_id"] == "device"
 
 
-async def test_mfa_call_finish_reached_twice_completes_the_same_sign_in(hass, tokens):
+async def test_mfa_call_finish_reached_twice_shares_one_sign_in(hass, tokens):
     release = asyncio.Event()
     lookups = 0
 
@@ -342,11 +342,74 @@ async def test_mfa_call_finish_reached_twice_completes_the_same_sign_in(hass, to
         first = asyncio.ensure_future(hass.config_entries.flow.async_configure(result["flow_id"]))
         second = asyncio.ensure_future(hass.config_entries.flow.async_configure(result["flow_id"]))
         async with asyncio.timeout(5):
-            while not (second.done() or lookups == 2):
+            while not lookups:
                 await asyncio.sleep(0)
+        for _ in range(5):
+            await asyncio.sleep(0)
         release.set()
         results = await asyncio.gather(first, second)
     assert [result["step_id"] for result in results] == ["device", "device"]
+    assert lookups == 1
+
+
+async def test_overlapping_call_requests_each_start_a_poll(hass):
+    first_request = asyncio.Event()
+    requests = 0
+    polls = 0
+
+    async def request_mfa(self, auth_type="onewaysms", captcha_code="", phone_id=None):
+        nonlocal requests
+        requests += 1
+        if requests == 1:
+            await first_request.wait()
+        elif requests > 3:
+            raise LoginRateLimited("Too many requests")
+
+    async def poll_call(self):
+        nonlocal polls
+        polls += 1
+        if polls == 1:
+            # Resumes the waiting request before Home Assistant's callback for this poll.
+            first_request.set()
+            raise MfaCallTimeout("Timed out")
+        await asyncio.Event().wait()
+
+    with (
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.login",
+            autospec=True,
+            side_effect=_phonefactor_login(captcha_required=False),
+        ),
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.request_mfa_verification",
+            autospec=True,
+            side_effect=request_mfa,
+        ),
+        patch(
+            "custom_components.subzero.config_flow.SubZeroLogin.poll_mfa_call",
+            autospec=True,
+            side_effect=poll_call,
+        ),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": "user"}, data=CREDENTIALS
+        )
+        flow_id = result["flow_id"]
+        waiting = asyncio.ensure_future(
+            hass.config_entries.flow.async_configure(flow_id, {"method": "dialphone"})
+        )
+        async with asyncio.timeout(5):
+            while not requests:
+                await asyncio.sleep(0)
+        result = await hass.config_entries.flow.async_configure(flow_id, {"method": "dialphone"})
+        assert result["type"] is FlowResultType.SHOW_PROGRESS
+        async with asyncio.timeout(5):
+            result = await waiting
+        assert result["type"] is FlowResultType.SHOW_PROGRESS
+        assert requests == 2
+
+        hass.config_entries.flow.async_abort(flow_id)
+        await hass.async_block_till_done()
 
 
 async def test_mfa_call_that_fails_at_once_requests_one_call(hass):
