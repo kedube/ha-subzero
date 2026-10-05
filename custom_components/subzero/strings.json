@@ -64,13 +64,13 @@
     "step": {
       "init": {
         "title": "Choose appliances",
-        "description": "The list is refreshed from your Sub-Zero account. Deselecting an appliance removes its Home Assistant device and entities.",
-        "data": {"device_ids": "Appliances"}
+        "description": "The list is refreshed from your Sub-Zero account. Deselecting an appliance removes its Home Assistant device and entities. A status read after each quiet interval corrects missed push updates and restarts them if needed; shorter intervals make more cloud requests.",
+        "data": {"device_ids": "Appliances", "status_poll_interval": "Status refresh interval"}
       }
     },
     "error": {
-      "cannot_connect": "Could not refresh the appliance list. Try again later.",
-      "rate_limited": "Sub-Zero asked us to slow down. Wait before trying again.",
+      "cannot_connect": "Could not refresh the appliance list, so only the saved appliances are shown. You can still change the status refresh interval.",
+      "rate_limited": "Sub-Zero asked us to slow down, so only the saved appliances are shown. You can still change the status refresh interval.",
       "invalid_device": "Select appliances from this account."
     },
     "abort": {

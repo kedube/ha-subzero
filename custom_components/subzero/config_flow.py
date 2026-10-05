@@ -29,8 +29,8 @@ from .auth import (
     MfaCallTimeout,
     SubZeroLogin,
 )
-from .const import DOMAIN
-from .coordinator import selected_devices
+from .const import DOMAIN, STATUS_POLL_INTERVALS
+from .coordinator import selected_devices, status_poll_interval
 
 
 def device_schema(devices: dict, selected: list[str]) -> vol.Schema:
@@ -454,29 +454,29 @@ class SubZeroOptionsFlow(config_entries.OptionsFlowWithReload):
             )
             try:
                 appliances = await client.appliances()
-                configured = configured_devices(self.hass, entry.entry_id)
-                self._devices = {
-                    appliance.id: {
-                        "name": current.get(appliance.id, {}).get("name") or appliance.name,
-                        "temperature_unit": appliance.temperature_unit,
-                    }
-                    for appliance in appliances
-                    if appliance.id not in configured
-                }
-                for device_id, device in current.items():
-                    if device_id not in configured:
-                        self._devices.setdefault(device_id, device)
             except InvalidAuth:
                 entry.async_start_reauth(self.hass)
                 return self.async_abort(reason="reauth_required")
             except RateLimited:
                 errors["base"] = "rate_limited"
+                appliances = []
             except ApiError:
                 errors["base"] = "cannot_connect"
-            if errors:
-                return self.async_show_form(
-                    step_id="init", data_schema=vol.Schema({}), errors=errors
-                )
+                appliances = []
+            # Without a fresh list, the saved selection is offered so the other settings
+            # can still change, such as switching to push only during a rate limit.
+            configured = configured_devices(self.hass, entry.entry_id)
+            self._devices = {
+                appliance.id: {
+                    "name": current.get(appliance.id, {}).get("name") or appliance.name,
+                    "temperature_unit": appliance.temperature_unit,
+                }
+                for appliance in appliances
+                if appliance.id not in configured
+            }
+            for device_id, device in current.items():
+                if device_id not in configured:
+                    self._devices.setdefault(device_id, device)
         if user_input is not None and "device_ids" in user_input:
             selected = user_input["device_ids"]
             if not set(selected).issubset(self._devices):
@@ -485,12 +485,31 @@ class SubZeroOptionsFlow(config_entries.OptionsFlowWithReload):
                 return self.async_abort(reason="all_configured")
             else:
                 return self.async_create_entry(
-                    data={"devices": {key: self._devices[key] for key in selected}}
+                    data={
+                        "devices": {key: self._devices[key] for key in selected},
+                        "status_poll_interval": int(
+                            user_input.get("status_poll_interval", status_poll_interval(entry))
+                        ),
+                    }
                 )
         return self.async_show_form(
             step_id="init",
             data_schema=device_schema(
                 self._devices, [key for key in current if key in self._devices]
+            ).extend(
+                {
+                    vol.Required(
+                        "status_poll_interval", default=str(status_poll_interval(entry))
+                    ): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[
+                                {"value": str(seconds), "label": label}
+                                for seconds, label in STATUS_POLL_INTERVALS.items()
+                            ],
+                            mode=SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
+                }
             ),
             errors=errors,
         )

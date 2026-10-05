@@ -6,6 +6,7 @@ import random
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from datetime import datetime, timedelta
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
@@ -34,7 +35,9 @@ from .auth import InvalidAuth
 from .const import (
     CONTROL_CONFIRM_TIMEOUT,
     CONTROL_PUSH_TIMEOUT,
+    DEFAULT_STATUS_POLL_INTERVAL,
     DOMAIN,
+    DOOR_KEYS,
     FAULT_METADATA_APPLIES_TO_BY_SERIES,
     ICE_DELAY_KEYS,
     KITCHEN_TIMERS,
@@ -43,6 +46,7 @@ from .const import (
     PRIVATE_KEYS,
     RECONNECT_DELAY,
     STATE_KEYS,
+    STATUS_POLL_INTERVALS,
 )
 from .controls import (
     appliance_datetime,
@@ -63,6 +67,8 @@ from .controls import (
 
 _LOGGER = logging.getLogger(__name__)
 INITIAL_STATE_TIMEOUT = 16
+# Set in the task of a periodic status read until the read starts.
+_periodic_read: ContextVar[bool] = ContextVar("subzero_periodic_read", default=False)
 
 
 def selected_devices(entry: ConfigEntry) -> dict[str, dict]:
@@ -77,6 +83,12 @@ def selected_devices(entry: ConfigEntry) -> dict[str, dict]:
     return entry.options.get("devices", entry.data["devices"])
 
 
+def status_poll_interval(entry: ConfigEntry) -> int:
+    """Return the status refresh interval in seconds, or 0 for push only."""
+    interval = entry.options.get("status_poll_interval")
+    return interval if interval in STATUS_POLL_INTERVALS else DEFAULT_STATUS_POLL_INTERVAL
+
+
 class SubZeroCoordinator(DataUpdateCoordinator[dict]):
     def __init__(
         self,
@@ -87,11 +99,13 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         device: dict,
         read_failed: Callable[[SubZeroCoordinator], None],
     ):
+        interval = status_poll_interval(entry)
         super().__init__(
             hass,
             _LOGGER,
             config_entry=entry,
-            name=DOMAIN,
+            name=f"{DOMAIN} {device['name']}",
+            update_interval=timedelta(seconds=interval) if interval else None,
         )
         self.client = client
         self.data = {}
@@ -104,7 +118,12 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             "snapshots": 0,
             "updates": 0,
             "last_received": None,
+            "periodic_reads": 0,
+            "skipped_reads": 0,
+            "missed_updates": 0,
+            "channel_reopens": 0,
         }
+        self._reopen_channel = False
         self._command_lock = asyncio.Lock()
         self._unsettled = False
         self._state_lock = asyncio.Lock()
@@ -115,6 +134,43 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         self._event_ids: set[tuple[datetime, int, int]] = set()
         self._event_listeners: list[Callable[[dict], None]] = []
         self._history_seen = False
+
+    @callback
+    def _schedule_refresh(self) -> None:
+        # Recovery owns retries while an appliance is unavailable, including the
+        # wait a rate limit asks for.
+        if self.last_update_success:
+            super()._schedule_refresh()
+        else:
+            self._retry_after = None
+
+    async def _handle_refresh_interval(self, _now: datetime | None = None) -> None:
+        _periodic_read.set(True)
+        await super()._handle_refresh_interval(_now)
+        if self._reopen_channel:
+            self._reopen_channel = False
+            await self._async_reopen_channel()
+
+    async def _async_reopen_channel(self) -> None:
+        """Ask the appliance to resume push updates.
+
+        The account connection only reopens appliance channels when it reconnects,
+        up to 50 minutes later.
+        """
+        self.push_stats["channel_reopens"] += 1
+        _LOGGER.debug("Reopening the update channel for %s", self.device["name"])
+        try:
+            await self.client.open_channel(self.device_id)
+        except (ApiError, InvalidAuth) as error:
+            # The next periodic read retries if push stays silent.
+            _LOGGER.debug(
+                "Could not reopen the update channel for %s: %s", self.device["name"], error
+            )
+
+    @callback
+    def async_set_update_error(self, error: Exception) -> None:
+        self._async_unsub_refresh()
+        super().async_set_update_error(error)
 
     @callback
     def async_add_event_listener(self, listener: Callable[[dict], None]) -> Callable[[], None]:
@@ -419,6 +475,8 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             self._read_failed(self)
 
     async def _async_update_data(self) -> dict:
+        periodic = _periodic_read.get()
+        _periodic_read.set(False)
         async with self._state_lock:
             self._read_updates = {}
             self._read_error = None
@@ -432,6 +490,8 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
                     data = self.data
                 if error := self._read_error or self._channel_error:
                     raise error
+                if periodic:
+                    self._check_missed_updates(data)
                 self.unrecognized_keys.update(data.keys() - STATE_KEYS)
                 if "notifs" in data:
                     data = {**data, "notifs": notification_records(data)}
@@ -447,12 +507,33 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             except InvalidAuth as error:
                 raise ConfigEntryAuthFailed(str(error)) from error
             except RateLimited as error:
+                if periodic and self.last_update_success:
+                    # Push keeps the appliance current, so a rate limit only skips
+                    # the periodic read.
+                    self.push_stats["skipped_reads"] += 1
+                    _LOGGER.debug("Skipping a rate-limited status read for %s", self.device["name"])
+                    return self.data
                 raise UpdateFailed(str(error), retry_after=error.retry_after) from error
             except ApiError as error:
                 raise UpdateFailed(str(error)) from error
             finally:
                 self._read_updates = None
                 self._read_error = None
+
+    def _check_missed_updates(self, data: dict) -> None:
+        """Note a door change that a periodic read found before push reported it."""
+        self.push_stats["periodic_reads"] += 1
+        missed = sorted(
+            key
+            for key in DOOR_KEYS.difference(self._read_updates)
+            if type(data.get(key)) is bool
+            and type(self.data.get(key)) is bool
+            and data[key] != self.data[key]
+        )
+        if missed:
+            _LOGGER.debug("Push did not report %s for %s", ", ".join(missed), self.device["name"])
+            self.push_stats["missed_updates"] += 1
+            self._reopen_channel = True
 
     def _discard_excluded(self, data: dict) -> dict:
         """Drop the properties the app discards for the appliance type.
@@ -554,7 +635,7 @@ class SubZeroFaultsCoordinator(DataUpdateCoordinator[list[ApplianceFault]]):
             hass,
             _LOGGER,
             config_entry=entry,
-            name=f"{DOMAIN} faults",
+            name=f"{DOMAIN} {appliance.device['name']} faults",
             update_interval=timedelta(minutes=30),
         )
         self.client = client

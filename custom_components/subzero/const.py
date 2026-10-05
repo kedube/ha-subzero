@@ -1,6 +1,14 @@
 """Integration settings and recognized appliance properties."""
 
 DOMAIN = "subzero"
+DEFAULT_STATUS_POLL_INTERVAL = 600
+STATUS_POLL_INTERVALS = {
+    0: "Push only",
+    60: "1 minute",
+    120: "2 minutes",
+    300: "5 minutes",
+    600: "10 minutes",
+}
 CONTROL_CONFIRM_TIMEOUT = 8
 CONTROL_PUSH_TIMEOUT = 5
 RECONNECT_DELAY = 30
@@ -478,6 +486,9 @@ BINARY_KEYS = {
     "delay_start_timer_active",
     *DISHWASHER_SWITCHES,
 }
+# Appliances push door changes as they happen, so a door change that only a status read
+# reports shows that push updates stopped.
+DOOR_KEYS = {key for key in BINARY_KEYS if key.endswith("door_ajar")}
 TIMESTAMP_KEYS = {
     "delay_start_time",
     "delay_end_time",

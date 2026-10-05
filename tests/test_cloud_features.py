@@ -187,6 +187,7 @@ async def appliances(hass, tokens, request, unit_system):
             "invalid": 0,
             "last_received": None,
         }
+        client.last_messages = {}
         client.appliances = AsyncMock(
             return_value=[
                 Appliance(device_id, device["name"], unit)
@@ -1459,6 +1460,8 @@ async def test_diagnostics_omit_private_values(hass, appliances):
     assert result["notifications"]["received"] == 0
     encoded = json.dumps(result)
     assert result["push_connected"] is True
+    assert result["status_poll_interval"] == 600
+    assert result["polling_disabled"] is False
     assert "DO30PM" in encoded and "DW2450WS" in encoded
     for private in (
         "192.0.2.1",
@@ -1695,15 +1698,27 @@ async def test_diagnostics_count_push_updates(hass, appliances):
     device = dr.async_get(hass).async_get_device_by_identifier(
         (DOMAIN, "fridge"), appliances.entry.entry_id
     )
+    initial = {
+        "snapshots": 0,
+        "updates": 0,
+        "last_received": None,
+        "periodic_reads": 0,
+        "skipped_reads": 0,
+        "missed_updates": 0,
+        "channel_reopens": 0,
+        "last_channel_message": None,
+    }
     before = await async_get_device_diagnostics(hass, appliances.entry, device)
-    assert before["push"] == {"snapshots": 0, "updates": 0, "last_received": None}
+    assert before["push"] == initial
+    appliances.client.last_messages["fridge"] = "2026-10-04T12:00:00+00:00"
     await appliances.update("fridge", {"ref_door_ajar": True})
     await appliances.update("fridge", {"appliance_model": "TEST-MODEL"}, full=True)
     result = await async_get_device_diagnostics(hass, appliances.entry, device)
     assert result["push"]["snapshots"] == 1
     assert result["push"]["updates"] == 1
     assert dt_util.parse_datetime(result["push"]["last_received"]) <= dt_util.utcnow()
-    assert before["push"] == {"snapshots": 0, "updates": 0, "last_received": None}
+    assert result["push"]["last_channel_message"] == "2026-10-04T12:00:00+00:00"
+    assert before["push"] == initial
 
 
 async def test_device_diagnostics_select_only_the_requested_appliance(hass, appliances):

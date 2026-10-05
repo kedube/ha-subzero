@@ -27,7 +27,7 @@ Use the button above, or add the repository manually:
 4. Open **Settings → Devices & services → Add integration → Sub-Zero**.
 5. Enter your Sub-Zero account email and password, then select the appliances to include. If your account uses multi-factor authentication, setup first verifies it by text message code or phone call, and may ask you to type the characters shown in an image.
 
-To change the selection later, open **Settings → Devices & services → Sub-Zero → Configure**. This refreshes the account's appliance list using the saved connection. Deselecting an appliance removes its Home Assistant device and entities.
+To change the selection later, open **Settings → Devices & services → Sub-Zero → Configure**. This refreshes the account's appliance list using the saved connection. Deselecting an appliance removes its Home Assistant device and entities. Configure also sets the status refresh interval described in [How it works](#how-it-works). If the list cannot be refreshed, the saved appliances are shown and the interval can still be changed.
 
 For manual installation, copy `custom_components/subzero` into your Home Assistant configuration's `custom_components` directory, restart, and follow steps 4–5.
 
@@ -164,9 +164,11 @@ Wi-Fi signal strength is enabled by default. Uptime, IP address, MAC address, an
 
 Download diagnostics from the integration or individual device page. Downloads use the cached appliance state and omit account credentials, appliance names, serial numbers, and network identifiers. They also list unrecognized state key names, without their values.
 
-Integration diagnostics count appliance notifications received, ignored, or invalid since the last reload. Heartbeats are excluded from the received count. Each appliance also records parsed snapshots and updates, with the time of the last one. These counts help distinguish incoming messages from a connection that only receives heartbeats; they do not prove every state change was received or applied.
+Integration diagnostics count appliance notifications received, ignored, or invalid since the last reload. Heartbeats are excluded from the received count. They also show the status refresh interval and whether **Enable polling for changes** is turned off. Each appliance also records parsed snapshots and updates, with the time of the last one, and the time of its last message of any kind, including messages without state. These counts help distinguish incoming messages from a connection that only receives heartbeats; they do not prove every state change was received or applied.
 
-Enable debug logging for `custom_components.subzero` to record channel-open attempts, notification types and payload key names, and parsed state updates. State values exclude network identifiers and nested objects.
+Each appliance also counts periodic status reads, reads skipped for rate limits, reads that found a door change push had not reported, and update channel reopens. A rising missed count means push updates are stopping; if it stays near the reopen count, reopening restores them.
+
+Enable debug logging for `custom_components.subzero` to record channel-open attempts, notification types and payload key names, parsed state updates, door changes that push missed, and channel reopens. State values exclude network identifiers and nested objects.
 
 ## Compatibility
 
@@ -178,13 +180,15 @@ Local network access, verification methods other than text message or phone call
 
 ## How it works
 
-Selected appliances share account tokens and one cloud notification connection. Setup opens the push connection and waits up to 16 seconds for initial state, then requests any missing state. Healthy appliances trigger no periodic status requests. Lost connections reconnect with increasing delays, and rate-limit responses are honored.
+Selected appliances share account tokens and one cloud notification connection, and each appliance opens an update channel on it. Setup opens the push connection and waits up to 16 seconds for initial state, then requests any missing state. Lost connections reconnect with increasing delays, and rate-limit responses are honored.
 
-After an error, a reopened channel or an incoming state update triggers a fresh status read if no full push snapshot has restored the appliance. A status read that fails while the push connection stays open, such as one confirming a control, starts recovery right away. Failed recovery reads retry with increasing delays. An appliance that silently stops reporting may go unnoticed until a notification or a failed control request reveals it.
+Push updates for one appliance can stop while the shared connection stays up, which can leave a door showing open after it closed. The connection reopens appliance channels only when it reconnects, up to 50 minutes later. So by default, each appliance also gets a status read after 10 minutes without a state change. The read corrects missed updates, and when it finds a door change that push did not report, the integration reopens that appliance's update channel so live updates resume. In **Configure**, the status refresh interval can be set to 1, 2, 5, or 10 minutes, or **Push only**. An unavailable appliance uses recovery retries instead of periodic reads.
+
+After an error, a reopened channel or an incoming state update triggers a fresh status read if no full push snapshot has restored the appliance. A status read that fails while the push connection stays open, such as one confirming a control, starts recovery right away. Failed recovery reads retry with increasing delays. The periodic status read can also reveal an appliance that silently stops reporting, subject to the interval and what the cloud status endpoint returns.
 
 Control changes are confirmed from appliance status, not from the command acknowledgement. Property writes use up to three attempts, each allowing eight seconds for the request and its push confirmation. A command error or missing push confirmation then prompts a status read, which that deadline does not cut short; authentication and rate-limit errors stop immediately. A command that resends a value the appliance already reports, such as a cancel while the cycle already reports off, counts only when the cloud acknowledges it, so a remote start stops if a resent cooking mode or setpoint fails. Each retry rechecks whether the change is still allowed. Ice modes and remote starts preserve the app's ordered writes, including repeated values, and later writes stop if a setting cannot be confirmed. Queued ice-mode changes and remote starts use the state left by earlier commands, and a start for an appliance that is already running only sends a new setpoint. Kitchen-timer restarts require a fresh update or status read. Failed confirmation includes the last command error when one was reported.
 
-Sub-Zero does not document an API quota. Push updates keep requests low, but multiple appliances or unstable connections can still hit rate limits.
+Sub-Zero does not document an API quota. The default 10-minute fallback can make up to 144 status requests per appliance per day when no push changes arrive, plus a channel reopen each time a read finds a missed door change. A status read may still miss a brief door opening or return a stale cloud value, so this is not a guaranteed real-time door alert. A periodic read that hits a rate limit is skipped, and push updates continue. **Push only** stops periodic status reads, but the Active faults sensor still checks every 30 minutes. Turning off **Enable polling for changes** in the integration's **System options** stops both.
 
 Your password is used for sign-in and is not saved. Home Assistant stores renewable account tokens in its configuration and refreshes them automatically. If renewal fails, Home Assistant asks you to sign in again. Protect Home Assistant backups as you would other account credentials.
 

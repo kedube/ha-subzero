@@ -769,22 +769,45 @@ async def test_reauth_suggests_the_saved_email(hass, tokens, username, title, ex
     assert not fields["password"].description
 
 
-@pytest.mark.parametrize("error", [ApiError("Unavailable"), RateLimited(300)])
-async def test_options_list_failure_is_retryable(hass, tokens, error):
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [(ApiError("Unavailable"), "cannot_connect"), (RateLimited(300), "rate_limited")],
+)
+async def test_options_list_failure_keeps_saved_appliances(hass, tokens, error, reason):
     entry = MockConfigEntry(
         domain=DOMAIN, version=2, data={"tokens": token_state(tokens), "devices": DEVICES}
     )
     entry.add_to_hass(hass)
-    with patch(
-        "custom_components.subzero.api.SubZeroClient.appliances", side_effect=[error, APPLIANCES]
+    with (
+        patch(
+            "custom_components.subzero.api.SubZeroClient.appliances", side_effect=error
+        ) as appliances,
+        patch("custom_components.subzero.async_setup_entry", return_value=True),
     ):
         result = await hass.config_entries.options.async_init(entry.entry_id)
         assert result["type"] is FlowResultType.FORM
-        assert result["errors"]
-        result = await hass.config_entries.options.async_configure(result["flow_id"], {})
-    assert not result["errors"]
-    assert result["data_schema"]({})["device_ids"] == list(DEVICES)
-    assert entry.options == {}
+        assert result["errors"] == {"base": reason}
+        assert result["data_schema"]({})["device_ids"] == list(DEVICES)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {"device_ids": list(DEVICES), "status_poll_interval": "0"}
+        )
+        await hass.async_block_till_done()
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options == {"devices": DEVICES, "status_poll_interval": 0}
+    appliances.assert_awaited_once()
+
+
+async def test_options_replace_an_unknown_saved_interval_with_the_default(hass, tokens):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        data={"tokens": token_state(tokens), "devices": DEVICES},
+        options={"devices": DEVICES, "status_poll_interval": 45},
+    )
+    entry.add_to_hass(hass)
+    with patch("custom_components.subzero.api.SubZeroClient.appliances", return_value=APPLIANCES):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["data_schema"]({})["status_poll_interval"] == "600"
 
 
 async def test_options_expired_tokens_start_reauth(hass, tokens):
@@ -826,3 +849,28 @@ async def test_options_list_keeps_selected_but_missing_appliances(hass, tokens):
     assert schema({})["device_ids"] == ["test-fridge"]
     selector = next(iter(schema.schema.values()))
     assert selector.config["options"] == [{"value": "test-fridge", "label": "Kitchen"}]
+
+
+async def test_options_can_disable_status_polling(hass, tokens):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        data={"tokens": token_state(tokens), "devices": DEVICES},
+    )
+    entry.add_to_hass(hass)
+    with (
+        patch("custom_components.subzero.api.SubZeroClient.appliances", return_value=APPLIANCES),
+        patch("custom_components.subzero.async_setup_entry", return_value=True),
+    ):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        assert result["data_schema"]({})["status_poll_interval"] == "600"
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {"device_ids": ["test-fridge"], "status_poll_interval": "0"},
+        )
+        await hass.async_block_till_done()
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options == {
+        "devices": {"test-fridge": DEVICES["test-fridge"]},
+        "status_poll_interval": 0,
+    }
