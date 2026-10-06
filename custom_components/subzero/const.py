@@ -276,6 +276,22 @@ MANUAL_COOK_MODES = {3, 7, 9, 11}
 # E series and M series start with a power write alone; the app sends the
 # cooking mode, power, and setpoint to every other series.
 LEGACY_START_SERIES = {3, 4}
+# The app checks whether the oven allows a cooking mode change only on these
+# types, which have knobs.
+KNOB_OVEN_TYPES = {
+    (4, 1, 3),
+    (4, 2, 3),
+    (8, 1, 0),
+    (8, 2, 0),
+    (8, 3, 0),
+    (8, 4, 1),
+    (8, 4, 2),
+    (8, 5, 1),
+    (8, 6, 1),
+    (8, 6, 2),
+    (15, 1, 3),
+    (15, 2, 3),
+}
 OVEN_TEMPERATURE_RANGES = {
     3: {
         **dict.fromkeys((1, 2, 4, 5, 6), (170, 550)),

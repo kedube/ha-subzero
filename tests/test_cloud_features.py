@@ -601,6 +601,17 @@ async def test_oven_interlocks_apply_below_the_entity_layer(
     appliances.client.set_property.assert_not_called()
 
 
+@pytest.mark.parametrize("type_id", ["1.4.2.1", "1.15.1.5"])
+async def test_ovens_without_knobs_ignore_the_mode_change_flag(appliances, type_id):
+    await appliances.update(
+        "oven",
+        {"appliance_type": type_id, "cav_remote_ready": True, "cav_mode_change_enabled": False},
+    )
+    coordinator = appliances.entry.runtime_data.coordinators["oven"]
+    await coordinator.async_set_properties({"cav_cook_mode": 2})
+    appliances.client.set_property.assert_awaited_once_with("oven", "cav_cook_mode", 2)
+
+
 async def test_unsupported_cooking_mode_still_allows_turning_off(hass, appliances):
     assert "Eco" not in hass.states.get("select.oven_cooking_mode").attributes["options"]
     await appliances.update("oven", {"cav_cook_mode": 13, "cav_unit_on": True})
