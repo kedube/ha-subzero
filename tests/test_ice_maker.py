@@ -88,7 +88,7 @@ async def test_ice_status_follows_the_app_order(hass, cloud_appliance, update, s
     assert hass.states.get("sensor.kitchen_ice_maker_status").state == status
 
 
-async def test_schedule_ice_delay_converts_units_and_refreshes(hass, cloud_appliance):
+async def test_schedule_ice_delay_converts_units_and_refreshes(hass, cloud_appliance, caplog):
     await hass.services.async_call(
         DOMAIN,
         "schedule_ice_delay",
@@ -99,6 +99,7 @@ async def test_schedule_ice_delay_converts_units_and_refreshes(hass, cloud_appli
     assert hass.states.get("sensor.kitchen_ice_delay_duration").state == "43200"
     assert hass.states.get("binary_sensor.kitchen_ice_delay_repeats_daily").state == "on"
     cloud_appliance.client.set_property.assert_not_called()
+    assert "deprecated" not in caplog.text
 
 
 async def test_cancel_current_delay_preserves_repeat_schedule(hass, cloud_appliance):

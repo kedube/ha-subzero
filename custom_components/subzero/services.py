@@ -25,14 +25,12 @@ def async_setup_services(hass: HomeAssistant) -> None:
     async def schedule_ice_delay(call: ServiceCall) -> None:
         device = dr.async_get(hass).async_get(call.data["device_id"])
         if device is not None:
-            for entry_id in device.config_entries:
-                entry = hass.config_entries.async_get_entry(entry_id)
-                if (
-                    entry is None
-                    or entry.domain != DOMAIN
-                    or entry.state is not ConfigEntryState.LOADED
-                ):
-                    continue
+            entry = hass.config_entries.async_get_entry(device.config_entry_id)
+            if (
+                entry is not None
+                and entry.domain == DOMAIN
+                and entry.state is ConfigEntryState.LOADED
+            ):
                 for device_id, coordinator in entry.runtime_data.coordinators.items():
                     if (DOMAIN, device_id) in device.identifiers:
                         await coordinator.async_set_ice_delay(
