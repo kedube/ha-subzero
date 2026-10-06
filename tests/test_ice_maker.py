@@ -5,8 +5,10 @@ import asyncio
 import pytest
 import voluptuous as vol
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import device_registry as dr
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.subzero.api import ApiError, RateLimited
+from custom_components.subzero.api import ApiError, RateLimited, token_state
 from custom_components.subzero.auth import InvalidAuth
 from custom_components.subzero.const import DOMAIN
 
@@ -234,6 +236,94 @@ async def test_schedule_service_rejects_other_durations(hass, cloud_appliance, d
             blocking=True,
         )
     cloud_appliance.client.set_ice_delay.assert_not_called()
+
+
+async def test_schedule_service_reaches_a_shared_appliance_through_a_loaded_account(
+    hass, cloud_appliance
+):
+    other = MockConfigEntry(domain=DOMAIN, title="Other account")
+    other.add_to_hass(hass)
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=other.entry_id, identifiers={(DOMAIN, "appliance")}
+    )
+    await hass.services.async_call(
+        DOMAIN,
+        "schedule_ice_delay",
+        {"device_id": device.id, "duration": 2},
+        blocking=True,
+    )
+    cloud_appliance.client.set_ice_delay.assert_awaited_once_with("appliance", 7200, 0, False)
+
+
+@pytest.mark.parametrize(
+    ("target", "broken", "tried", "error"),
+    [
+        ("first", {}, ["first"], None),
+        ("second", {}, ["second"], None),
+        ("second", {"first": "unavailable"}, ["second"], None),
+        ("first", {"second": "unavailable"}, ["first"], None),
+        ("first", {"first": "unavailable"}, ["first", "second"], None),
+        ("first", {"first": "no delay settings"}, ["first", "second"], None),
+        (
+            "first",
+            {"first": "unavailable", "second": "no delay settings"},
+            ["first", "second"],
+            "unavailable",
+        ),
+    ],
+)
+async def test_schedule_service_tries_the_devices_own_account_then_the_others(
+    hass, cloud_appliance, tokens, target, broken, tried, error
+):
+    other = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        minor_version=3,
+        title="Other account",
+        data={
+            "tokens": token_state(tokens),
+            "devices": {"appliance": {"name": "Kitchen", "temperature_unit": "F"}},
+        },
+    )
+    other.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(other.entry_id)
+    await hass.async_block_till_done()
+    entries = {"first": cloud_appliance.entry, "second": other}
+    coordinators = {
+        name: entry.runtime_data.coordinators["appliance"] for name, entry in entries.items()
+    }
+    attempts = []
+    for name, coordinator in coordinators.items():
+        if broken.get(name) == "unavailable":
+            coordinator.last_update_success = False
+        elif broken.get(name) == "no delay settings":
+            del coordinator.data["delay_duration"]
+        original = coordinator.async_set_ice_delay
+
+        async def attempt(*args, name=name, original=original):
+            attempts.append(name)
+            await original(*args)
+
+        coordinator.async_set_ice_delay = attempt
+    device = next(
+        device
+        for device in dr.async_entries_for_config_entry(
+            dr.async_get(hass), entries[target].entry_id
+        )
+        if (DOMAIN, "appliance") in device.identifiers
+    )
+    request = hass.services.async_call(
+        DOMAIN, "schedule_ice_delay", {"device_id": device.id, "duration": 2}, blocking=True
+    )
+    if error:
+        with pytest.raises(ServiceValidationError, match=error):
+            await request
+        cloud_appliance.client.set_ice_delay.assert_not_called()
+    else:
+        await request
+        cloud_appliance.client.set_ice_delay.assert_awaited_once_with("appliance", 7200, 0, False)
+    assert attempts == tried
+    await hass.config_entries.async_unload(other.entry_id)
 
 
 async def test_schedule_service_rejects_an_unknown_device(hass, cloud_appliance):
