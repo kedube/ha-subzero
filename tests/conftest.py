@@ -43,6 +43,12 @@ def fast_timeouts(monkeypatch):
     monkeypatch.setattr("custom_components.subzero.coordinator.CONTROL_PUSH_TIMEOUT", 0.01)
 
 
+@pytest.fixture(autouse=True)
+def prevent_firebase_network(monkeypatch):
+    """Most tests exercise appliance state without opening a real FCM connection."""
+    monkeypatch.setattr("custom_components.subzero.fcm.FcmAlerts.start", lambda self: None)
+
+
 @pytest.fixture
 async def cloud_appliance(hass, tokens, request, enable_custom_integrations):
     state = dict(request.param)

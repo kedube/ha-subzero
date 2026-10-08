@@ -318,7 +318,18 @@ def timer_minutes(data: dict, key: str) -> float | None:
     return duration if type(duration) is int and duration >= 0 else None
 
 
-def control_matches(data: dict, key: str, value: bool | int, requested_at: datetime) -> bool:
+def control_matches(
+    data: dict,
+    key: str,
+    value: bool | int,
+    requested_at: datetime,
+    previous: dict | None = None,
+) -> bool:
+    """Whether the appliance reports a setting as requested.
+
+    `previous` is the state before the request. A kitchen timer that restarted since
+    then confirms its write.
+    """
     if key == "accent_light_level":
         return (
             type(data.get(key)) is int
@@ -339,12 +350,20 @@ def control_matches(data: dict, key: str, value: bool | int, requested_at: datet
         return data.get(f"{prefix}_active") is False
     end = appliance_datetime(data.get(f"{prefix}_end_time"))
     duration = timer_minutes(data, key)
-    return (
-        data.get(f"{prefix}_active") is True
-        and end is not None
-        and (duration is None or duration == value)
-        and abs((end - requested_at).total_seconds() - value * 60) <= 65
-    )
+    if (
+        data.get(f"{prefix}_active") is not True
+        or end is None
+        or (duration is not None and duration != value)
+    ):
+        return False
+    if previous is not None and (
+        previous.get(f"{prefix}_active") is not True
+        or appliance_datetime(previous.get(f"{prefix}_end_time")) != end
+    ):
+        # The end time is on the appliance's clock, which can differ from Home
+        # Assistant's, so a restart shows the write took effect.
+        return True
+    return abs((end - requested_at).total_seconds() - value * 60) <= 65
 
 
 def cook_mode_offered(data: dict, key: str, mode: int) -> bool:

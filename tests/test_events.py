@@ -81,6 +81,15 @@ async def test_history_duplicates_and_sequence_reset(hass, cloud_appliance):
     ]
 
 
+async def test_repeated_channel_events_with_sequence_zero_remain_distinct(hass, cloud_appliance):
+    events = async_capture_events(hass, "state_changed")
+    first = record(0, 106, dt_util.utcnow() + timedelta(seconds=1))
+    second = record(0, 106, dt_util.utcnow() + timedelta(minutes=2))
+    await cloud_appliance.update({"notifs": [first]})
+    await cloud_appliance.update({"notifs": [first, second]})
+    assert [item.attributes["code"] for item in event_changes(events)] == [106, 106]
+
+
 async def test_startup_and_stale_history_never_fire(hass, cloud_appliance):
     events = async_capture_events(hass, "state_changed")
     old = record(timestamp=dt_util.utcnow() - timedelta(days=1))

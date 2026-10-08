@@ -33,6 +33,7 @@ from .api import (
 )
 from .auth import InvalidAuth
 from .const import (
+    CONF_FIREBASE_ALERTS,
     CONTROL_CONFIRM_TIMEOUT,
     CONTROL_PUSH_TIMEOUT,
     DEFAULT_STATUS_POLL_INTERVAL,
@@ -94,6 +95,11 @@ def status_poll_interval(entry: ConfigEntry) -> int:
     return interval if interval in STATUS_POLL_INTERVALS else DEFAULT_STATUS_POLL_INTERVAL
 
 
+def firebase_alerts_enabled(entry: ConfigEntry) -> bool:
+    """New and existing entries use Firebase alerts unless the owner turns them off."""
+    return entry.options.get(CONF_FIREBASE_ALERTS) is not False
+
+
 class SubZeroCoordinator(DataUpdateCoordinator[dict]):
     def __init__(
         self,
@@ -142,6 +148,8 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         self._channel_error: ApiError | None = None
         self._event_cutoff = dt_util.utcnow()
         self._event_ids: set[tuple[datetime, int, int]] = set()
+        self._event_sources: dict[tuple[datetime, int, int], str] = {}
+        self._paired_events: set[tuple[datetime, int, int]] = set()
         self._event_listeners: list[Callable[[dict], None]] = []
         self._history_seen = False
 
@@ -161,6 +169,10 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             self._renewed = False
             return
         skipped = self.push_stats["skipped_reads"]
+        # A push update during the wait may have scheduled the next check. The base
+        # class would drop that timer without cancelling it, and the status read
+        # schedules its own.
+        self._async_unsub_refresh()
         _periodic_read.set(True)
         await super()._handle_refresh_interval(_now)
         if (
@@ -232,31 +244,71 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             if timestamp is not None:
                 events.append((timestamp, record["notif_seq"], record["notif_type"]))
         for identity in sorted(events):
-            timestamp, sequence, code = identity
-            if timestamp < self._event_cutoff or identity in self._event_ids:
-                continue
-            self._event_ids.add(identity)
-            if len(self._event_ids) > MAX_EVENT_HISTORY:
-                oldest = min(self._event_ids)
-                self._event_ids.remove(oldest)
-                self._event_cutoff = max(self._event_cutoff, oldest[0] + timedelta(microseconds=1))
-            if not deliver:
-                continue
-            event = {
-                "code": code,
-                "sequence": sequence,
-                "appliance_timestamp": timestamp.isoformat(),
-            }
-            for listener in self._event_listeners:
-                listener(event)
+            self.async_receive_event(
+                *identity, deliver=deliver, source="history" if history else "channel"
+            )
+
+    @callback
+    def async_receive_event(
+        self,
+        timestamp: datetime,
+        sequence: int,
+        code: int,
+        *,
+        deliver: bool = True,
+        source: str = "channel",
+    ) -> bool:
+        """Deliver a new event; return whether listeners received it."""
+        identity = (timestamp, sequence, code)
+        if timestamp < self._event_cutoff:
+            return False
+        if identity in self._event_ids:
+            if self._event_sources[identity] != source:
+                self._paired_events.add(identity)
+            return False
+        counterparts = {"channel", "history"} if source == "firebase" else {"firebase"}
+        counterpart = next(
+            (
+                old
+                for old in sorted(self._event_ids, key=lambda old: abs(old[0] - timestamp))
+                if old not in self._paired_events
+                and self._event_sources[old] in counterparts
+                and old[1:] == (sequence, code)
+                and abs(old[0] - timestamp) <= timedelta(minutes=5)
+            ),
+            None,
+        )
+        self._event_ids.add(identity)
+        self._event_sources[identity] = source
+        if counterpart is not None:
+            self._paired_events.update((counterpart, identity))
+        if len(self._event_ids) > MAX_EVENT_HISTORY:
+            oldest = min(self._event_ids)
+            self._event_ids.remove(oldest)
+            del self._event_sources[oldest]
+            self._paired_events.discard(oldest)
+            self._event_cutoff = max(self._event_cutoff, oldest[0] + timedelta(microseconds=1))
+        if (source in {"firebase", "history"} and counterpart is not None) or not deliver:
+            return False
+        event = {
+            "code": code,
+            "sequence": sequence,
+            "appliance_timestamp": timestamp.isoformat(),
+        }
+        for listener in self._event_listeners:
+            listener(event)
+        return True
 
     @property
     def device_info(self) -> DeviceInfo:
+        info = DeviceInfo(identifiers={(DOMAIN, self.device_id)}, name=self.device["name"])
+        if not self.data.get("appliance_model"):
+            # Until the appliance reports, keep the details the registry saved from
+            # its last status rather than clearing them.
+            return info
         version = self.data.get("version")
         serial = self.data.get("appliance_serial")
-        return DeviceInfo(
-            identifiers={(DOMAIN, self.device_id)},
-            name=self.device["name"],
+        info.update(
             manufacturer=(
                 "Cove"
                 if is_dishwasher(self.data)
@@ -264,10 +316,11 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
                 if is_oven(self.data) or is_hood(self.data)
                 else "Sub-Zero"
             ),
-            model=self.data.get("appliance_model"),
+            model=self.data["appliance_model"],
             serial_number=serial if isinstance(serial, str) else None,
             sw_version=version.get("fw") if isinstance(version, dict) else None,
         )
+        return info
 
     @asynccontextmanager
     async def _command(self) -> AsyncIterator[None]:
@@ -341,6 +394,8 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         }
         if changes or not force:
             validate_control_properties(self.data, self.device.get("temperature_unit"), changes)
+        # Updates replace state rather than change it, so this keeps the state before writing.
+        previous = self.data
         requested_at = {}
         try:
             for key, value in properties.items():
@@ -360,7 +415,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
                         key, value, resend=key not in changes
                     )
             if not self.last_update_success or any(
-                not control_matches(self.data, key, value, requested_at[key])
+                not control_matches(self.data, key, value, requested_at[key], previous)
                 for key, value in properties.items()
             ):
                 raise HomeAssistantError("The appliance did not confirm the requested setting.")
@@ -410,6 +465,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         self, key: str, value: bool | int, *, resend: bool = False
     ) -> datetime:
         last_error = None
+        previous = self.data
         for attempt in range(3):
             if not self.last_update_success:
                 if attempt:
@@ -427,7 +483,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             @callback
             def confirm() -> None:
                 if self.last_update_success and control_matches(
-                    self.data, key, value, requested_at
+                    self.data, key, value, requested_at, previous
                 ):
                     confirmed.set()
                 else:
@@ -519,6 +575,14 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
                 self.hass, super().async_request_refresh(), "Sub-Zero status request"
             )
         )
+
+    async def async_alert_refresh(self) -> None:
+        """Check state after an alert without dropping a healthy state on rate limits."""
+        token = _periodic_read.set(True)
+        try:
+            await self.async_refresh()
+        finally:
+            _periodic_read.reset(token)
 
     @callback
     def _async_refresh_finished(self) -> None:

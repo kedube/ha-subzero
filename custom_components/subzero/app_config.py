@@ -25,3 +25,12 @@ LOGIN_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
     "Accept-Encoding": "gzip, deflate",
 }
+
+# The app's Firebase project, which delivers its phone alerts. Any Firebase
+# client may register with it; the app's own copy is in its resources.
+FIREBASE_CONFIG = {
+    "project_id": "sub-zero-group",
+    "app_id": "1:796060562650:android:3dd7dfbbc4d752607321e3",
+    "api_key": "AIzaSyA2r6lzLGugh9ICTohlLqktMDvvGiUuGMk",
+    "messaging_sender_id": "796060562650",
+}

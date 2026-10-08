@@ -367,6 +367,7 @@ class SubZeroClient:
         token_request=False,
         appliance_command=False,
         list_response=False,
+        any_response=False,
         headers: dict[str, str] | None = None,
         **kwargs,
     ) -> dict | list:
@@ -407,6 +408,13 @@ class SubZeroClient:
                     raise ApiError(
                         f"Sub-Zero returned HTTP {response.status}.", status=response.status
                     )
+                if any_response:
+                    # Alert requests answer with an ID string, true, a list, or nothing.
+                    body = (await response.text()).strip()
+                    try:
+                        return json.loads(body) if body else None
+                    except ValueError:
+                        raise ApiError("Sub-Zero returned an invalid API response.") from None
                 try:
                     payload = await response.json(content_type=None)
                     if list_response:
@@ -448,6 +456,7 @@ class SubZeroClient:
         *,
         user_id: str | None = None,
         list_response=False,
+        extra_headers: dict[str, str] | None = None,
         **kwargs,
     ) -> dict | list:
         await self.refresh()
@@ -457,6 +466,7 @@ class SubZeroClient:
             "Ocp-Apim-Subscription-Key": self.subscription_key,
             "Userid": user_id or self.tokens["api_user_id"],
             "Accept": "application/json",
+            **(extra_headers or {}),
         }
         try:
             return await self._json(
@@ -604,6 +614,76 @@ class SubZeroClient:
         elif isinstance(steps, list) and steps and all(isinstance(step, str) for step in steps):
             metadata["resolution_steps"] = "\n".join(steps)
         return metadata or None
+
+    async def _alerts_request(self, method: str, path: str, psid: str | None = None, **kwargs):
+        """Send a phone alert request the way the app does, with its device ID as `uuid`."""
+        return await self._request(
+            method,
+            "/consumerapp/api/notification" + path,
+            extra_headers={"uuid": psid} if psid else None,
+            any_response=True,
+            **kwargs,
+        )
+
+    async def alert_registration(self, psid: str, device_id: str) -> dict | None:
+        """Return the alert registration of a phone ID for an appliance, if there is one."""
+        try:
+            data = await self._alerts_request(
+                "GET",
+                f"/registrations/devices/{quote(psid, safe='')}/appliances/"
+                + quote(device_id, safe=""),
+                psid,
+            )
+        except ApiError as error:
+            if error.status == 404:
+                return None
+            raise
+        return data if isinstance(data, dict) and isinstance(data.get("id"), str) else None
+
+    async def register_for_alerts(self, registration: dict, *, update: bool) -> None:
+        """Create or update an appliance's alert registration, as the app does."""
+        await self._alerts_request("PUT" if update else "POST", "/registrations", json=registration)
+
+    async def alert_types(self, psid: str, device_id: str) -> set[int]:
+        """Return the alert codes a phone ID receives for an appliance."""
+        data = await self._alerts_request(
+            "GET",
+            f"/devices/{quote(psid, safe='')}/appliances/{quote(device_id, safe='')}/events",
+            psid,
+        )
+        codes = set()
+        for item in data if isinstance(data, list) else ():
+            value = item.get("valueType") if isinstance(item, dict) else None
+            if isinstance(value, int | str) and str(value).isdecimal():
+                codes.add(int(value))
+        return codes
+
+    async def subscribe_alerts(self, psid: str, device_id: str, keys: dict[int, str]) -> None:
+        """Receive the given alert codes, each with the app's localization key."""
+        await self._alerts_request(
+            "POST",
+            f"/devices/{quote(psid, safe='')}/events",
+            psid,
+            json=[
+                {
+                    "deviceId": device_id,
+                    "mutable_content": False,
+                    "valueType": code,
+                    "body_loc_key": key,
+                    "sound": None,
+                    "clickAction": None,
+                }
+                for code, key in sorted(keys.items())
+            ],
+        )
+
+    async def unsubscribe_alerts(self, psid: str, device_id: str, codes: set[int]) -> None:
+        await self._alerts_request(
+            "DELETE",
+            f"/devices/{quote(psid, safe='')}/events/type",
+            psid,
+            json={"valueTypes": [str(code) for code in sorted(codes)], "deviceId": device_id},
+        )
 
     def renew_connection(self) -> None:
         """Replace the notification connection, which reopens every appliance channel.

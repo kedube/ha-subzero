@@ -16,7 +16,12 @@ from .app_config import SUBSCRIPTION_KEY
 from .auth import InvalidAuth
 from .const import DISHWASHER_SWITCHES, DOMAIN
 from .controls import excluded_entity_keys
-from .coordinator import SubZeroAccount, SubZeroCoordinator, selected_devices
+from .coordinator import (
+    SubZeroAccount,
+    SubZeroCoordinator,
+    firebase_alerts_enabled,
+    selected_devices,
+)
 from .services import async_setup_services
 
 PLATFORMS = [
@@ -80,11 +85,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: SubZeroConfigEntry) -> b
     for entity in er.async_entries_for_config_entry(entities, entry.entry_id):
         if entity.unique_id in excluded:
             entities.async_remove(entity.entity_id)
+    enabled = firebase_alerts_enabled(entry)
+    if (enabled and account.coordinators) or entry.data.get("fcm_registration_ids"):
+        from .fcm import FcmAlerts
+
+        account.alerts = FcmAlerts(hass, entry, client, account.coordinators)
+        if enabled and account.coordinators:
+            account.alerts.start()
+        elif entry.data.get("fcm_registration_ids"):
+            account.alerts.start_cleanup()
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: SubZeroConfigEntry) -> bool:
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unloaded and (alerts := getattr(entry.runtime_data, "alerts", None)) is not None:
+        await alerts.stop()
+    return unloaded
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

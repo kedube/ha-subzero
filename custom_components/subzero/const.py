@@ -3,6 +3,7 @@
 import math
 
 DOMAIN = "subzero"
+CONF_FIREBASE_ALERTS = "firebase_alerts"
 DEFAULT_STATUS_POLL_INTERVAL = 600
 STATUS_POLL_INTERVALS = {
     0: "Push only",

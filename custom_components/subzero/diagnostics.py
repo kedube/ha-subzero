@@ -7,7 +7,12 @@ from homeassistant.helpers.device_registry import DeviceEntry
 from . import SubZeroConfigEntry
 from .api import fault_record
 from .const import DOMAIN, PRIVATE_KEYS
-from .coordinator import SubZeroCoordinator, SubZeroFaultsCoordinator, status_poll_interval
+from .coordinator import (
+    SubZeroCoordinator,
+    SubZeroFaultsCoordinator,
+    firebase_alerts_enabled,
+    status_poll_interval,
+)
 
 
 def appliance_diagnostics(
@@ -36,12 +41,22 @@ async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: SubZeroConfigEntry
 ) -> dict:
     account = entry.runtime_data
+    alerts = getattr(account, "alerts", None)
     return {
         "connection": "cloud_push",
         "push_connected": account.client.push_connected,
         "status_poll_interval": status_poll_interval(entry),
         "polling_disabled": entry.pref_disable_polling,
         "notifications": dict(account.client.notification_stats),
+        "firebase": {
+            "enabled": firebase_alerts_enabled(entry),
+            "connected": bool(alerts and alerts.push and alerts.push.is_started()),
+            "subscriptions_healthy": bool(alerts and alerts.subscription_healthy),
+            "last_subscription_sync": alerts.last_sync if alerts else None,
+            "received": alerts.received if alerts else 0,
+            "last_received": alerts.last_received if alerts else None,
+            "last_error": alerts.last_error if alerts else None,
+        },
         "appliances": [
             appliance_diagnostics(coordinator, account.fault_coordinators[coordinator.device_id])
             for coordinator in account.coordinators.values()

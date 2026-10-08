@@ -848,7 +848,7 @@ The integration writes cycle, delay and options whenever the user changes them, 
 **Kitchen timers** [I]:
 - `set {"kitchen_timer_duration": N}` with N = 1–719 minutes starts or restarts the timer.
 - `0` cancels a running timer, or dismisses a completed one (the app's "Tap to Dismiss").
-- A write is confirmed when `kitchen_timer_active` is true and `kitchen_timer_end_time` is within ±65 s of request time + N minutes. A cancel is confirmed when `*_active` is false.
+- A write is confirmed when `kitchen_timer_active` is true with a duration of N minutes (end − start) and the timer restarted: it was not running before the write, or its end time changed. Start and end are on the appliance's clock, which can differ from Home Assistant's. A timer whose end time did not change confirms only when it is within ±65 s of request time + N minutes, such as a restart within the same second. A cancel is confirmed when `*_active` is false. (`controls.py: control_matches`)
 
 **Hood** [I]:
 - Fan on: `fan_speed` (`ceil(percent / 25)`), then `fan_on: true`.
@@ -918,7 +918,7 @@ Sub-Zero publishes no quota. At the default 10-minute check, an appliance whose 
 
 ---
 
-## 11. App-only features (not used by the integration)
+## 11. Additional app features and protocols
 
 - **Time settings**: `POST /consumerapp/api/consumer/device/upgrade/{id}/timesettings` with `{"timezone_id_name", "dst_observed", "is_new_registration"}`. The current zone is read from device-twin property `time_settings.timezone_id_name`. [A]
 - **Device twin**: `GET /devices/v3/devices/{id}/twin/property/{name}` returns `{"Value": ...}`. Used for `time_settings` and, on DICE, `winterize_on`. [A]
@@ -931,6 +931,33 @@ Sub-Zero publishes no quota. At the default 10-minute check, an appliance whose 
   - `reset_air_filter`, `reset_filter`
   - `open_async_channel_open` / `open_async_channel_encrypted`
 - **Account and setup**: appliance association, decommission, rename, PIN storage, firmware metadata, phone push registration (§3.2). [A]
+- **Phone alerts (Firebase Cloud Messaging)**: Sub-Zero's cloud sends alerts such as a door left open as FCM messages, independent of the §5.7 channels. [A] (`services/notifications/push_notifications_service.dart`)
+  - The alert types are the 48 `notif_type` codes the integration already turns into events (`const.py: NOTIFICATION_TYPES`): 1xx refrigeration and ice, 2xx cooking, 3xx dishwasher, 400 faults, 401 feedback. [A]
+  - Each phone registers under its own `psid`, the Android ID cached in shared preferences. Records are per `psid`, so each phone keeps its own registration. [A]
+  - Register, per appliance: `POST /consumerapp/api/notification/registrations` with `{"id": <new UUID>, "fcmToken", "deviceId": <appliance>, "psid", "mobile_name"}`. Updates use `PUT`. The current record is at `GET .../registrations/devices/{psid}/appliances/{deviceId}`. [A]
+  - Choose alerts: `POST /consumerapp/api/notification/devices/{psid}/events` with header `uuid: <psid>` and a JSON list of `{"deviceId", "mutable_content": false, "valueType": <code>, "body_loc_key", "sound": null, "clickAction": null}`. `body_loc_key` is an app localization key (`NotificationKeyToLocalizable`, for example `fridge_refrigerator_door_open` for 101). Setup sends the alert codes applicable to the appliance (`ConnectedAppliance._getNotificationTypes`). The integration chooses cavity-specific right/left keys for dual-cavity ranges; those names are present in the APK resources, though live delivery has only been verified for the earlier prototype subscriptions. `GET .../devices/{psid}/appliances/{deviceId}/events` returns the current list. [A][O]
+  - Remove alerts: `DELETE .../devices/{psid}/events/type` with header `uuid: <psid>` and `{"valueTypes": ["101", ...], "deviceId"}`. [A]
+  - Faults (400) use a second, per-user store: `/api-user-fcm/v2/user-fcms`, keyed by `user/{userId}/psid/{psid}` with `{userId, fcm, psid, createdDate}`, and `/api-user-fcm/v2/subscriptions` with `{userId, psid, valueType, titleLocKey, bodyLocKey, sound, clickAction, createdDate}`. [A]
+  - The app reads alert fields from the message's data block: `deviceId`, `bodyLocKey`, `value`, `title`, `clickAction`, `documentId`, `url`. [A]
+  - The APK carries the Firebase project configuration and is signed with its Google Play key. The `firebase-messaging` library, which Home Assistant's Ring integration uses, registers under that project as a Chrome web-push client. [O]
+  - Tested end to end on 2026-10-08 with five appliances and a random 16-hex `psid` [O]:
+    - Registration returns HTTP 200 with the record ID as a JSON string.
+    - Choosing alerts returns a list of IDs. Reading back returns the stored entries, with `valueType` as a string and `title_loc_key` filled in by the server.
+    - Removing alerts returns `true`.
+    - No call removes the registration itself, so a client should reuse its `psid`.
+  - Alerts arrive about 1 s after the event. Example from four range kitchen-timer alerts (209, 210, 207, 208) [O]:
+
+    ```json
+    {"from": "<sender id>", "priority": "normal", "fcmMessageId": "<uuid>",
+     "notification": {"title": "Sub-Zero, Wolf, and Cove"},
+     "data": {"deviceId": "<appliance id>", "value": "209", "notifSeq": "46", "seq": "2823",
+              "event_time": "1791475976000", "timestamp": "10/08/2026 16:12:56",
+              "mutable_content": "False", "data": "null"}}
+    ```
+
+    - `value` is the `notif_type` code and `notifSeq` the appliance's `notif_seq`, both as strings.
+    - `event_time` is epoch milliseconds. `timestamp` is the same instant in UTC, as `MM/dd/yyyy HH:mm:ss`.
+    - The message carries no alert text: the localization keys apply only to phone notifications.
 - **Demo mode**: canned snapshots per type (`services/demo/properties/t<series>_<category>_<version>.dart`). They are the only place `smart_grid_on`, `showroom_on`, `service_mode` and `pin_window_open` appear. Useful as shape references; the values are not real. [A]
 
 ---

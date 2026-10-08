@@ -158,11 +158,30 @@ Like the app, options are unavailable while a cycle runs and for cycles that don
 
 Each appliance has an **Appliance event** entity for automations. It reports events such as oven preheat, probe targets, timer completion, dishwasher cycles, door alerts, and maintenance notifications. Its attributes include the event type, numeric code, sequence, and appliance timestamp. Automations match event type IDs such as `refrigerator_door_ajar`, which Home Assistant shows by name, such as Refrigerator door open. Unrecognized codes use the `unknown` event type and keep their numeric code. Event type names call a second cavity the lower oven, including on ranges, whose entities say left oven.
 
-The event entity keeps its last occurrence when the connection drops. Events found during a status read are delivered immediately, including while the push connection is recovering.
+**Firebase appliance alerts** is on by default and can be turned off during setup or under Configure. When on, the integration registers its own Firebase client for phone style appliance alerts. These arrive through the same event entity, usually soon after the appliance event. It subscribes to the refrigeration, cooking, or dishwasher alert codes applicable to each selected appliance. Firebase credentials and its registration ID are saved in the Home Assistant config entry and reused after a restart. Turning it off disconnects from Firebase and removes this integration's alert subscriptions. Home Assistant still installs the Firebase Python package because it is an integration requirement, even when alerts are off. The phone app's notification choices are separate; the integration does not change them. The appliance's Door open delay setting still controls when a door alert is sent.
+
+Firebase alerts contain an event code and time, but no appliance temperature, door state, or other sensor value. After a Firebase event that the channel has not already delivered, the integration reads that appliance's current status to update sensor entities. It waits two seconds to allow the normal update channel to catch up, and limits these extra reads to one per appliance per minute. More alerts during a read queue another check. These alert-triggered reads also happen with **Push only** selected. The event entity fires immediately; an automation triggered by it may still see the previous sensor value until the status read finishes. A delayed door alert may arrive after the door has closed, so the current door sensor cannot reconstruct the earlier open interval. Use the event entity for alert automations and sensor state triggers for current values. For sensor changes that generate no alert, keep periodic status checks enabled; shorter intervals detect missed push updates sooner at the cost of more cloud requests.
+
+The event entity keeps its last occurrence when the appliance connection drops. Events found during a status read are delivered immediately, including while that connection is recovering. A Firebase copy is suppressed when the channel or history has already reported the same code and sequence within a five minute timestamp window. A history copy is also suppressed after Firebase delivers it. Live channel events with different timestamps always remain distinct; if Firebase arrives first and the live channel reports a different timestamp, the same event may appear twice.
+
+For an automation, use a **State** trigger on the appliance event entity and check its `event_type` attribute in a condition. The event entity's state changes to the occurrence time, so this catches repeated events of the same type. For example:
+
+```yaml
+triggers:
+  - trigger: state
+    entity_id: event.kitchen_appliance_event
+conditions:
+  - condition: template
+    value_template: "{{ trigger.to_state.attributes.event_type == 'refrigerator_door_ajar' }}"
+actions:
+  - action: notify.mobile_app_my_phone
+    data:
+      message: Refrigerator door open
+```
 
 Startup history is not replayed. The first snapshot or status read after loading only sets a baseline, so events reported while the integration starts do not fire, even when the appliance clock runs ahead. While the integration is loaded, repeated notifications and reconnect history are deduplicated, including when the appliance resets its sequence counter. Events from before the integration loaded are ignored; events that occur while Home Assistant is stopped do not trigger automations on startup. Event timestamps without an offset are read in Home Assistant's time zone.
 
-Replay protection relies on the appliance clock. A clock five minutes behind Home Assistant can suppress the first five minutes of live events after a reload. If the clock moves backward, events can also be ignored until it catches up with the retained history cutoff.
+Replay protection relies on the appliance clock. A clock five minutes behind Home Assistant can suppress the first five minutes of live events after a reload. If the clock moves backward, events can also be ignored until it catches up with the retained history cutoff. Firebase alerts are also ignored if their event time is before the integration loaded. Appliance service codes (105, 217, 305) have no localization keys in the decoded app alert table, so this integration does not subscribe to them through Firebase; channel events and fault entities remain available. Fault and feedback push codes (400 and 401) use a separate app subscription service and are not registered through Firebase here.
 
 ## Diagnostics
 
@@ -171,6 +190,8 @@ Wi-Fi signal strength is enabled by default. Uptime, IP address, MAC address, an
 Download diagnostics from the integration or individual device page. Downloads use the cached appliance state and omit account credentials, appliance names, serial numbers, and network identifiers. They also list unrecognized state key names, without their values.
 
 Integration diagnostics count appliance notifications received, ignored, or invalid since the last reload. Heartbeats are excluded from the received count. They also show the status refresh interval and whether **Enable polling for changes** is turned off. Each appliance also records parsed snapshots and updates, with the time of the last one, and the time of its last message of any kind, including messages without state. These counts help distinguish incoming messages from a connection that only receives heartbeats; they do not prove every state change was received or applied.
+
+Firebase diagnostics separately show whether its listener is connected, whether all selected appliance subscriptions last synced, the time of that sync, alert count and last alert time, and the last setup error type. A connected listener with no received alerts does not prove an appliance has generated alerts.
 
 Each appliance also counts its periodic checks:
 - `channel_reopens`: update channel reopens.

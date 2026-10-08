@@ -21,8 +21,8 @@
       },
       "device": {
         "title": "Select appliances",
-        "description": "Choose the appliances to include in Home Assistant. You can change this selection later using Configure.",
-        "data": {"device_ids": "Appliances"}
+        "description": "Choose the appliances to include in Home Assistant. Firebase appliance alerts register Home Assistant as an additional alert receiver with Sub-Zero and connect to Google. You can change this later using Configure.",
+        "data": {"device_ids": "Appliances", "firebase_alerts": "Firebase appliance alerts"}
       }
     },
     "progress": {
@@ -64,8 +64,8 @@
     "step": {
       "init": {
         "title": "Choose appliances",
-        "description": "The list is refreshed from your Sub-Zero account. Deselecting an appliance removes its Home Assistant device and entities. A status read after each quiet interval corrects missed push updates and restarts them if needed; shorter intervals make more cloud requests.",
-        "data": {"device_ids": "Appliances", "status_poll_interval": "Status refresh interval"}
+        "description": "The list is refreshed from your Sub-Zero account. Deselecting an appliance removes its Home Assistant device and entities. A status read after each quiet interval corrects missed push updates and restarts them if needed; shorter intervals make more cloud requests. Turning off Firebase appliance alerts disconnects from Google and removes this integration's Sub-Zero alert subscriptions.",
+        "data": {"device_ids": "Appliances", "status_poll_interval": "Status refresh interval", "firebase_alerts": "Firebase appliance alerts"}
       }
     },
     "error": {

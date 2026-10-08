@@ -1374,6 +1374,63 @@ async def test_missing_fault_records_are_an_empty_list(fault_server, tokens, bod
         assert await client.appliance_faults("test-fridge") == []
 
 
+async def test_phone_alert_endpoints_accept_primitive_responses(
+    aiohttp_server, monkeypatch, socket_enabled, tokens
+):
+    requests = []
+
+    async def alerts(request):
+        body = await request.json() if request.method in {"POST", "PUT", "DELETE"} else None
+        requests.append((request.method, request.path, request.headers.get("uuid"), body))
+        if request.method == "GET" and "/registrations/" in request.path:
+            return web.json_response({"id": "registration-id"})
+        if request.method == "GET":
+            return web.json_response([{"valueType": "101"}, {"valueType": "102"}])
+        if request.method == "DELETE":
+            return web.json_response(True)
+        return web.json_response("registration-id")
+
+    app = web.Application()
+    app.router.add_route("*", "/consumerapp/api/notification/{path:.*}", alerts)
+    server = await aiohttp_server(app)
+    monkeypatch.setattr(api, "API_BASE", str(server.make_url("/")).rstrip("/"))
+    async with aiohttp.ClientSession() as session:
+        client = api.SubZeroClient(session, "test-key", tokens)
+        assert await client.alert_registration("test-psid", "test-device") == {
+            "id": "registration-id"
+        }
+        await client.register_for_alerts(
+            {
+                "id": "registration-id",
+                "fcmToken": "test-token",
+                "deviceId": "test-device",
+                "psid": "test-psid",
+            },
+            update=False,
+        )
+        assert await client.alert_types("test-psid", "test-device") == {101, 102}
+        await client.subscribe_alerts("test-psid", "test-device", {101: "door_open"})
+        await client.unsubscribe_alerts("test-psid", "test-device", {101})
+
+    assert requests[0][:3] == (
+        "GET",
+        "/consumerapp/api/notification/registrations/devices/test-psid/appliances/test-device",
+        "test-psid",
+    )
+    assert requests[2][2] == requests[3][2] == requests[4][2] == "test-psid"
+    assert requests[3][3] == [
+        {
+            "deviceId": "test-device",
+            "mutable_content": False,
+            "valueType": 101,
+            "body_loc_key": "door_open",
+            "sound": None,
+            "clickAction": None,
+        }
+    ]
+    assert requests[4][3] == {"valueTypes": ["101"], "deviceId": "test-device"}
+
+
 async def test_http_404_on_other_endpoints_keeps_the_status(fault_server, tokens):
     async with aiohttp.ClientSession() as session:
         with pytest.raises(api.ApiError) as error:

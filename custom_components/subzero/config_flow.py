@@ -9,6 +9,7 @@ from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_create_clientsession, async_get_clientsession
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
@@ -29,8 +30,8 @@ from .auth import (
     MfaCallTimeout,
     SubZeroLogin,
 )
-from .const import DOMAIN, STATUS_POLL_INTERVALS
-from .coordinator import selected_devices, status_poll_interval
+from .const import CONF_FIREBASE_ALERTS, DOMAIN, STATUS_POLL_INTERVALS
+from .coordinator import firebase_alerts_enabled, selected_devices, status_poll_interval
 
 
 def device_schema(devices: dict, selected: list[str]) -> vol.Schema:
@@ -416,10 +417,17 @@ class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         "username": self._title,
                         "devices": {key: self._devices[key] for key in selected},
                     },
+                    options=(
+                        {CONF_FIREBASE_ALERTS: False}
+                        if user_input.get(CONF_FIREBASE_ALERTS) is False
+                        else {}
+                    ),
                 )
         return self.async_show_form(
             step_id="device",
-            data_schema=device_schema(self._devices, list(self._devices)),
+            data_schema=device_schema(self._devices, list(self._devices)).extend(
+                {vol.Required(CONF_FIREBASE_ALERTS, default=True): BooleanSelector()}
+            ),
             errors=errors,
         )
 
@@ -484,14 +492,15 @@ class SubZeroOptionsFlow(config_entries.OptionsFlowWithReload):
             elif set(selected).intersection(configured_devices(self.hass, entry.entry_id)):
                 return self.async_abort(reason="all_configured")
             else:
-                return self.async_create_entry(
-                    data={
-                        "devices": {key: self._devices[key] for key in selected},
-                        "status_poll_interval": int(
-                            user_input.get("status_poll_interval", status_poll_interval(entry))
-                        ),
-                    }
-                )
+                options = {
+                    "devices": {key: self._devices[key] for key in selected},
+                    "status_poll_interval": int(
+                        user_input.get("status_poll_interval", status_poll_interval(entry))
+                    ),
+                }
+                if user_input.get(CONF_FIREBASE_ALERTS, firebase_alerts_enabled(entry)) is False:
+                    options[CONF_FIREBASE_ALERTS] = False
+                return self.async_create_entry(data=options)
         return self.async_show_form(
             step_id="init",
             data_schema=device_schema(
@@ -509,6 +518,9 @@ class SubZeroOptionsFlow(config_entries.OptionsFlowWithReload):
                             mode=SelectSelectorMode.DROPDOWN,
                         )
                     ),
+                    vol.Required(
+                        CONF_FIREBASE_ALERTS, default=firebase_alerts_enabled(entry)
+                    ): BooleanSelector(),
                 }
             ),
             errors=errors,

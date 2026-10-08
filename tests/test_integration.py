@@ -254,6 +254,29 @@ async def test_silent_channel_renews_push_once_per_silent_spell(hass, loaded, mo
     assert client.renew_connection.call_count == 2
 
 
+async def test_push_during_a_silent_check_leaves_one_next_check(hass, loaded):
+    entry, client, updates, _, _ = loaded
+    coordinator = entry.runtime_data.coordinators["test-fridge"]
+
+    async def reopen(device_id):
+        # The channel still delivers a change, which schedules a check, but no snapshot.
+        await updates.put(StateUpdate({"ref_set_temp": 37}, full=False))
+        for _ in range(100):
+            if coordinator.data["ref_set_temp"] == 37:
+                return
+            await asyncio.sleep(0)
+        raise AssertionError("The pushed change arrived after the reopen")
+
+    client.open_channel.side_effect = reopen
+    start = dt_util.utcnow()
+    await fire_time_changed(hass, start + timedelta(minutes=10, seconds=1))
+    assert coordinator.push_stats["silent_channels"] == 1
+    client.open_channel.side_effect = None
+    await fire_time_changed(hass, start + timedelta(minutes=20, seconds=2))
+    assert client.open_channel.await_count == 2
+    assert client.state.await_count == 3
+
+
 async def test_status_refresh_counts_only_changes_push_should_have_reported(hass, loaded):
     entry, client, updates, _, _ = loaded
     coordinator = entry.runtime_data.coordinators["test-fridge"]

@@ -138,7 +138,8 @@ async def appliances(hass, tokens, request, unit_system):
         },
     }
     updates = asyncio.Queue()
-    behavior = {"accept": True, "push": True}
+    # `clock` is how far the appliance's clock is from Home Assistant's.
+    behavior = {"accept": True, "push": True, "clock": timedelta(0)}
 
     async def update(device_id, properties, *, full=False):
         if full:
@@ -157,7 +158,7 @@ async def appliances(hass, tokens, request, unit_system):
             return
         if key in {"kitchen_timer_duration", "kitchen_timer2_duration"}:
             prefix = key.removesuffix("_duration")
-            start = dt_util.utcnow()
+            start = dt_util.utcnow() + behavior["clock"]
             properties = {
                 f"{prefix}_active": value > 0,
                 f"{prefix}_complete": False,
@@ -1116,6 +1117,72 @@ async def test_timer_ack_without_correct_end_time_is_not_success(
         )
     assert hass.states.get("number.oven_kitchen_timer_duration").state == str(previous_minutes)
     assert appliances.client.set_property.await_count == 3
+
+
+@pytest.mark.parametrize("push", [True, False])
+@pytest.mark.parametrize("clock", [timedelta(minutes=-7), timedelta(minutes=5)])
+async def test_timer_start_is_confirmed_whatever_the_appliance_clock_reads(
+    hass, appliances, push, clock
+):
+    appliances.behavior.update(push=push, clock=clock)
+    entity_id = "number.oven_kitchen_timer_duration"
+    for minutes in (15, 15, 30):
+        await hass.services.async_call(
+            "number", "set_value", {"entity_id": entity_id, "value": minutes}, blocking=True
+        )
+        assert hass.states.get(entity_id).state == str(minutes)
+    assert appliances.client.set_property.await_count == 3
+
+
+async def test_timer_end_time_in_another_format_is_not_a_restart(hass, appliances):
+    # A timer running on an appliance clock 10 minutes ahead.
+    end = dt_util.now() + timedelta(minutes=25)
+    start = end - timedelta(minutes=15)
+    await appliances.update(
+        "oven",
+        {
+            "kitchen_timer_active": True,
+            "kitchen_timer_start_time": start.replace(tzinfo=None).isoformat(),
+            "kitchen_timer_end_time": end.replace(tzinfo=None).isoformat(),
+        },
+    )
+    in_utc = {"kitchen_timer_end_time": end.astimezone(UTC).isoformat()}
+
+    async def write(device_id, key, value):
+        # The appliance ignores the write but reports the same end time in UTC.
+        await appliances.updates.put((device_id, StateUpdate(in_utc, full=False)))
+
+    appliances.client.set_property.side_effect = write
+    with pytest.raises(HomeAssistantError, match="did not confirm"):
+        await hass.services.async_call(
+            "number",
+            "set_value",
+            {"entity_id": "number.oven_kitchen_timer_duration", "value": 15},
+            blocking=True,
+        )
+    assert appliances.client.set_property.await_count == 3
+
+
+async def test_appliance_without_a_status_keeps_its_device_details(hass, appliances):
+    entry = appliances.entry
+    registry = dr.async_get(hass)
+
+    def oven():
+        device = registry.async_get_device_by_identifier((DOMAIN, "oven"), entry.entry_id)
+        return device.manufacturer, device.model
+
+    assert oven() == ("Wolf", "DO30PM")
+
+    def state(device_id):
+        if device_id == "oven":
+            raise ApiError("Sub-Zero returned HTTP 503.")
+        return dict(appliances.states[device_id])
+
+    appliances.client.state.side_effect = state
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert not entry.runtime_data.coordinators["oven"].data
+    assert oven() == ("Wolf", "DO30PM")
 
 
 @pytest.mark.parametrize(
