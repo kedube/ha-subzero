@@ -21,6 +21,7 @@ from .const import (
     ICE_KEYS,
     ICE_MODES,
     KITCHEN_TIMERS,
+    KNOB_OVEN_TYPES,
     LEGACY_ACCENT_LIGHT_OPTIONS,
     LEGACY_START_SERIES,
     MANUAL_COOK_MODES,
@@ -446,5 +447,7 @@ def validate_control_properties(data: dict, temperature_unit: str | None, proper
                 raise ServiceValidationError("The oven must be running or in Remote Ready.")
             if key.endswith("_cook_mode") and data[key] != value:
                 flag = f"{prefix}_mode_change_enabled"
-                if flag in data and data[flag] is not True:
+                parts = appliance_type(data)
+                knobs = parts is not None and parts[1:] in KNOB_OVEN_TYPES
+                if knobs and flag in data and data[flag] is not True:
                     raise ServiceValidationError("The oven does not currently allow mode changes.")
