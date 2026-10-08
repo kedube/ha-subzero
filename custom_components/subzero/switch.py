@@ -55,6 +55,7 @@ class SubZeroSwitch(SubZeroEntity, SwitchEntity):
         return (
             super().available
             and supports_control(self.coordinator.data, self.entity_description.key)
+            and self.control_unlocked()
             and self.is_on is not None
         )
 

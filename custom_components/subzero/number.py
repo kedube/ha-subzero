@@ -128,6 +128,8 @@ class SubZeroNumber(SubZeroEntity, NumberEntity):
         key = self.entity_description.key
         if not self.coordinator.last_update_success or not supports_control(data, key):
             return False
+        if not self.control_unlocked():
+            return False
         if key in KITCHEN_TIMERS:
             return type(data.get(f"{KITCHEN_TIMERS[key]}_active")) is bool
         if key == "delay_off_duration":

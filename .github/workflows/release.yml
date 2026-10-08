@@ -1,42 +1,190 @@
 name: Release
+
+# Publishes vX.Y.Z with the HACS zip and generated notes after the checks
+# pass. It runs when a push to main changes the version in manifest.json,
+# when a v* tag is pushed, or from "Run workflow" with a version, which it
+# commits to manifest.json first. A version that already has a release
+# only gets its zip replaced.
 on:
   push:
+    branches: [main]
     tags: ["v*"]
+    paths: [custom_components/subzero/manifest.json]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release, such as 0.6.4 or 0.7.0b1
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
 jobs:
+  plan:
+    name: Choose the version
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.version.outputs.publish }}
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - run: pip install packaging
+      - id: version
+        env:
+          MANIFEST: custom_components/subzero/manifest.json
+          REQUESTED: ${{ inputs.version }}
+        run: |
+          fail() { echo "::error::$1"; exit 1; }
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            [ "$GITHUB_REF" = refs/heads/main ] || fail "Run the release from main."
+            version=$REQUESTED
+          else
+            version=$(jq -r .version "$MANIFEST")
+          fi
+          [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?$ ]] \
+            || fail "$version is not a version such as 0.6.4 or 0.7.0b1."
+          tag=v$version
+          tagged=$(git rev-parse -q --verify "refs/tags/$tag^{commit}" || true)
+
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            [ "$tag" = "$GITHUB_REF_NAME" ] \
+              || fail "manifest.json has version $version, but the tag is $GITHUB_REF_NAME."
+          elif [ -n "$tagged" ] && [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            fail "$tag already exists. To publish it, re-run its failed Release run."
+          elif [ -n "$tagged" ] && [ "$tagged" != "$GITHUB_SHA" ]; then
+            # manifest.json changed without a new version.
+            echo "::notice::$tag is already tagged on an earlier commit, so there is nothing to release."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # HACS offers the newest release, so a new tag must be the highest.
+          if [ -z "$tagged" ]; then
+            python - "$version" <<'EOF'
+          import subprocess
+          import sys
+
+          from packaging.version import InvalidVersion, Version
+
+          version = Version(sys.argv[1])
+          for tag in subprocess.check_output(["git", "tag", "--list", "v*"], text=True).split():
+              try:
+                  released = Version(tag[1:])
+              except InvalidVersion:
+                  continue
+              if released >= version:
+                  print(f"::error::{version} is not newer than {tag}.")
+                  sys.exit(1)
+          EOF
+          fi
+
+          prerelease=false
+          if [[ $version =~ [a-z] ]]; then
+            prerelease=true
+          fi
+          {
+            echo "publish=true"
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+
   checks:
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
     uses: ./.github/workflows/validate.yml
-  release:
-    name: Prepare release
-    needs: checks
+
+  publish:
+    name: Publish ${{ needs.plan.outputs.tag }}
+    needs: [plan, checks]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # One release at a time, so a tag pushed along with its version bump
+    # finds the release the other run made.
+    concurrency:
+      group: release
     env:
       GH_TOKEN: ${{ github.token }}
-      TAG: ${{ github.ref_name }}
+      MANIFEST: custom_components/subzero/manifest.json
+      VERSION: ${{ needs.plan.outputs.version }}
+      TAG: ${{ needs.plan.outputs.tag }}
+      PRERELEASE: ${{ needs.plan.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v7
-      - name: Check manifest version
+        with:
+          fetch-depth: 0
+
+      # Pushes made with the workflow token start no other workflows, so
+      # this commit, which changes only the version, is not checked again.
+      - name: Commit the version
+        if: github.event_name == 'workflow_dispatch'
         run: |
-          version=$(jq -r .version custom_components/subzero/manifest.json)
-          if [ "v$version" != "$TAG" ]; then
-            echo "::error::manifest version $version does not match tag $TAG"
+          sed -i -E "s/(\"version\": *\")[^\"]*\"/\1$VERSION\"/" "$MANIFEST"
+          if [ "$(jq -r .version "$MANIFEST")" != "$VERSION" ]; then
+            echo "::error::Could not set the version in manifest.json."
             exit 1
           fi
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -qam "Release $VERSION"
+          git push origin HEAD:main
+
       # HACS extracts the zip into custom_components/subzero, so the
       # integration files must sit at the root of the archive.
       - name: Build the zip
-        run: git archive --format=zip -o ha_subzero.zip HEAD:custom_components/subzero
-      # A new tag gets a draft release for the notes. A moved tag replaces
-      # the zip on its existing release.
-      - name: Upload zip to release
+        run: |
+          git archive --format=zip -o ha_subzero.zip HEAD:custom_components/subzero
+          unzip -p ha_subzero.zip manifest.json \
+            | jq -e --arg version "$VERSION" '.version == $version' > /dev/null
+
+      # Lists the commits since the previous release, leaving out merges and
+      # version bumps. A release counts from the previous release, so its
+      # notes include what its betas brought; a beta counts from any tag.
+      - name: Write the release notes
+        id: notes
+        run: |
+          match=(--match 'v[0-9]*')
+          if [ "$PRERELEASE" != true ]; then
+            match+=(--exclude 'v*[!0-9.]*')
+          fi
+          previous=$(git describe --tags --abbrev=0 "${match[@]}" HEAD^ 2> /dev/null || true)
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          changes=$(git log --reverse --no-merges --format='- %s (%h)' \
+            "${previous:+$previous..}HEAD" -- . ":(exclude)$MANIFEST")
+          if [ -n "$changes" ]; then
+            printf '## Changes\n\n%s\n' "$changes" > notes.md
+          else
+            : > notes.md
+          fi
+          cat notes.md
+
+      # GitHub appends its own notes: pull requests, new contributors, and
+      # the full changelog link.
+      - name: Publish the release
+        env:
+          PREVIOUS: ${{ steps.notes.outputs.previous }}
         run: |
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" ha_subzero.zip --clobber
-          else
-            flags=(--draft --verify-tag --title "$TAG" --notes "")
-            if [[ "$TAG" == *b* ]]; then
-              flags+=(--prerelease)
-            fi
-            gh release create "$TAG" ha_subzero.zip "${flags[@]}"
+            exit 0
           fi
+          flags=(--target "$(git rev-parse HEAD)" --title "$TAG" --notes-file notes.md --generate-notes)
+          if [ -n "$PREVIOUS" ]; then
+            flags+=(--notes-start-tag "$PREVIOUS")
+          fi
+          if [ "$PRERELEASE" = true ]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$TAG" ha_subzero.zip "${flags[@]}"

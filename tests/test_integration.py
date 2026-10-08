@@ -102,6 +102,18 @@ async def loaded(hass, tokens, request):
             await hass.async_block_till_done()
 
 
+async def fire_time_changed(hass, when=None):
+    """Fire timers, then wait for the status checks they start in the background."""
+    async_fire_time_changed(hass, when)
+    while checks := [
+        task
+        for task in hass._background_tasks
+        if task.get_name().endswith(" - refresh") and not task.done()
+    ]:
+        await asyncio.gather(*checks, return_exceptions=True)
+    await hass.async_block_till_done()
+
+
 async def test_reported_properties_drive_entity_discovery(hass, loaded):
     entry, client, _, _, _ = loaded
     registry = er.async_get(hass)
@@ -130,7 +142,7 @@ async def test_reported_properties_drive_entity_discovery(hass, loaded):
     client.state.assert_awaited_once()
 
 
-async def test_status_refresh_reopens_push_after_a_missed_door_change(hass, freezer, loaded):
+async def test_silent_channel_falls_back_to_a_status_read(hass, freezer, loaded):
     entry, client, updates, _, _ = loaded
     coordinator = entry.runtime_data.coordinators["test-fridge"]
     client.state.return_value = {
@@ -139,34 +151,107 @@ async def test_status_refresh_reopens_push_after_a_missed_door_change(hass, free
         "ref_door_ajar": True,
     }
     freezer.tick(timedelta(minutes=9, seconds=58))
-    async_fire_time_changed(hass)
-    await hass.async_block_till_done()
+    await fire_time_changed(hass)
+    client.open_channel.assert_not_awaited()
     client.state.assert_awaited_once()
     freezer.tick(timedelta(seconds=3))
-    async_fire_time_changed(hass)
-    await hass.async_block_till_done()
+    await fire_time_changed(hass)
+    client.open_channel.assert_awaited_once_with("test-fridge")
     assert client.state.await_count == 2
     assert hass.states.get("binary_sensor.kitchen_refrigerator_door").state == "on"
-    client.open_channel.assert_awaited_once_with("test-fridge")
+    assert coordinator.push_stats["channel_reopens"] == 1
+    assert coordinator.push_stats["silent_channels"] == 1
     assert coordinator.push_stats["periodic_reads"] == 1
     assert coordinator.push_stats["missed_updates"] == 1
-    assert coordinator.push_stats["channel_reopens"] == 1
+    assert coordinator.push_stats["connection_renewals"] == 1
+    client.renew_connection.assert_called_once_with()
     await updates.put(StateUpdate({"ref_door_ajar": False}, full=False))
     await hass.async_block_till_done()
     assert hass.states.get("binary_sensor.kitchen_refrigerator_door").state == "off"
 
 
-async def test_status_refresh_without_a_missed_door_change_keeps_the_channel(hass, loaded):
-    entry, client, _, _, _ = loaded
+async def test_status_check_reads_the_snapshot_a_reopened_channel_pushes(
+    hass, freezer, loaded, monkeypatch
+):
+    entry, client, updates, _, _ = loaded
     coordinator = entry.runtime_data.coordinators["test-fridge"]
-    client.state.return_value = {**client.state.return_value, "ref_set_temp": 39}
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=10, seconds=1))
-    await hass.async_block_till_done()
+    monkeypatch.setattr("custom_components.subzero.coordinator.SNAPSHOT_TIMEOUT", 16)
+
+    async def reopen(device_id):
+        await updates.put(
+            StateUpdate(
+                {"appliance_model": "ANOTHER-MODEL", "ref_set_temp": 39, "ref_door_ajar": True},
+                full=True,
+            )
+        )
+
+    client.open_channel.side_effect = reopen
+    freezer.tick(timedelta(minutes=10, seconds=1))
+    await fire_time_changed(hass)
+    client.open_channel.assert_awaited_once_with("test-fridge")
+    client.state.assert_awaited_once()
     assert hass.states.get("sensor.kitchen_refrigerator_setpoint").state == "39"
-    client.open_channel.assert_not_awaited()
+    assert hass.states.get("binary_sensor.kitchen_refrigerator_door").state == "on"
     assert coordinator.push_stats["periodic_reads"] == 1
+    assert coordinator.push_stats["missed_updates"] == 1
+    assert coordinator.push_stats["silent_channels"] == 0
+    assert coordinator.unpushed_changes == {"ref_door_ajar": 1, "ref_set_temp": 1}
+    client.renew_connection.assert_not_called()
+    # The snapshot schedules the next check a full interval later.
+    freezer.tick(timedelta(minutes=9, seconds=58))
+    await fire_time_changed(hass)
+    assert client.open_channel.await_count == 1
+    freezer.tick(timedelta(seconds=3))
+    await fire_time_changed(hass)
+    assert client.open_channel.await_count == 2
+    client.state.assert_awaited_once()
+
+
+async def test_change_pushed_before_the_snapshot_is_not_missed(hass, loaded, monkeypatch):
+    entry, client, updates, _, _ = loaded
+    coordinator = entry.runtime_data.coordinators["test-fridge"]
+    monkeypatch.setattr("custom_components.subzero.coordinator.SNAPSHOT_TIMEOUT", 16)
+
+    async def reopen(device_id):
+        await updates.put(StateUpdate({"ref_door_ajar": True}, full=False))
+        await updates.put(
+            StateUpdate({**client.state.return_value, "ref_door_ajar": True}, full=True)
+        )
+
+    client.open_channel.side_effect = reopen
+    await fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=10, seconds=1))
+    assert hass.states.get("binary_sensor.kitchen_refrigerator_door").state == "on"
     assert coordinator.push_stats["missed_updates"] == 0
-    assert coordinator.unpushed_changes == {"ref_set_temp": 1}
+    assert coordinator.unpushed_changes == {}
+
+
+async def test_silent_channel_renews_push_once_per_silent_spell(hass, loaded, monkeypatch):
+    entry, client, updates, _, _ = loaded
+    coordinator = entry.runtime_data.coordinators["test-fridge"]
+
+    async def check(minutes):
+        await fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=minutes, seconds=1))
+
+    await check(10)
+    await check(20)
+    assert client.state.await_count == 3
+    assert coordinator.push_stats["silent_channels"] == 2
+    assert coordinator.push_stats["connection_renewals"] == 1
+    client.renew_connection.assert_called_once_with()
+
+    async def reopen(device_id):
+        await updates.put(StateUpdate(dict(client.state.return_value), full=True))
+
+    client.open_channel.side_effect = reopen
+    monkeypatch.setattr("custom_components.subzero.coordinator.SNAPSHOT_TIMEOUT", 16)
+    await check(30)
+    assert client.state.await_count == 3
+    client.open_channel.side_effect = None
+    monkeypatch.setattr("custom_components.subzero.coordinator.SNAPSHOT_TIMEOUT", 0)
+    await check(40)
+    assert coordinator.push_stats["silent_channels"] == 3
+    assert coordinator.push_stats["connection_renewals"] == 2
+    assert client.renew_connection.call_count == 2
 
 
 async def test_status_refresh_counts_only_changes_push_should_have_reported(hass, loaded):
@@ -195,8 +280,7 @@ async def test_status_refresh_counts_only_changes_push_should_have_reported(hass
         "version": {"fw": "1.1"},
     }
     for minutes in (10, 20):
-        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=minutes, seconds=1))
-        await hass.async_block_till_done()
+        await fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=minutes, seconds=1))
     assert coordinator.push_stats["periodic_reads"] == 2
     assert coordinator.unpushed_changes == {"ref_set_temp": 1, "version": 1}
     assert coordinator.push_stats["missed_updates"] == 0
@@ -216,10 +300,9 @@ async def test_door_change_pushed_during_a_status_refresh_is_not_missed(hass, lo
         raise AssertionError("The pushed door change arrived after the read")
 
     client.state.side_effect = read
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=10, seconds=1))
-    await hass.async_block_till_done()
+    await fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=10, seconds=1))
     assert hass.states.get("binary_sensor.kitchen_refrigerator_door").state == "on"
-    client.open_channel.assert_not_awaited()
+    assert coordinator.push_stats["silent_channels"] == 1
     assert coordinator.push_stats["missed_updates"] == 0
     assert coordinator.unpushed_changes == {}
 
@@ -229,11 +312,13 @@ async def test_failed_channel_reopen_keeps_the_appliance_available(hass, loaded)
     coordinator = entry.runtime_data.coordinators["test-fridge"]
     client.state.return_value = {**client.state.return_value, "ref_door_ajar": True}
     client.open_channel.side_effect = ApiError("Offline")
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=10, seconds=1))
-    await hass.async_block_till_done()
+    await fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=10, seconds=1))
+    assert client.state.await_count == 2
     assert hass.states.get("binary_sensor.kitchen_refrigerator_door").state == "on"
     assert coordinator.last_update_success
     assert coordinator.push_stats["channel_reopens"] == 1
+    assert coordinator.push_stats["silent_channels"] == 0
+    client.renew_connection.assert_not_called()
 
 
 async def test_push_change_postpones_status_refresh(hass, freezer, loaded):
@@ -242,12 +327,10 @@ async def test_push_change_postpones_status_refresh(hass, freezer, loaded):
     await updates.put(StateUpdate({"ref_set_temp": 37}, full=False))
     await hass.async_block_till_done()
     freezer.tick(timedelta(minutes=5, seconds=1))
-    async_fire_time_changed(hass)
-    await hass.async_block_till_done()
+    await fire_time_changed(hass)
     client.state.assert_awaited_once()
     freezer.tick(timedelta(minutes=5))
-    async_fire_time_changed(hass)
-    await hass.async_block_till_done()
+    await fire_time_changed(hass)
     assert client.state.await_count == 2
 
 
@@ -258,8 +341,7 @@ async def test_push_only_option_skips_status_refresh(hass, loaded):
     await hass.async_block_till_done()
     assert entry.runtime_data.coordinators["test-fridge"].update_interval is None
     reads = client.state.await_count
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(hours=2))
-    await hass.async_block_till_done()
+    await fire_time_changed(hass, dt_util.utcnow() + timedelta(hours=2))
     assert client.state.await_count == reads
 
 
@@ -274,13 +356,15 @@ async def test_unknown_saved_interval_uses_the_default(hass, loaded):
 async def test_rate_limited_status_refresh_keeps_push_state(hass, loaded):
     entry, client, updates, _, _ = loaded
     client.state.side_effect = RateLimited(600)
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=10, seconds=1))
-    await hass.async_block_till_done()
+    await fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=10, seconds=1))
     assert client.state.await_count == 2
     coordinator = entry.runtime_data.coordinators["test-fridge"]
     assert coordinator.last_update_success
     assert coordinator.push_stats["skipped_reads"] == 1
     assert coordinator.push_stats["periodic_reads"] == 0
+    assert coordinator.push_stats["silent_channels"] == 1
+    # A new connection would fail on the same rate limit.
+    client.renew_connection.assert_not_called()
     await updates.put(StateUpdate({"ref_door_ajar": True}, full=False))
     await hass.async_block_till_done()
     assert hass.states.get("binary_sensor.kitchen_refrigerator_door").state == "on"
@@ -295,22 +379,18 @@ async def test_failed_status_refresh_recovers_then_waits_an_interval(
     state = client.state.return_value
     client.state.side_effect = [ApiError("Offline"), ApiError("Offline"), state, state, state]
     freezer.tick(timedelta(minutes=10, seconds=1))
-    async_fire_time_changed(hass)
-    await hass.async_block_till_done()
+    await fire_time_changed(hass)
     assert hass.states.get("binary_sensor.kitchen_refrigerator_door").state == "unavailable"
     assert client.state.await_count == 3
     freezer.tick(timedelta(seconds=31))
-    async_fire_time_changed(hass)
-    await hass.async_block_till_done()
+    await fire_time_changed(hass)
     assert hass.states.get("binary_sensor.kitchen_refrigerator_door").state == "off"
     assert client.state.await_count == 4
     freezer.tick(timedelta(minutes=9, seconds=58))
-    async_fire_time_changed(hass)
-    await hass.async_block_till_done()
+    await fire_time_changed(hass)
     assert client.state.await_count == 4
     freezer.tick(timedelta(seconds=3))
-    async_fire_time_changed(hass)
-    await hass.async_block_till_done()
+    await fire_time_changed(hass)
     assert client.state.await_count == 5
 
 
@@ -324,11 +404,9 @@ async def test_recovery_after_rate_limit_waits_a_full_interval(hass, loaded):
     await hass.async_block_till_done()
     assert coordinator.last_update_success
     assert client.state.await_count == 3
-    async_fire_time_changed(hass, now + timedelta(seconds=7))
-    await hass.async_block_till_done()
+    await fire_time_changed(hass, now + timedelta(seconds=7))
     assert client.state.await_count == 3
-    async_fire_time_changed(hass, now + timedelta(minutes=10, seconds=1))
-    await hass.async_block_till_done()
+    await fire_time_changed(hass, now + timedelta(minutes=10, seconds=1))
     assert client.state.await_count == 4
 
 
@@ -1455,7 +1533,8 @@ async def test_push_discovers_all_platforms_for_each_appliance(hass, oven_loaded
     _, _, updates = oven_loaded
     expected = {
         "climate.wall_oven_lower_oven": "off",
-        "sensor.wall_oven_lower_oven_temperature": "73",
+        # Like the app, an oven that is off shows no temperature.
+        "sensor.wall_oven_lower_oven_temperature": "unknown",
         "switch.wall_oven_lower_oven_light": "off",
         "select.wall_oven_lower_oven_cooking_mode": "Bake",
         "number.wall_oven_kitchen_timer_duration": "0",
@@ -1484,7 +1563,9 @@ async def test_push_discovers_all_platforms_for_each_appliance(hass, oven_loaded
         assert hass.states.get(entity_id).state == state
     registry = er.async_get(hass)
     original = {entity_id: registry.async_get(entity_id).id for entity_id in expected}
-    await updates.put(("test-oven", StateUpdate({"cav2_temp": 100}, full=False)))
+    await updates.put(
+        ("test-oven", StateUpdate({"cav2_temp": 100, "cav2_unit_on": True}, full=False))
+    )
     await updates.put(StateUpdate({"frz_set_temp": 0}, full=False))
     await hass.async_block_till_done()
     assert hass.states.get("sensor.wall_oven_lower_oven_temperature").state == "100"

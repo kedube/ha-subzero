@@ -255,7 +255,9 @@ async def test_operating_mode_select_clears_other_modes(hass, controls, option, 
         if property_key is not None:
             writes.append(call("test-fridge", property_key, True))
     assert controls.client.set_property.await_args_list == writes
-    assert hass.states.get("select.kitchen_mode").state == option
+    # Like the app, Sabbath mode disables every control, including the mode itself.
+    expected = "unavailable" if property_key == "sabbath_on" else option
+    assert hass.states.get("select.kitchen_mode").state == expected
 
 
 @pytest.mark.parametrize(
@@ -679,7 +681,8 @@ async def test_wine_storage_offers_the_modes_the_app_shows(hass, controls, type_
         blocking=True,
     )
     controls.client.set_property.assert_awaited_once_with("test-fridge", "sabbath_on", True)
-    assert hass.states.get("select.kitchen_mode").state == "Sabbath"
+    assert hass.states.get("select.kitchen_mode").state == "unavailable"
+    assert hass.states.get("binary_sensor.kitchen_sabbath_mode").state == "on"
 
 
 async def test_an_active_discarded_mode_is_not_shown_or_cleared(hass, controls):

@@ -8,7 +8,12 @@ from homeassistant.helpers.entity import EntityDescription
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import SubZeroConfigEntry
-from .controls import is_finite_number, supports_control, temperature_range
+from .controls import (
+    cavity_temperature_shown,
+    is_finite_number,
+    supports_control,
+    temperature_range,
+)
 from .entity import SubZeroEntity, async_setup_entities
 
 DESCRIPTIONS = tuple(
@@ -75,6 +80,12 @@ class SubZeroClimate(SubZeroEntity, ClimateEntity):
             and supports_control(data, key)
             and (key != "frz_set_temp" or "max_ice_on" not in data or data["max_ice_on"] is False)
             and (not self._oven or type(data.get(f"{self._prefix}_unit_on")) is bool)
+            # An oven stays available while self-cleaning, when it can still be turned off.
+            and (
+                self.control_unlocked(f"{self._prefix}_unit_on", False)
+                if self._oven
+                else self.control_unlocked()
+            )
         )
 
     @property
@@ -90,7 +101,11 @@ class SubZeroClimate(SubZeroEntity, ClimateEntity):
         value = self.coordinator.data.get(key)
         if not is_finite_number(value):
             return None
-        return None if self._oven and value == 0 else value
+        if self._oven and (
+            value == 0 or not cavity_temperature_shown(self.coordinator.data, self._prefix)
+        ):
+            return None
+        return value
 
     @property
     def target_temperature(self) -> int | float | None:

@@ -1,15 +1,22 @@
 """Reported control capabilities, appliance interlocks, and protocol values."""
 
 import math
-from datetime import datetime, tzinfo
+from datetime import datetime
 
 from homeassistant.exceptions import ServiceValidationError
+from homeassistant.util import dt as dt_util
 
 from .const import (
     ACCENT_LIGHT_LABELS,
+    AIR_FILTER_RESET_SERIES,
+    BROIL,
+    BROIL_LEVELS,
     COOK_MODES,
+    DELAY_START_EXCLUDED_CYCLES,
+    DELAY_START_STATUSES,
     DEPENDENT_ENTITY_KEYS,
     DISHWASHER_MODES,
+    DISHWASHER_OPTION_EXCLUDED_CYCLES,
     DISHWASHER_SWITCHES,
     DOOR_AJAR_TIMEOUTS,
     EXCLUDED_PROPERTIES,
@@ -23,12 +30,17 @@ from .const import (
     KITCHEN_TIMERS,
     KNOB_OVEN_TYPES,
     LEGACY_ACCENT_LIGHT_OPTIONS,
+    LEGACY_ACCENT_LIGHT_SERIES,
     LEGACY_START_SERIES,
     MANUAL_COOK_MODES,
+    ON_OFF_ACCENT_LIGHT_SERIES,
     OVEN_PREFIXES,
     OVEN_TEMPERATURE_RANGES,
+    PROOF,
+    RANGE_SERIES,
+    RINSE_AND_HOLD,
+    SELF_CLEAN,
     SETPOINT_KEYS,
-    TIMESTAMP_KEYS,
     WASH_CYCLES,
     WINE_SETPOINT_KEYS,
     WRITABLE_BOOLEAN_KEYS,
@@ -78,14 +90,23 @@ def excluded_entity_keys(data: dict) -> set[str]:
     keys = {key for prop in discarded for key in (prop, *DEPENDENT_ENTITY_KEYS.get(prop, ()))}
     if discarded.intersection(FRIDGE_MODE_KEYS) and data.keys().isdisjoint(FRIDGE_MODE_KEYS):
         keys.add("operating_mode")
+    if "air_filter_pct_remaining" in data and not supports_air_filter_reset(data):
+        keys.add("reset_air_filter")
     return keys
 
 
 def accent_light_options(data: dict) -> dict[str, int]:
+    """The accent light levels the app offers for the appliance series."""
     parts = appliance_type(data)
-    if parts is not None and parts[1] in {1, 5, 7}:
-        return LEGACY_ACCENT_LIGHT_OPTIONS
-    return FRIDGE_ENUM_OPTIONS["accent_light_level"]
+    series = parts[1] if parts is not None else None
+    levels = (
+        LEGACY_ACCENT_LIGHT_OPTIONS
+        if series in LEGACY_ACCENT_LIGHT_SERIES
+        else FRIDGE_ENUM_OPTIONS["accent_light_level"]
+    )
+    if series in ON_OFF_ACCENT_LIGHT_SERIES:
+        return {name: levels[name] for name in ("Off", "On")}
+    return {name: value for name, value in levels.items() if name != "On"}
 
 
 def enum_labels(key: str) -> dict[int, str]:
@@ -108,8 +129,24 @@ def is_dishwasher(data: dict) -> bool:
     return bool({"wash_cycle", "wash_status", "wash_cycle_on"}.intersection(data))
 
 
+def has_left_and_right_ovens(data: dict) -> bool:
+    """Whether the app calls the cavities right and left ovens: a range with two."""
+    parts = appliance_type(data)
+    return (
+        parts is not None
+        and parts[1] == RANGE_SERIES
+        and any(key.startswith("cav2_") for key in data)
+    )
+
+
 def supports_air_filter_reset(data: dict) -> bool:
-    return (is_fridge(data) or is_wine(data)) and "air_filter_pct_remaining" in data
+    parts = appliance_type(data)
+    return (
+        (is_fridge(data) or is_wine(data))
+        and "air_filter_pct_remaining" in data
+        and parts is not None
+        and parts[1] in AIR_FILTER_RESET_SERIES
+    )
 
 
 def wash_settings_enabled(data: dict) -> bool:
@@ -119,7 +156,65 @@ def wash_settings_enabled(data: dict) -> bool:
 def wash_cancel_enabled(data: dict) -> bool:
     # The app offers cancel while a cycle runs, dries, or waits for a delayed start.
     status = data.get("wash_status")
-    return data.get("wash_cycle_on") is True or (type(status) is int and status in {2, 5, 7})
+    return type(status) is int and status in {2, 5, 7}
+
+
+def sabbath_enabled(data: dict) -> bool:
+    """Whether Sabbath mode is on, in which the app disables every control."""
+    mode = data.get("mode")
+    return data.get("sabbath_on") is True or type(mode) is int and mode == 2
+
+
+def control_lock(data: dict, key: str, value: bool | int | None = None) -> str | None:
+    """Why the app would not change a setting now, or None when it would.
+
+    Without a value, the setting is locked only when no change is allowed.
+    """
+    if sabbath_enabled(data):
+        return "Sabbath mode is on. Change settings at the appliance."
+    if key.startswith(("cav_", "cav2_")):
+        if any(data.get(f"{prefix}_cook_mode") == SELF_CLEAN for prefix in OVEN_PREFIXES) and not (
+            key.endswith("_unit_on") and value is not True
+        ):
+            return "The oven is self-cleaning. It can only be turned off."
+        prefix = key.split("_", 1)[0]
+        if (
+            key == f"{prefix}_light_on"
+            and data.get(f"{prefix}_unit_on") is True
+            and data.get(f"{prefix}_cook_mode") == PROOF
+        ):
+            return "The oven light stays off during Proof."
+    cycle = data.get("wash_cycle") if type(data.get("wash_cycle")) is int else None
+    if key in DISHWASHER_SWITCHES:
+        if not wash_settings_enabled(data):
+            return "Wash options can change only while the dishwasher is idle."
+        if cycle == RINSE_AND_HOLD or cycle in DISHWASHER_OPTION_EXCLUDED_CYCLES[key]:
+            return "The selected wash cycle does not offer this option."
+    if key == "delay_start_timer_duration":
+        status = data.get("wash_status")
+        if type(status) is not int or status not in DELAY_START_STATUSES:
+            return "Delay start can change only while the dishwasher is idle or delayed."
+        if cycle in DELAY_START_EXCLUDED_CYCLES:
+            return "The selected wash cycle does not offer delay start."
+    return None
+
+
+def cavity_temperature_shown(data: dict, prefix: str) -> bool:
+    """Whether the app shows the cavity temperature, rather than Off or Clean."""
+    return data.get(f"{prefix}_unit_on") is True and data.get(f"{prefix}_cook_mode") != SELF_CLEAN
+
+
+def broil_level(data: dict, prefix: str) -> str | None:
+    """The app's broil level while a cavity broils."""
+    temperature = data.get(f"{prefix}_set_temp")
+    if (
+        data.get(f"{prefix}_unit_on") is not True
+        or data.get(f"{prefix}_cook_mode") != BROIL
+        or not is_finite_number(temperature)
+        or temperature <= 0
+    ):
+        return None
+    return next(name for bound, name in BROIL_LEVELS if temperature < bound)
 
 
 def supports_control(data: dict, key: str) -> bool:
@@ -155,58 +250,21 @@ def supports_control(data: dict, key: str) -> bool:
     }
 
 
-def appliance_datetime(value, data: dict) -> datetime | None:
-    """Use only explicit offsets, including the appliance clock's offset."""
+def appliance_datetime(value) -> datetime | None:
+    """Read an appliance timestamp, taking one without an offset as local time.
+
+    Like the app, which sets the appliance clock to the phone's local time, local
+    time is Home Assistant's time zone, not the offset of the reported clock.
+    """
     if not isinstance(value, str):
         return None
     try:
         parsed = datetime.fromisoformat(value)
-        if parsed.tzinfo is None:
-            clock = datetime.fromisoformat(data.get("time", ""))
-            parsed = parsed.replace(tzinfo=clock.tzinfo)
-        return parsed if parsed.tzinfo is not None else None
-    except ValueError, TypeError:
+    except ValueError:
         return None
-
-
-def clock_offset(data: dict) -> tzinfo | None:
-    """The offset of the appliance clock reported in data, if any."""
-    try:
-        return datetime.fromisoformat(data["time"]).tzinfo
-    except KeyError, TypeError, ValueError:
-        return None
-
-
-def with_clock_offset(properties: dict, clock: tzinfo | None) -> dict:
-    """Give naive timestamps the offset of the clock that reported them.
-
-    Push snapshots can report the appliance clock in local time while status reads
-    report it in UTC, so a naive timestamp must not borrow the offset of a later
-    message from the other source.
-    """
-    if clock is None:
-        return properties
-
-    def resolve(value):
-        if not isinstance(value, str):
-            return value
-        try:
-            parsed = datetime.fromisoformat(value)
-        except ValueError:
-            return value
-        return parsed.replace(tzinfo=clock).isoformat() if parsed.tzinfo is None else value
-
-    resolved = {
-        key: resolve(value) if key in TIMESTAMP_KEYS else value for key, value in properties.items()
-    }
-    if isinstance(resolved.get("notifs"), list):
-        resolved["notifs"] = [
-            {**record, "timestamp": resolve(record["timestamp"])}
-            if isinstance(record, dict) and "timestamp" in record
-            else record
-            for record in resolved["notifs"]
-        ]
-    return resolved
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=dt_util.get_default_time_zone())
+    return parsed
 
 
 def ice_mode(data: dict) -> str | None:
@@ -252,8 +310,8 @@ def timer_minutes(data: dict, key: str) -> float | None:
         return 0
     if data.get(f"{prefix}_active") is not True:
         return None
-    start = appliance_datetime(data.get(f"{prefix}_start_time"), data)
-    end = appliance_datetime(data.get(f"{prefix}_end_time"), data)
+    start = appliance_datetime(data.get(f"{prefix}_start_time"))
+    end = appliance_datetime(data.get(f"{prefix}_end_time"))
     if start is not None and end is not None and end >= start:
         return round((end - start).total_seconds() / 60)
     duration = data.get(key)
@@ -279,7 +337,7 @@ def control_matches(data: dict, key: str, value: bool | int, requested_at: datet
     prefix = KITCHEN_TIMERS[key]
     if value == 0:
         return data.get(f"{prefix}_active") is False
-    end = appliance_datetime(data.get(f"{prefix}_end_time"), data)
+    end = appliance_datetime(data.get(f"{prefix}_end_time"))
     duration = timer_minutes(data, key)
     return (
         data.get(f"{prefix}_active") is True
@@ -400,6 +458,8 @@ def validate_control_properties(data: dict, temperature_unit: str | None, proper
     for key, value in properties.items():
         if not supports_control(data, key):
             raise ServiceValidationError("The appliance does not report this setting.")
+        if reason := control_lock(data, key, value):
+            raise ServiceValidationError(reason)
         if key in WRITABLE_BOOLEAN_KEYS:
             if type(value) is not bool or type(data[key]) is not bool:
                 raise ServiceValidationError("The setting requires an on/off value.")

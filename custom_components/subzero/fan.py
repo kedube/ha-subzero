@@ -38,6 +38,7 @@ class SubZeroFan(SubZeroEntity, FanEntity):
         return (
             super().available
             and supports_control(self.coordinator.data, "fan_on")
+            and self.control_unlocked()
             and self.is_on is not None
         )
 

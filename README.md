@@ -37,7 +37,9 @@ Entities are created only for recognized properties that each appliance reports,
 
 Celsius and Fahrenheit appliance settings are supported. Home Assistant displays temperatures and accepts setpoints in your preferred unit. Setpoints use whole-degree Fahrenheit precision, so Celsius requests may be rounded. Appliance units are read at startup and on reload, falling back to the last saved unit if the appliance list is temporarily unavailable. Appliances with unknown units keep all of their non-temperature entities.
 
-Timestamp sensors require an explicit timezone offset, either in the timestamp or in the appliance clock, and otherwise show as unknown. Push messages and status reads can report the appliance clock with different offsets, such as local time and UTC, so a timestamp without an offset uses the clock offset last reported by the same source.
+**Sabbath mode** disables every control, as it does in the Sub-Zero app: while an appliance reports Sabbath mode, its climate entities, setpoints, selects, switches, and buttons are unavailable and changes are rejected, including turning Sabbath mode off. Turn it off at the appliance. Sensors keep reporting.
+
+Timestamps keep any offset they include. Like the Sub-Zero app, which sets each appliance clock to the phone's local time, a timestamp without an offset is read in Home Assistant's time zone. The appliance clock's own reported offset is not used, since status reads report it in UTC.
 
 Each appliance reports **Active faults**: the count of currently active faults and their details, refreshed every 30 minutes. Clearing faults happens at the appliance.
 
@@ -57,8 +59,8 @@ Installing, restarting, or reconnecting the integration never changes appliance 
 | Night mode | Disabled, Enabled |
 | Air purification | On, Off |
 | Internal water dispenser | On, Off, on models that report it |
-| Reset air filter | Send a reset request after replacing the filter, on models that report air-filter life |
-| Accent light | Off, On, Low, Medium, High, on models that report accent lighting |
+| Reset air filter | Send a reset request after replacing the filter, on models whose app offers it (series 22) |
+| Accent light | Off, Low, Medium, High, or On and Off on older built-in models, on models that report accent lighting |
 | Door open delay | Off, 1, 2, 5, or 10 minutes before an open door triggers a notification, on models that report it |
 
 The **Ice maker** control shows the selected mode. In [**Night ice**](https://www.subzero-wolf.com/assistance/answers/sub-zero/common/sub-zero-night-ice-mode), the separate **Ice maker enabled** status may be Off while the schedule pauses ice production.
@@ -67,7 +69,7 @@ Select **Manual** crisper temperature mode to adjust its setpoint. In Automatic 
 
 Turn off **Max ice** before adjusting the freezer setpoint. Refrigerator and freezer zones also provide climate entities for thermostat cards, with the same temperature limits and Max ice interlock as the number controls.
 
-The **Reset air filter** button sends the reset request and refreshes the appliance state. The filter-life sensor continues to show the value reported by the appliance.
+The **Reset air filter** button sends the reset request and refreshes the appliance state. The filter-life sensor continues to show the value reported by the appliance. Like the app, the button appears only on models the app resets remotely; on others, such as Classic models, reset the filter life from the appliance's settings, and any button an earlier version created is removed.
 
 [Humidity control](https://www.subzero-wolf.com/assistance/answers/sub-zero/next-classic/next-classic-humidity-control) affects the refrigerator zone. [Night mode](https://www.subzero-wolf.com/assistance/answers/sub-zero/next-classic/next-classic-night-mode) dims the interior lights when the room is dark; **Night ice** is a separate ice-maker setting.
 
@@ -88,7 +90,7 @@ Ice-maker settings and operating modes report their on/off state alongside their
 
 Refrigerator temperatures on the primary tested model are **configured setpoints**. The integration does not infer a measured temperature from a setpoint. A negative water filter capacity indicates usage beyond the reported filter capacity.
 
-Wine storage units expose setpoint controls from 40–65°F, climate entities, display temperatures, and door status for each reported wine zone. They also get the **Mode** control with the operating modes the app offers for their type, such as Sabbath.
+Wine storage units expose setpoint controls from 40–65°F, climate entities, display temperatures, and door status for each reported wine zone. Units with two zones name them **Upper wine** and **Lower wine**, as the app does; a door is named by zone only when each zone has its own. They also get the **Mode** control with the operating modes the app offers for their type, such as Sabbath.
 
 ## Sub-Zero dedicated ice makers
 
@@ -100,11 +102,11 @@ Use the **Sub-Zero: Schedule ice delay** action to pause production for 1–12 h
 
 ## Wolf ovens
 
-Each reported oven cavity has its own entities. First-cavity entity IDs are preserved from earlier releases; a second cavity uses names prefixed with **Lower oven**.
+Each reported oven cavity has its own entities. First-cavity entity IDs are preserved from earlier releases; a second cavity uses names prefixed with **Lower oven**. Ranges with two ovens use the app's **Right oven** and **Left oven** names instead. Renaming keeps existing entity IDs.
 
 | Type | Available properties |
 | --- | --- |
-| Temperatures | Measured oven and probe temperatures, oven and probe setpoints |
+| Temperatures | Measured oven and probe temperatures, oven and probe setpoints, broil level (Low, Medium, High) while broiling |
 | Status | Door, cooking, preheated, remote ready, probe in use, probe within 10° of target, probe target reached, Gourmet mode |
 | Timers | Cooking timer active, under one minute, or complete; both kitchen timers active, under one minute, or complete; reported start/end times |
 | Cooking mode | Recognized mode name and whether the appliance permits mode changes |
@@ -121,7 +123,9 @@ Controls include:
 
 Enable **Remote Ready at the oven before each remote start**. Opening a door cancels it. Broil, Convection broil, Proof, Self clean, and Gourmet must be started at the appliance. Those restrictions also apply to automations. See [Wolf's Remote Ready guide](https://www.subzero-wolf.com/assistance/answers/wolf/m-series-oven/sub-zero-group-owners-app---set-up-remote-access).
 
-Oven temperature fields that report zero while idle show as unknown; probe readings also show as unknown when the probe is not in use. Unknown cooking-mode codes show as unknown and cannot be selected.
+Like the app, which shows Off, the measured oven temperature shows as unknown while that cavity is off or self-cleaning, even though the appliance keeps reporting a value. Oven temperature fields that report zero while idle also show as unknown; probe readings show as unknown when the probe is not in use or reports 1, the app's no-reading value. Unknown cooking-mode codes show as unknown and cannot be selected.
+
+While either cavity self-cleans, only turning it off is allowed: cooking modes, lights, setpoints, and starts are unavailable for both cavities. The interior light is unavailable during Proof. The broil level follows the Broil setpoint: below 400°F is Low, 400–499°F Medium, and 500°F or more High.
 
 Gourmet program sensors report the appliance's recipe code as a name. Code 0 shows None, and so does a cavity that reports Gourmet mode off; unrecognized codes show as unknown. Select and start Gourmet programs at the oven.
 
@@ -137,24 +141,26 @@ Other controls include halo lighting, automatic fan sensitivity (Off, Low, Mediu
 | --- | --- |
 | Cycle monitoring | Wash cycle, wash status, cycle active, cycle end time |
 | Cycle selection | Choose a cycle while idle or waiting to start |
-| Mode | Normal, Child lock, Sabbath, while idle or waiting to start |
+| Mode | Off, Child lock, Sabbath, while idle or waiting to start |
 | Status | Door, Remote Ready, rinse aid low, softener salt low, service required |
-| Options | Heated dry, Extended dry, High temperature wash, Sanitize rinse, Top rack only |
-| Delay start | Off or 1–12 hours, active status and reported start/end times |
+| Options | Extra dry, Extended dry, High temp wash, Sani-rinse, Top rack only, while idle, for the cycles that offer them |
+| Delay start | Off or 1–12 hours while idle or delayed, except for Quick and Rinse and hold; active status and reported start/end times |
 | Start | Start wash cycle button, available when Remote Ready is enabled; starts with the cycle and delay currently set on the dishwasher |
-| Cancel | Cancel wash cycle button, available while a cycle is running, drying, or waiting for a delayed start |
+| Cancel | Cancel wash cycle button, available while the dishwasher reports running, drying, or delayed |
 
 Selecting a cycle does not start it. To enable remote starting, hold ENTER on the dishwasher for five seconds, then close the door within four seconds. Opening the door cancels Remote Ready. See [Cove's Remote Ready guide](https://www.subzero-wolf.com/assistance/answers/cove/dishwasher/cove-dishwasher-remote-ready-feature).
 
-Unknown wash cycle/status codes show as unknown. The integration sends only supported option properties; the appliance enforces which options apply to its selected cycle.
+Wash status uses the app's wording: Idle, Running, Paused, Canceling, Drying, Done, Delayed, and Error. Unknown wash cycle/status codes show as unknown.
+
+Like the app, options are unavailable while a cycle runs and for cycles that don't offer them: Rinse and hold has none, High temp wash and Sani-rinse are not offered for Quick, Crystal and china, Energy, or Extra quiet, Extended dry not for Quick, Extra dry not for Crystal and china or Energy, and Top rack only not for Pots and pans, Soak and scrub, Plastics, or Energy.
 
 ## Appliance events
 
-Each appliance has an **Appliance event** entity for automations. It reports events such as oven preheat, probe targets, timer completion, dishwasher cycles, door alerts, and maintenance notifications. Its attributes include the event type, numeric code, sequence, and appliance timestamp. Automations match event type IDs such as `refrigerator_door_ajar`, which Home Assistant shows by name, such as Refrigerator door open. Unrecognized codes use the `unknown` event type and keep their numeric code.
+Each appliance has an **Appliance event** entity for automations. It reports events such as oven preheat, probe targets, timer completion, dishwasher cycles, door alerts, and maintenance notifications. Its attributes include the event type, numeric code, sequence, and appliance timestamp. Automations match event type IDs such as `refrigerator_door_ajar`, which Home Assistant shows by name, such as Refrigerator door open. Unrecognized codes use the `unknown` event type and keep their numeric code. Event type names call a second cavity the lower oven, including on ranges, whose entities say left oven.
 
 The event entity keeps its last occurrence when the connection drops. Events found during a status read are delivered immediately, including while the push connection is recovering.
 
-Startup history is not replayed. The first snapshot or status read after loading only sets a baseline, so events reported while the integration starts do not fire, even when the appliance clock runs ahead. While the integration is loaded, repeated notifications and reconnect history are deduplicated, including when the appliance resets its sequence counter. Events from before the integration loaded are ignored; events that occur while Home Assistant is stopped do not trigger automations on startup. Timestamps must include an offset or use the appliance clock's reported offset from the same source, push or status read.
+Startup history is not replayed. The first snapshot or status read after loading only sets a baseline, so events reported while the integration starts do not fire, even when the appliance clock runs ahead. While the integration is loaded, repeated notifications and reconnect history are deduplicated, including when the appliance resets its sequence counter. Events from before the integration loaded are ignored; events that occur while Home Assistant is stopped do not trigger automations on startup. Event timestamps without an offset are read in Home Assistant's time zone.
 
 Replay protection relies on the appliance clock. A clock five minutes behind Home Assistant can suppress the first five minutes of live events after a reload. If the clock moves backward, events can also be ignored until it catches up with the retained history cutoff.
 
@@ -166,9 +172,17 @@ Download diagnostics from the integration or individual device page. Downloads u
 
 Integration diagnostics count appliance notifications received, ignored, or invalid since the last reload. Heartbeats are excluded from the received count. They also show the status refresh interval and whether **Enable polling for changes** is turned off. Each appliance also records parsed snapshots and updates, with the time of the last one, and the time of its last message of any kind, including messages without state. These counts help distinguish incoming messages from a connection that only receives heartbeats; they do not prove every state change was received or applied.
 
-Each appliance also counts periodic status reads, reads skipped for rate limits, reads that found a door change push had not reported, and update channel reopens. Each missed change triggers one reopen. A rising missed count means push is not delivering door changes; if the update count rises after reopens, reopening restores push, and if it stays flat, changes arrive only through status reads. Unpushed changes count, for each property, the periodic reads that found a new value push had not reported, leaving out the clock, uptime, Wi-Fi signal, events, and timestamps. A property listed there either changes without push updates, such as a temperature, or shows that push stopped delivering. Counts reset when the integration reloads, including after a Configure change.
+Each appliance also counts its periodic checks:
+- `channel_reopens`: update channel reopens.
+- `silent_channels`: reopens that pushed no snapshot within 16 seconds.
+- `connection_renewals`: notification connection renewals those silences triggered.
+- `periodic_reads`: checks that compared state, from a snapshot or a fallback read.
+- `skipped_reads`: fallback reads skipped for rate limits.
+- `missed_updates`: checks that found a door change push had not reported.
 
-Enable debug logging for `custom_components.subzero` to record channel-open attempts, notification types and payload key names, parsed state updates, door changes that push missed, and channel reopens. State values exclude network identifiers and nested objects.
+A rising silent count means reopening does not restore push for that appliance, and its state comes from fallback reads. Missed door changes alongside answered reopens mean channels stop delivering between checks. Unpushed changes count, for each property, the periodic reads that found a new value push had not reported, leaving out the clock, uptime, Wi-Fi signal, events, and timestamps. A property listed there either changes without push updates, such as a temperature, or shows that push stopped delivering. Counts reset when the integration reloads, including after a Configure change.
+
+Enable debug logging for `custom_components.subzero` to record channel-open attempts, notification types and payload key names, parsed state updates, door changes that push missed, channel reopens and silences, and connection renewals. State values exclude network identifiers and nested objects.
 
 ## Compatibility
 
@@ -182,13 +196,18 @@ Local network access, verification methods other than text message or phone call
 
 Selected appliances share account tokens and one cloud notification connection, and each appliance opens an update channel on it. Setup opens the push connection and waits up to 16 seconds for initial state, then requests any missing state. Lost connections reconnect with increasing delays, and rate-limit responses are honored.
 
-Push updates for one appliance can stop while the shared connection stays up, which can leave a door showing open after it closed. The connection reopens appliance channels only when it reconnects, up to 50 minutes later. So by default, each appliance also gets a status read after 10 minutes without a state change. The read corrects missed updates, and when it finds a door change that push did not report, the integration reopens that appliance's update channel so live updates resume. In **Configure**, the status refresh interval can be set to 1, 2, 5, or 10 minutes, or **Push only**. An unavailable appliance uses recovery retries instead of periodic reads.
+Push updates for one appliance can stop while the shared connection stays up, which can leave a door showing open after it closed. The Sub-Zero app never keeps a channel open long: it reopens every channel each time it returns to the foreground. So by default, each appliance gets a periodic check after 10 minutes without a state change, which works the same way:
+- The integration reopens the appliance's update channel. The appliance answers with a full snapshot, which corrects any missed updates and keeps push going.
+- If no snapshot arrives within 16 seconds, the integration reads the status instead, as the app does.
+- The first time an appliance that answers status reads leaves a reopen unanswered, the integration renews the notification connection, which reopens every channel. It doesn't renew again until that appliance answers a reopen.
 
-After an error, a reopened channel or an incoming state update triggers a fresh status read if no full push snapshot has restored the appliance. A status read that fails while the push connection stays open, such as one confirming a control, starts recovery right away. Failed recovery reads retry with increasing delays. The periodic status read can also reveal an appliance that silently stops reporting, subject to the interval and what the cloud status endpoint returns.
+In **Configure**, the status refresh interval can be set to 1, 2, 5, or 10 minutes, or **Push only**. An unavailable appliance uses recovery retries instead of periodic checks.
+
+After an error, a reopened channel or an incoming state update triggers a fresh status read if no full push snapshot has restored the appliance. A status read that fails while the push connection stays open, such as one confirming a control, starts recovery right away. Failed recovery reads retry with increasing delays. The periodic check can also reveal an appliance that silently stops reporting, subject to the interval and what the cloud status endpoint returns.
 
 Control changes are confirmed from appliance status, not from the command acknowledgement. Property writes use up to three attempts, each allowing eight seconds for the request and its push confirmation. A command error or missing push confirmation then prompts a status read, which that deadline does not cut short; authentication and rate-limit errors stop immediately. A command that resends a value the appliance already reports, such as a cancel while the cycle already reports off, counts only when the cloud acknowledges it, so a remote start stops if a resent cooking mode or setpoint fails. Each retry rechecks whether the change is still allowed. Ice modes and remote starts preserve the app's ordered writes, including repeated values, and later writes stop if a setting cannot be confirmed. Queued ice-mode changes and remote starts use the state left by earlier commands, and a start for an appliance that is already running only sends a new setpoint. Kitchen-timer restarts require a fresh update or status read. Failed confirmation includes the last command error when one was reported.
 
-Sub-Zero does not document an API quota. The default 10-minute fallback can make up to 144 status requests per appliance per day when no push changes arrive, plus a channel reopen each time a read finds a missed door change. A status read may still miss a brief door opening or return a stale cloud value, so this is not a guaranteed real-time door alert. A periodic read that hits a rate limit is skipped, and push updates continue. **Push only** stops periodic status reads, but the Active faults sensor still checks every 30 minutes. Turning off **Enable polling for changes** in the integration's **System options** stops both.
+Sub-Zero does not document an API quota. The default 10-minute check can make up to 144 channel reopens per appliance per day when no push changes arrive, plus a status read for each reopen that goes unanswered. A check may still miss a brief door opening or return a stale cloud value, so this is not a guaranteed real-time door alert. A check that hits a rate limit is skipped, and push updates continue. **Push only** stops periodic checks, but the Active faults sensor still checks every 30 minutes. Turning off **Enable polling for changes** in the integration's **System options** stops both.
 
 Your password is used for sign-in and is not saved. Home Assistant stores renewable account tokens in its configuration and refreshes them automatically. If renewal fails, Home Assistant asks you to sign in again. Protect Home Assistant backups as you would other account credentials.
 
@@ -200,6 +219,8 @@ This is an unofficial integration using the mobile application's cloud endpoints
 
 ## Development
 
+[PROTOCOL.md](PROTOCOL.md) documents the cloud API, push channel, and appliance properties.
+
 Use Python 3.14:
 
 ```sh
@@ -209,3 +230,14 @@ python -m venv .venv
 .venv/bin/ruff check .
 .venv/bin/ruff format --check .
 ```
+
+The Validate workflow runs these checks, hassfest, and the HACS check on every push and pull request, against each Home Assistant version in its matrix.
+
+### Releases
+
+The Release workflow publishes a release once those checks pass. Start one either way:
+
+- Push a commit to `main` that changes `version` in [manifest.json](custom_components/subzero/manifest.json).
+- Run the Release workflow from the Actions tab and enter the version. It commits the new version to `main` for you.
+
+The workflow tags `vX.Y.Z`, attaches the `ha_subzero.zip` that HACS downloads, and writes the notes from the subjects of the commits since the previous release. A version with a letter, such as `0.7.0b1`, is published as a pre-release, which HACS offers only to users who turn on beta versions. A new version must be higher than every existing tag. Pushing a `v*` tag yourself also works if it matches the version in manifest.json, and pushing a tag that already has a release replaces its zip.

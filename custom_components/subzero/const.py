@@ -1,5 +1,7 @@
 """Integration settings and recognized appliance properties."""
 
+import math
+
 DOMAIN = "subzero"
 DEFAULT_STATUS_POLL_INTERVAL = 600
 STATUS_POLL_INTERVALS = {
@@ -181,6 +183,11 @@ FRIDGE_ENUM_OPTIONS = {
 HUMIDITY_LABELS = {0: "Disabled", 1: "Normal", 2: "Enhanced", 3: "Low"}
 DOOR_AJAR_TIMEOUTS = {"Off": 0, "1 minute": 1, "2 minutes": 2, "5 minutes": 5, "10 minutes": 10}
 LEGACY_ACCENT_LIGHT_OPTIONS = {"Off": 0, "On": 100, "Low": 30, "Medium": 50, "High": 70}
+# Series using the legacy accent light values; the app offers only on and off for series 1.
+LEGACY_ACCENT_LIGHT_SERIES = {1, 5, 7}
+ON_OFF_ACCENT_LIGHT_SERIES = {1}
+# The app sends an air filter reset only to these series, and shows reset steps for others.
+AIR_FILTER_RESET_SERIES = {22}
 ACCENT_LIGHT_LABELS = {
     value: name
     for options in (FRIDGE_ENUM_OPTIONS["accent_light_level"], LEGACY_ACCENT_LIGHT_OPTIONS)
@@ -287,6 +294,11 @@ GOURMET_RECIPES = {
 }
 # Wolf requires these modes to be started at the appliance.
 MANUAL_COOK_MODES = {3, 7, 9, 11}
+BROIL, PROOF, SELF_CLEAN = 3, 9, 11
+# The app's broil level for a Broil setpoint below each bound, in °F.
+BROIL_LEVELS = ((400, "Low"), (500, "Medium"), (math.inf, "High"))
+# Ranges with two cavities call them right and left ovens, not upper and lower.
+RANGE_SERIES = 8
 # E series and M series start with a power write alone; the app sends the
 # cooking mode, power, and setpoint to every other series.
 LEGACY_START_SERIES = {3, 4}
@@ -331,13 +343,25 @@ KITCHEN_TIMERS = {
 }
 
 DISHWASHER_SWITCHES = {
-    "heated_dry_on": "Heated dry",
+    "heated_dry_on": "Extra dry",
     "extended_dry_on": "Extended dry",
-    "high_temp_wash_on": "High temperature wash",
-    "sani_rinse_on": "Sanitize rinse",
+    "high_temp_wash_on": "High temp wash",
+    "sani_rinse_on": "Sani-rinse",
     "top_rack_only_on": "Top rack only",
 }
-DISHWASHER_MODES = {"Normal": 0, "Child lock": 1, "Sabbath": 2}
+# The wash cycles for which the app hides each option.
+DISHWASHER_OPTION_EXCLUDED_CYCLES = {
+    "heated_dry_on": {8, 11},
+    "extended_dry_on": {4},
+    "high_temp_wash_on": {4, 8, 11, 12},
+    "sani_rinse_on": {4, 8, 11, 12},
+    "top_rack_only_on": {5, 6, 10, 11},
+}
+RINSE_AND_HOLD = 9
+# The app offers delay start while the dishwasher is idle or delayed, except for these cycles.
+DELAY_START_STATUSES = {0, 1, 7}
+DELAY_START_EXCLUDED_CYCLES = {4, RINSE_AND_HOLD}
+DISHWASHER_MODES = {"Off": 0, "Child lock": 1, "Sabbath": 2}
 WASH_CYCLES = {
     0: "None",
     1: "Auto",
@@ -347,21 +371,21 @@ WASH_CYCLES = {
     5: "Pots and pans",
     6: "Soak and scrub",
     7: "Light",
-    8: "Crystal china",
+    8: "Crystal and china",
     9: "Rinse and hold",
     10: "Plastics",
     11: "Energy",
     12: "Extra quiet",
 }
+# The app's wording; it shows both idle states, 0 and 1, as Idle.
 WASH_STATUSES = {
     0: "Idle",
-    # Upstream calls this Start pending, but an idle DW2450 reports it.
-    1: "Ready",
+    1: "Idle",
     2: "Running",
-    3: "Restart pending",
-    4: "Cancel pending",
+    3: "Paused",
+    4: "Canceling",
     5: "Drying",
-    6: "Complete",
+    6: "Done",
     7: "Delayed",
     8: "Error",
 }

@@ -24,6 +24,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import SubZeroConfigEntry
 from .api import fault_record
 from .const import (
+    BROIL_LEVELS,
     COOK_MODES,
     GOURMET_RECIPES,
     ICE_CLEAN_STAGES,
@@ -32,7 +33,13 @@ from .const import (
     WASH_CYCLES,
     WASH_STATUSES,
 )
-from .controls import appliance_datetime, is_finite_number, is_ice_maker
+from .controls import (
+    appliance_datetime,
+    broil_level,
+    cavity_temperature_shown,
+    is_finite_number,
+    is_ice_maker,
+)
 from .coordinator import SubZeroCoordinator, SubZeroFaultsCoordinator
 from .entity import SubZeroEntity, async_setup_entities
 
@@ -211,7 +218,7 @@ DESCRIPTIONS = (
             key=key,
             name=name,
             device_class=SensorDeviceClass.ENUM,
-            options=list(ENUM_VALUES[key].values()),
+            options=list(dict.fromkeys(ENUM_VALUES[key].values())),
         )
         for key, name in (
             ("ice_maker_clean_stage", "Ice maker cleaning stage"),
@@ -322,6 +329,25 @@ async def async_setup_entry(
         # The app shows a dedicated ice maker's status whatever it reports.
         lambda coordinator, description: is_ice_maker(coordinator.data),
     )
+    async_setup_entities(
+        entry,
+        async_add_entities,
+        tuple(
+            SensorEntityDescription(
+                key=f"{prefix}_broil_level",
+                name=name,
+                device_class=SensorDeviceClass.ENUM,
+                options=[name for _, name in BROIL_LEVELS],
+                icon="mdi:fire",
+            )
+            for prefix, name in (("cav", "Broil level"), ("cav2", "Lower oven broil level"))
+        ),
+        SubZeroBroilLevelSensor,
+        lambda coordinator, description: {
+            description.key.replace("broil_level", "cook_mode"),
+            description.key.replace("broil_level", "set_temp"),
+        }.issubset(coordinator.data),
+    )
 
 
 class SubZeroSensor(SubZeroEntity, SensorEntity):
@@ -340,7 +366,7 @@ class SubZeroSensor(SubZeroEntity, SensorEntity):
             )
         value = self.coordinator.data.get(key)
         if self.entity_description.device_class == SensorDeviceClass.TIMESTAMP:
-            return appliance_datetime(value, self.coordinator.data)
+            return appliance_datetime(value)
         if (
             key.endswith("_gourmet_recipe")
             and self.coordinator.data.get(key.replace("recipe", "mode_on")) is False
@@ -356,12 +382,17 @@ class SubZeroSensor(SubZeroEntity, SensorEntity):
         if not is_finite_number(value):
             return None
         if key.startswith(("cav_", "cav2_")):
+            prefix = key.split("_", 1)[0]
             if value == 0:
                 return None
-            if (
-                "_probe_" in key
-                and self.coordinator.data.get(key.split("_", 1)[0] + "_probe_on") is not True
+            if key == f"{prefix}_temp" and not cavity_temperature_shown(
+                self.coordinator.data, prefix
             ):
+                return None
+            if "_probe_" in key and self.coordinator.data.get(f"{prefix}_probe_on") is not True:
+                return None
+            # The app shows a probe temperature of 1 as no reading.
+            if key == f"{prefix}_probe_temp" and value == 1:
                 return None
         return value
 
@@ -384,6 +415,23 @@ class SubZeroIceStatusSensor(SubZeroEntity, SensorEntity):
         if type(data.get("ice_maker_on")) is bool:
             return "On" if data["ice_maker_on"] else "Off"
         return None
+
+
+class SubZeroBroilLevelSensor(SubZeroEntity, SensorEntity):
+    """The app's Low, Medium, or High broil level, from the setpoint while broiling."""
+
+    @property
+    def available(self) -> bool:
+        prefix = self.entity_description.key.removesuffix("_broil_level")
+        return (
+            self.coordinator.last_update_success and f"{prefix}_cook_mode" in self.coordinator.data
+        )
+
+    @property
+    def native_value(self) -> str | None:
+        return broil_level(
+            self.coordinator.data, self.entity_description.key.removesuffix("_broil_level")
+        )
 
 
 class SubZeroActiveFaultsSensor(CoordinatorEntity[SubZeroFaultsCoordinator], SensorEntity):

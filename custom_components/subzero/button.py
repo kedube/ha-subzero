@@ -109,6 +109,8 @@ class SubZeroStartButton(SubZeroEntity, ButtonEntity):
         key = self.entity_description.key.removeprefix("remote_start_")
         if not self.coordinator.last_update_success or data.get(key) is not False:
             return False
+        if not self.control_unlocked(key, True):
+            return False
         try:
             validate_remote_start(data, key)
         except ServiceValidationError:
@@ -127,6 +129,7 @@ class SubZeroCancelWashButton(SubZeroEntity, ButtonEntity):
         return (
             self.coordinator.last_update_success
             and supports_control(self.coordinator.data, "wash_cycle_on")
+            and self.control_unlocked("wash_cycle_on", False)
             and wash_cancel_enabled(self.coordinator.data)
         )
 
@@ -137,8 +140,10 @@ class SubZeroCancelWashButton(SubZeroEntity, ButtonEntity):
 class SubZeroAirFilterResetButton(SubZeroEntity, ButtonEntity):
     @property
     def available(self) -> bool:
-        return self.coordinator.last_update_success and supports_air_filter_reset(
-            self.coordinator.data
+        return (
+            self.coordinator.last_update_success
+            and supports_air_filter_reset(self.coordinator.data)
+            and self.control_unlocked()
         )
 
     async def async_press(self) -> None:
@@ -151,7 +156,7 @@ class SubZeroIceDelayButton(SubZeroEntity, ButtonEntity):
         data = self.coordinator.data
         if not self.coordinator.last_update_success or not is_ice_maker(data):
             return False
-        if not ICE_DELAY_KEYS.issubset(data):
+        if not ICE_DELAY_KEYS.issubset(data) or not self.control_unlocked():
             return False
         if self.entity_description.key == "end_ice_delay":
             return data.get("delay_active") is True
@@ -170,6 +175,7 @@ class SubZeroTimerDismissButton(SubZeroEntity, ButtonEntity):
         return (
             self.coordinator.last_update_success
             and supports_control(self.coordinator.data, f"{prefix}_duration")
+            and self.control_unlocked(f"{prefix}_duration")
             and self.coordinator.data.get(f"{prefix}_complete") is True
         )
 

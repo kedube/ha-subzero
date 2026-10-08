@@ -4,10 +4,10 @@ import asyncio
 import logging
 import random
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Collection
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from datetime import datetime, timedelta, tzinfo
+from datetime import datetime, timedelta
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
@@ -52,7 +52,6 @@ from .const import (
 from .controls import (
     appliance_datetime,
     appliance_type,
-    clock_offset,
     control_matches,
     excluded_properties,
     ice_mode,
@@ -61,15 +60,18 @@ from .controls import (
     is_hood,
     is_ice_maker,
     is_oven,
+    sabbath_enabled,
     start_properties,
     supports_air_filter_reset,
     validate_control_properties,
     wash_cancel_enabled,
-    with_clock_offset,
 )
 
 _LOGGER = logging.getLogger(__name__)
 INITIAL_STATE_TIMEOUT = 16
+# The app sends a fallback get when no properties arrive this many seconds
+# after it opens a channel.
+SNAPSHOT_TIMEOUT = 16
 # Set in the task of a periodic status read until the read starts.
 _periodic_read: ContextVar[bool] = ContextVar("subzero_periodic_read", default=False)
 
@@ -125,12 +127,13 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             "skipped_reads": 0,
             "missed_updates": 0,
             "channel_reopens": 0,
+            "silent_channels": 0,
+            "connection_renewals": 0,
         }
         # Per property, the periodic reads that found a change push had not reported.
         self.unpushed_changes: dict[str, int] = {}
-        # The latest appliance clock offset from push messages and from status reads.
-        self._clock_offsets: dict[str, tzinfo] = {}
-        self._reopen_channel = False
+        self._channel_snapshot: asyncio.Future[None] | None = None
+        self._renewed = False
         self._command_lock = asyncio.Lock()
         self._unsettled = False
         self._state_lock = asyncio.Lock()
@@ -152,27 +155,60 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             self._retry_after = None
 
     async def _handle_refresh_interval(self, _now: datetime | None = None) -> None:
+        answered = await self._async_check_channel()
+        if answered:
+            # The pushed snapshot refreshed state and rescheduled the next check.
+            self._renewed = False
+            return
+        skipped = self.push_stats["skipped_reads"]
         _periodic_read.set(True)
         await super()._handle_refresh_interval(_now)
-        if self._reopen_channel:
-            self._reopen_channel = False
-            await self._async_reopen_channel()
+        if (
+            answered is False
+            and self.last_update_success
+            # A rate limit would fail the new connection, for every appliance.
+            and self.push_stats["skipped_reads"] == skipped
+            and not self._renewed
+        ):
+            # The appliance answers status reads, but its channel pushed nothing.
+            # Renewing the connection reopens every channel. Once per silent spell,
+            # in case this appliance never answers a reopen.
+            self._renewed = True
+            self.push_stats["connection_renewals"] += 1
+            _LOGGER.debug("Renewing push because %s stopped answering", self.device["name"])
+            self.client.renew_connection()
 
-    async def _async_reopen_channel(self) -> None:
-        """Ask the appliance to resume push updates.
+    async def _async_check_channel(self) -> bool | None:
+        """Reopen the update channel and wait for the snapshot the appliance pushes.
 
-        The account connection only reopens appliance channels when it reconnects,
-        up to 50 minutes later.
+        The app reopens every channel each time it returns to the foreground and
+        never keeps one open longer, so a channel open for hours may have stopped.
+        The snapshot serves as the periodic status read. Returns None when the
+        reopen fails, and False when no snapshot arrives.
         """
-        self.push_stats["channel_reopens"] += 1
-        _LOGGER.debug("Reopening the update channel for %s", self.device["name"])
-        try:
-            await self.client.open_channel(self.device_id)
-        except (ApiError, InvalidAuth) as error:
-            # The next periodic read retries if push stays silent.
-            _LOGGER.debug(
-                "Could not reopen the update channel for %s: %s", self.device["name"], error
-            )
+        async with self._state_lock:
+            self._channel_snapshot = self.hass.loop.create_future()
+            self.push_stats["channel_reopens"] += 1
+            _LOGGER.debug("Reopening the update channel for %s", self.device["name"])
+            try:
+                await self.client.open_channel(self.device_id)
+                async with asyncio.timeout(SNAPSHOT_TIMEOUT):
+                    await self._channel_snapshot
+            except (ApiError, InvalidAuth) as error:
+                # The status read that follows reports the error.
+                _LOGGER.debug(
+                    "Could not reopen the update channel for %s: %s", self.device["name"], error
+                )
+                return None
+            except TimeoutError:
+                self.push_stats["silent_channels"] += 1
+                _LOGGER.debug(
+                    "%s pushed no snapshot after its channel reopened", self.device["name"]
+                )
+                return False
+            finally:
+                self._channel_snapshot = None
+        return True
 
     @callback
     def async_set_update_error(self, error: Exception) -> None:
@@ -192,7 +228,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         self._history_seen |= history
         events = []
         for record in notification_records(properties):
-            timestamp = appliance_datetime(record["timestamp"], {**self.data, **properties})
+            timestamp = appliance_datetime(record["timestamp"])
             if timestamp is not None:
                 events.append((timestamp, record["notif_seq"], record["notif_type"]))
         for identity in sorted(events):
@@ -244,6 +280,11 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             if self._unsettled:
                 await self.async_refresh()
                 self._unsettled = False
+            if sabbath_enabled(self.data):
+                # Like the app, which disables every control, including Sabbath mode itself.
+                raise ServiceValidationError(
+                    "Sabbath mode is on. Change settings at the appliance."
+                )
             try:
                 yield
             except asyncio.CancelledError:
@@ -333,8 +374,11 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         async with self._command():
             if not self.last_update_success:
                 raise ServiceValidationError("The appliance is unavailable.")
-            if not supports_air_filter_reset(self.data):
+            if "air_filter_pct_remaining" not in self.data:
                 raise ServiceValidationError("The appliance does not report an air filter.")
+            if not supports_air_filter_reset(self.data):
+                # Like the app, which shows the appliance's own reset steps instead.
+                raise ServiceValidationError("Reset this appliance's air filter at the appliance.")
             try:
                 await self.client.reset_air_filter(self.device_id)
             except InvalidAuth as error:
@@ -489,7 +533,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             self._read_error = None
             try:
                 try:
-                    data = self._with_source_clock(await self.client.state(self.device_id), "read")
+                    data = await self.client.state(self.device_id)
                 except ApiError:
                     model = self._read_updates.get("appliance_model")
                     if not isinstance(model, str) or not model:
@@ -498,7 +542,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
                 if error := self._read_error or self._channel_error:
                     raise error
                 if periodic:
-                    self._check_missed_updates(data)
+                    self._check_missed_updates(data, self._read_updates)
                 self.unrecognized_keys.update(data.keys() - STATE_KEYS)
                 if "notifs" in data:
                     data = {**data, "notifs": notification_records(data)}
@@ -527,18 +571,13 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
                 self._read_updates = None
                 self._read_error = None
 
-    def _with_source_clock(self, properties: dict, source: str) -> dict:
-        """Read naive timestamps with the latest clock offset from the same source."""
-        if (clock := clock_offset(properties)) is not None:
-            self._clock_offsets[source] = clock
-        return with_clock_offset(properties, self._clock_offsets.get(source))
+    def _check_missed_updates(self, data: dict, pushed: Collection[str] = ()) -> None:
+        """Note changes, and door changes in particular, a periodic read found before push.
 
-    def _check_missed_updates(self, data: dict) -> None:
-        """Note changes, and door changes in particular, a periodic read found before push."""
+        `pushed` holds the properties push reported while the read was running.
+        """
         self.push_stats["periodic_reads"] += 1
-        compared = (data.keys() & self.data.keys()).difference(
-            UNCOMPARED_READ_KEYS, self._read_updates
-        )
+        compared = (data.keys() & self.data.keys()).difference(UNCOMPARED_READ_KEYS, pushed)
         unpushed = sorted(key for key in compared if data[key] != self.data[key])
         for key in unpushed:
             self.unpushed_changes[key] = self.unpushed_changes.get(key, 0) + 1
@@ -550,7 +589,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             )
         missed = sorted(
             key
-            for key in DOOR_KEYS.difference(self._read_updates)
+            for key in DOOR_KEYS.difference(pushed)
             if type(data.get(key)) is bool
             and type(self.data.get(key)) is bool
             and data[key] != self.data[key]
@@ -558,7 +597,6 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         if missed:
             _LOGGER.debug("Push did not report %s for %s", ", ".join(missed), self.device["name"])
             self.push_stats["missed_updates"] += 1
-            self._reopen_channel = True
 
     def _discard_excluded(self, data: dict) -> dict:
         """Drop the properties the app discards for the appliance type.
@@ -603,9 +641,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
     @callback
     def apply_update(self, update: StateUpdate) -> None:
         self.unrecognized_keys.update(update.properties.keys() - STATE_KEYS)
-        properties = self._with_source_clock(
-            {key: value for key, value in update.properties.items() if key in STATE_KEYS}, "push"
-        )
+        properties = {key: value for key, value in update.properties.items() if key in STATE_KEYS}
         if "appliance_type" in properties and appliance_type(properties) is None:
             # Like the app, an unusable type does not replace the known one.
             del properties["appliance_type"]
@@ -615,6 +651,11 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         if properties:
             self._read_error = None
             self._channel_error = None
+            snapshot = self._channel_snapshot
+            if update.full and snapshot is not None and not snapshot.done():
+                # Compare before the merge. State already holds what push reported.
+                self._check_missed_updates(properties)
+                snapshot.set_result(None)
             if self._read_updates is not None:
                 if update.full and properties["appliance_model"] != self.data.get(
                     "appliance_model"

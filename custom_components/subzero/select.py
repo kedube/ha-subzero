@@ -80,6 +80,11 @@ ENUM_OPTIONS = {
 }
 
 
+def selectable_options(key: str, data: dict) -> dict[str, int]:
+    """The options the app lets the appliance choose for an enumerated setting."""
+    return accent_light_options(data) if key == "accent_light_level" else ENUM_OPTIONS[key]
+
+
 def control_keys(key: str, data: dict) -> tuple[str, ...]:
     if key == "ice_maker_mode":
         if is_ice_maker(data):
@@ -128,7 +133,7 @@ class SubZeroSelect(SubZeroEntity, SelectEntity):
                 if value == data.get(key)
                 or (value not in MANUAL_COOK_MODES and cook_mode_offered(data, key, value))
             ]
-        names = list(ENUM_OPTIONS[key])
+        names = list(selectable_options(key, data))
         reported = enum_labels(key).get(data.get(key)) if key in FRIDGE_ENUM_OPTIONS else None
         return names if reported is None or reported in names else [*names, reported]
 
@@ -137,6 +142,8 @@ class SubZeroSelect(SubZeroEntity, SelectEntity):
         data = self.coordinator.data
         keys = control_keys(self.entity_description.key, data)
         if not self.coordinator.last_update_success or not keys:
+            return False
+        if not all(self.control_unlocked(key) for key in keys):
             return False
         if self.entity_description.key in {"wash_cycle", "mode"}:
             key = self.entity_description.key
@@ -170,7 +177,7 @@ class SubZeroSelect(SubZeroEntity, SelectEntity):
             raise ServiceValidationError("The appliance does not support that option.")
         data = self.coordinator.data
         key = self.entity_description.key
-        if key in FRIDGE_ENUM_OPTIONS and option not in ENUM_OPTIONS[key]:
+        if key in FRIDGE_ENUM_OPTIONS and option not in selectable_options(key, data):
             raise ServiceValidationError("This setting can only be chosen at the appliance.")
         if key.endswith("_cook_mode") and option == "Off":
             properties = {key.replace("cook_mode", "unit_on"): False}

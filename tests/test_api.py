@@ -938,6 +938,64 @@ async def test_live_signalr_socket_is_renewed_before_token_expiry(
     assert not client.push_connected
 
 
+async def test_requested_renewal_replaces_the_signalr_socket(
+    hass, aiohttp_server, monkeypatch, socket_enabled
+):
+    sockets = []
+    commands = []
+
+    async def negotiate_user(request):
+        return web.json_response({"url": origin + "/client/", "accessToken": "token"})
+
+    async def negotiate_transport(request):
+        return web.json_response({"connectionToken": "connection"})
+
+    async def websocket(request):
+        socket = web.WebSocketResponse()
+        await socket.prepare(request)
+        sockets.append(socket)
+        await socket.receive_str()
+        await socket.send_str("{}" + api.SEPARATOR)
+        async for message in socket:
+            if message.type == aiohttp.WSMsgType.TEXT:
+                await socket.send_str('{"type":6}' + api.SEPARATOR)
+        return socket
+
+    async def command(request):
+        commands.append((await request.json())["pload"]["cmd"])
+        await sockets[-1].send_str(
+            json.dumps(notification({"appliance_model": "TEST-FRIDGE"}, full=True)) + api.SEPARATOR
+        )
+        return web.json_response({})
+
+    app = web.Application()
+    app.router.add_post("/signal-r/negotiateUser", negotiate_user)
+    app.router.add_post("/client/negotiate", negotiate_transport)
+    app.router.add_get("/client/", websocket)
+    app.router.add_post("/consumerapp/device/{device_id}/directmethod/executeAPICmd", command)
+    server = await aiohttp_server(app)
+    origin = str(server.make_url("/")).rstrip("/")
+    monkeypatch.setattr(api, "API_BASE", origin)
+    monkeypatch.setattr(api, "SIGNALR_ORIGIN", origin)
+    monkeypatch.setattr(api, "PING_INTERVAL", 0.01)
+    client = api.SubZeroClient(async_get_clientsession(hass), "test-key", make_tokens())
+    stream = client.watch(["test-fridge"])
+    try:
+        async with asyncio.timeout(5):
+            snapshots = 0
+            async for _, event in stream:
+                if isinstance(event, api.StateUpdate):
+                    snapshots += 1
+                    if snapshots == 2:
+                        break
+                    client.renew_connection()
+        assert len(sockets) == 2 and sockets[0].closed
+        assert commands == ["open_cloud_async", "open_cloud_async"]
+        assert not client._renewal_requested
+    finally:
+        await stream.aclose()
+
+
 @pytest.fixture
 async def notification_stream(hass, aiohttp_server, monkeypatch, socket_enabled, tokens):
     frames = []

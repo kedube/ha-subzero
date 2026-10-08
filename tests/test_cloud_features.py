@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, call, patch
 
@@ -196,6 +196,7 @@ async def appliances(hass, tokens, request, unit_system):
         )
         client.push_connected = True
         client.state = AsyncMock(side_effect=lambda device_id: dict(states[device_id]))
+        client.open_channel = AsyncMock()
         client.set_property = AsyncMock(side_effect=write)
         client.reset_air_filter = AsyncMock()
         client.appliance_faults = AsyncMock(return_value=[])
@@ -221,7 +222,8 @@ async def test_cloud_feature_discovery_does_not_send_controls(hass, appliances):
     assert hass.states.get("climate.fridge_refrigerator").attributes["current_temperature"] == 37
     assert hass.states.get("climate.fridge_freezer").attributes["current_temperature"] is None
     assert hass.states.get("climate.oven_lower_oven").state == "off"
-    assert hass.states.get("sensor.oven_lower_oven_temperature").state == "75"
+    # Like the app, an oven that is off shows no temperature.
+    assert hass.states.get("sensor.oven_lower_oven_temperature").state == "unknown"
     assert hass.states.get("sensor.dishwasher_wash_cycle").state == "Normal"
     assert hass.states.get("sensor.dishwasher_wash_status").state == "Idle"
     assert hass.states.get("binary_sensor.dishwasher_softener_salt_low").state == "on"
@@ -246,7 +248,9 @@ async def test_cloud_feature_discovery_does_not_send_controls(hass, appliances):
 async def test_air_filter_reset_keeps_reported_life_until_it_changes(hass, appliances):
     entity_id = "button.fridge_reset_air_filter"
     assert hass.states.get(entity_id) is None
-    await appliances.update("fridge", {"air_filter_pct_remaining": 10})
+    await appliances.update(
+        "fridge", {"appliance_type": "17.22.1.0", "air_filter_pct_remaining": 10}
+    )
     reads = appliances.client.state.await_count
     await hass.services.async_call("button", "press", {"entity_id": entity_id}, blocking=True)
     appliances.client.reset_air_filter.assert_awaited_once_with("fridge")
@@ -260,7 +264,9 @@ async def test_air_filter_reset_keeps_reported_life_until_it_changes(hass, appli
 
 
 async def test_cancelled_filter_reset_still_refreshes_status(hass, appliances):
-    await appliances.update("fridge", {"air_filter_pct_remaining": 10})
+    await appliances.update(
+        "fridge", {"appliance_type": "17.22.1.0", "air_filter_pct_remaining": 10}
+    )
     coordinator = appliances.entry.runtime_data.coordinators["fridge"]
     entered = asyncio.get_running_loop().create_future()
     finish = asyncio.Event()
@@ -286,7 +292,9 @@ async def test_cancelled_filter_reset_still_refreshes_status(hass, appliances):
 
 @pytest.mark.parametrize("error", [ApiError("Reset rejected"), InvalidAuth("Sign in again")])
 async def test_air_filter_reset_reports_errors(hass, appliances, error):
-    await appliances.update("fridge", {"air_filter_pct_remaining": 10})
+    await appliances.update(
+        "fridge", {"appliance_type": "17.22.1.0", "air_filter_pct_remaining": 10}
+    )
     appliances.client.reset_air_filter.side_effect = error
     with pytest.raises(HomeAssistantError):
         await hass.services.async_call(
@@ -299,7 +307,9 @@ async def test_air_filter_reset_reports_errors(hass, appliances, error):
 
 
 async def test_queued_air_filter_reset_rechecks_capability(appliances):
-    await appliances.update("fridge", {"air_filter_pct_remaining": 10})
+    await appliances.update(
+        "fridge", {"appliance_type": "17.22.1.0", "air_filter_pct_remaining": 10}
+    )
     coordinator = appliances.entry.runtime_data.coordinators["fridge"]
     async with coordinator._command_lock:
         task = asyncio.create_task(coordinator.async_reset_air_filter())
@@ -344,7 +354,7 @@ async def test_extra_refrigeration_zones_follow_reported_properties(hass, applia
     assert state.attributes["max_temp"] == 45
     assert hass.states.get("sensor.fridge_crisper_display_temperature").state == "37"
     assert hass.states.get("binary_sensor.fridge_refrigerator_drawer_door").state == "off"
-    assert hass.states.get("binary_sensor.fridge_wine_storage_door_2").state == "on"
+    assert hass.states.get("binary_sensor.fridge_lower_wine_storage_door").state == "on"
     await hass.services.async_call(
         "number",
         "set_value",
@@ -372,14 +382,14 @@ async def test_wine_display_temperatures_survive_snapshots_and_updates(hass, app
         },
         full=True,
     )
-    assert hass.states.get("climate.fridge_wine").attributes["current_temperature"] == 54
-    assert hass.states.get("climate.fridge_wine_2").attributes["current_temperature"] == 44
-    assert hass.states.get("sensor.fridge_wine_display_temperature").state == "54"
-    assert hass.states.get("sensor.fridge_wine_display_temperature_2").state == "44"
+    assert hass.states.get("climate.fridge_upper_wine").attributes["current_temperature"] == 54
+    assert hass.states.get("climate.fridge_lower_wine").attributes["current_temperature"] == 44
+    assert hass.states.get("sensor.fridge_upper_wine_display_temperature").state == "54"
+    assert hass.states.get("sensor.fridge_lower_wine_display_temperature").state == "44"
 
     await appliances.update("fridge", {"wine_display_temp": 55, "wine2_display_temp": 45})
-    assert hass.states.get("climate.fridge_wine").attributes["current_temperature"] == 55
-    assert hass.states.get("climate.fridge_wine_2").attributes["current_temperature"] == 45
+    assert hass.states.get("climate.fridge_upper_wine").attributes["current_temperature"] == 55
+    assert hass.states.get("climate.fridge_lower_wine").attributes["current_temperature"] == 45
     appliances.client.set_property.assert_not_awaited()
 
 
@@ -388,10 +398,10 @@ async def test_wine_display_temperatures_survive_snapshots_and_updates(hass, app
     [
         ("switch.oven_oven_light", "oven", "cav_light_on"),
         ("switch.oven_lower_oven_light", "oven", "cav2_light_on"),
-        ("switch.dishwasher_heated_dry", "dishwasher", "heated_dry_on"),
+        ("switch.dishwasher_extra_dry", "dishwasher", "heated_dry_on"),
         ("switch.dishwasher_extended_dry", "dishwasher", "extended_dry_on"),
-        ("switch.dishwasher_high_temperature_wash", "dishwasher", "high_temp_wash_on"),
-        ("switch.dishwasher_sanitize_rinse", "dishwasher", "sani_rinse_on"),
+        ("switch.dishwasher_high_temp_wash", "dishwasher", "high_temp_wash_on"),
+        ("switch.dishwasher_sani_rinse", "dishwasher", "sani_rinse_on"),
         ("switch.dishwasher_top_rack_only", "dishwasher", "top_rack_only_on"),
     ],
 )
@@ -1221,18 +1231,20 @@ async def test_dishwasher_modes_follow_capability_and_block_start_in_sabbath(has
     entity_id = "select.dishwasher_mode"
     assert hass.states.get(entity_id) is None
     await appliances.update("dishwasher", {"mode": 0, "remote_ready": True})
-    for option, value in (("Child lock", 1), ("Sabbath", 2), ("Normal", 0)):
+    for option, value in (("Child lock", 1), ("Off", 0), ("Sabbath", 2)):
         await hass.services.async_call(
             "select", "select_option", {"entity_id": entity_id, "option": option}, blocking=True
         )
         appliances.client.set_property.assert_awaited_with("dishwasher", "mode", value)
-        assert hass.states.get(entity_id).state == option
-        if value == 2:
-            assert hass.states.get("button.dishwasher_start_wash_cycle").state == "unavailable"
-            with pytest.raises(ServiceValidationError, match="Turn off Sabbath mode"):
-                await appliances.entry.runtime_data.coordinators["dishwasher"].async_set_properties(
-                    {"wash_cycle_on": True}
-                )
+        # Like the app, Sabbath mode disables every control, including the mode itself.
+        assert hass.states.get(entity_id).state == (option if value != 2 else "unavailable")
+    assert hass.states.get("button.dishwasher_start_wash_cycle").state == "unavailable"
+    with pytest.raises(ServiceValidationError, match="Sabbath mode is on"):
+        await appliances.entry.runtime_data.coordinators["dishwasher"].async_set_properties(
+            {"wash_cycle_on": True}
+        )
+    await appliances.update("dishwasher", {"mode": 0})
+    assert hass.states.get(entity_id).state == "Off"
     assert appliances.client.set_property.await_count == 3
     await appliances.update("oven", {"mode": 0})
     assert hass.states.get("select.oven_mode") is None
@@ -1296,16 +1308,16 @@ async def test_dishwasher_delay_start_then_completion_updates(hass, appliances):
             "rinse_aid_low": True,
         },
     )
-    assert hass.states.get("sensor.dishwasher_wash_status").state == "Complete"
+    assert hass.states.get("sensor.dishwasher_wash_status").state == "Done"
     assert hass.states.get("sensor.dishwasher_wash_cycle_end").state == "2026-09-05T17:00:00+00:00"
     assert hass.states.get("binary_sensor.dishwasher_rinse_aid_low").state == "on"
 
 
 async def test_dishwasher_pending_delayed_and_error_states(hass, appliances):
     for code, label in (
-        (1, "Ready"),
-        (3, "Restart pending"),
-        (4, "Cancel pending"),
+        (1, "Idle"),
+        (3, "Paused"),
+        (4, "Canceling"),
         (7, "Delayed"),
         (8, "Error"),
     ):
@@ -1384,27 +1396,22 @@ async def test_unknown_enum_values_do_not_become_known_modes(hass, appliances):
     assert hass.states.get("select.oven_cooking_mode").state == "unavailable"
 
 
-async def test_naive_timestamps_need_the_appliance_clock_offset(hass, appliances):
+async def test_naive_timestamps_use_the_home_time_zone(hass, appliances):
+    coordinator = appliances.entry.runtime_data.coordinators["fridge"]
+    local = datetime(2026, 9, 5, 10, tzinfo=dt_util.get_default_time_zone())
+    expected = local.astimezone(UTC).isoformat()
     await appliances.update("fridge", {"max_ice_start_time": "2026-09-05T10:00:00"})
-    assert hass.states.get("sensor.fridge_max_ice_start").state == "unknown"
-    await appliances.update("fridge", {"time": "2026-09-05T11:00:00-07:00"})
-    assert hass.states.get("sensor.fridge_max_ice_start").state == "2026-09-05T17:00:00+00:00"
+    assert hass.states.get("sensor.fridge_max_ice_start").state == expected
+    # Like the app, ignore the clock offset, which status reads report in UTC.
+    await appliances.update("fridge", {"time": "2026-09-05T11:00:00-04:00"})
+    assert hass.states.get("sensor.fridge_max_ice_start").state == expected
+    appliances.states["fridge"]["time"] = "2026-09-05T15:00:00+00:00"
+    await coordinator.async_refresh()
+    assert hass.states.get("sensor.fridge_max_ice_start").state == expected
+    await appliances.update("fridge", {"max_ice_start_time": "2026-09-05T10:00:00+02:00"})
+    assert hass.states.get("sensor.fridge_max_ice_start").state == "2026-09-05T08:00:00+00:00"
     await appliances.update("fridge", {"max_ice_start_time": None})
     assert hass.states.get("sensor.fridge_max_ice_start").state == "unknown"
-
-
-async def test_naive_timestamps_use_the_clock_offset_of_their_source(hass, appliances):
-    coordinator = appliances.entry.runtime_data.coordinators["fridge"]
-    await appliances.update("fridge", {"time": "2026-10-07T22:00:00-04:00"})
-    # Status reads have reported the same clock in UTC.
-    appliances.states["fridge"].update(
-        time="2026-10-08T02:00:00+00:00", high_use_start_time="2026-10-08T01:00:00"
-    )
-    await coordinator.async_refresh()
-    assert hass.states.get("sensor.fridge_high_use_start").state == "2026-10-08T01:00:00+00:00"
-    await appliances.update("fridge", {"max_ice_start_time": "2026-10-07T22:30:00"})
-    assert hass.states.get("sensor.fridge_max_ice_start").state == "2026-10-08T02:30:00+00:00"
-    assert hass.states.get("sensor.fridge_high_use_start").state == "2026-10-08T01:00:00+00:00"
 
 
 @pytest.mark.parametrize("value", [None, True, "38", float("nan"), float("inf")])
@@ -1452,7 +1459,7 @@ async def test_unknown_units_omit_temperature_entities(hass, appliances):
     assert hass.states.get("number.oven_probe_target_temperature") is None
     assert hass.states.get("select.oven_cooking_mode").state == "Bake"
     assert hass.states.get("number.oven_kitchen_timer_duration").state == "0"
-    assert hass.states.get("switch.dishwasher_heated_dry").state == "off"
+    assert hass.states.get("switch.dishwasher_extra_dry").state == "off"
 
 
 @pytest.mark.parametrize("appliances", ["F", "C"], indirect=True)
@@ -1480,11 +1487,12 @@ async def test_temperature_readings_and_limits_follow_home_assistant_units(hass,
     freezer = hass.states.get("climate.fridge_freezer")
     assert freezer.attributes["temperature"] == pytest.approx(-17.8)
     oven = hass.states.get("climate.oven_oven")
-    assert oven.attributes["current_temperature"] == pytest.approx(23.9)
+    assert oven.attributes["current_temperature"] is None
     assert oven.attributes["temperature"] == pytest.approx(176.7)
 
     await appliances.update("oven", {"cav_unit_on": True, "cav_cook_mode": 12})
     oven = hass.states.get("climate.oven_oven")
+    assert oven.attributes["current_temperature"] == pytest.approx(23.9)
     assert oven.attributes["min_temp"] == pytest.approx(60)
     assert oven.attributes["max_temp"] == pytest.approx(93.3)
     await hass.services.async_call(
@@ -1568,7 +1576,7 @@ async def test_stream_error_only_affects_its_appliance(hass, appliances):
     await hass.async_block_till_done()
     assert hass.states.get("climate.oven_oven").state == "unavailable"
     assert hass.states.get("switch.oven_lower_oven_light").state == "unavailable"
-    assert hass.states.get("switch.dishwasher_heated_dry").state == "off"
+    assert hass.states.get("switch.dishwasher_extra_dry").state == "off"
 
 
 async def test_nested_json_notifications_update_the_door_entity(hass, appliances):
@@ -1694,20 +1702,21 @@ async def test_upgrade_retires_only_accent_light_number(
 
 
 @pytest.mark.parametrize(
-    ("type_id", "high"),
-    [(None, 130), ("17.11.2.3", 130), ("17.1.1.1", 70), ("17.5.1.1", 70), ("7.1.1", 70)],
+    ("type_id", "options"),
+    [
+        (None, {"Off": 0, "Low": 110, "Medium": 120, "High": 130}),
+        ("17.11.2.3", {"Off": 0, "Low": 110, "Medium": 120, "High": 130}),
+        # Like the app, series 1 offers only on and off, and series 5 and 7 use legacy levels.
+        ("17.1.1.1", {"Off": 0, "On": 100}),
+        ("17.5.1.1", {"Off": 0, "Low": 30, "Medium": 50, "High": 70}),
+        ("7.1.1", {"Off": 0, "Low": 30, "Medium": 50, "High": 70}),
+    ],
 )
-async def test_accent_light_uses_reported_series(hass, appliances, type_id, high):
+async def test_accent_light_uses_reported_series(hass, appliances, type_id, options):
     await appliances.update("fridge", {"appliance_type": type_id})
     entity_id = "select.fridge_accent_light"
-    assert hass.states.get(entity_id).attributes["options"] == [
-        "Off",
-        "On",
-        "Low",
-        "Medium",
-        "High",
-    ]
-    for option, value in (("High", high), ("On", 100)):
+    assert hass.states.get(entity_id).attributes["options"] == list(options)
+    for option, value in reversed(options.items()):
         await hass.services.async_call(
             "select", "select_option", {"entity_id": entity_id, "option": option}, blocking=True
         )
@@ -1715,8 +1724,26 @@ async def test_accent_light_uses_reported_series(hass, appliances, type_id, high
         assert hass.states.get(entity_id).state == option
 
 
+async def test_accent_light_shows_but_does_not_offer_a_reported_on(hass, appliances):
+    await appliances.update("fridge", {"appliance_type": "17.13.3.1", "accent_light_level": 100})
+    entity_id = "select.fridge_accent_light"
+    assert hass.states.get(entity_id).state == "On"
+    assert hass.states.get(entity_id).attributes["options"] == [
+        "Off",
+        "Low",
+        "Medium",
+        "High",
+        "On",
+    ]
+    with pytest.raises(ServiceValidationError, match="only be chosen at the appliance"):
+        await hass.services.async_call(
+            "select", "select_option", {"entity_id": entity_id, "option": "On"}, blocking=True
+        )
+    appliances.client.set_property.assert_not_awaited()
+
+
 async def test_accent_light_accepts_both_reported_encodings(hass, appliances):
-    await appliances.update("fridge", {"appliance_type": "17.1.1.1", "accent_light_level": 30})
+    await appliances.update("fridge", {"appliance_type": "17.5.1.1", "accent_light_level": 30})
     assert hass.states.get("select.fridge_accent_light").state == "Low"
 
     async def write(device_id, key, value):
@@ -1779,6 +1806,8 @@ async def test_diagnostics_count_push_updates(hass, appliances):
         "skipped_reads": 0,
         "missed_updates": 0,
         "channel_reopens": 0,
+        "silent_channels": 0,
+        "connection_renewals": 0,
         "unpushed_changes": {},
         "last_channel_message": None,
     }

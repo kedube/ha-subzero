@@ -38,6 +38,7 @@ def tokens():
 @pytest.fixture(autouse=True)
 def fast_timeouts(monkeypatch):
     monkeypatch.setattr("custom_components.subzero.coordinator.INITIAL_STATE_TIMEOUT", 0)
+    monkeypatch.setattr("custom_components.subzero.coordinator.SNAPSHOT_TIMEOUT", 0)
     monkeypatch.setattr("custom_components.subzero.coordinator.CONTROL_CONFIRM_TIMEOUT", 0.05)
     monkeypatch.setattr("custom_components.subzero.coordinator.CONTROL_PUSH_TIMEOUT", 0.01)
 
@@ -88,6 +89,7 @@ async def cloud_appliance(hass, tokens, request, enable_custom_integrations):
         client.push_connected = True
         client.appliances = AsyncMock(return_value=[Appliance("appliance", "Kitchen", "F")])
         client.state = AsyncMock(side_effect=lambda device_id: dict(state))
+        client.open_channel = AsyncMock()
         client.set_property = AsyncMock(side_effect=write)
         client.set_ice_delay = AsyncMock(side_effect=delay)
         client.exit_ice_delay = AsyncMock(side_effect=exit_delay)
