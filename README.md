@@ -166,7 +166,7 @@ Download diagnostics from the integration or individual device page. Downloads u
 
 Integration diagnostics count appliance notifications received, ignored, or invalid since the last reload. Heartbeats are excluded from the received count. They also show the status refresh interval and whether **Enable polling for changes** is turned off. Each appliance also records parsed snapshots and updates, with the time of the last one, and the time of its last message of any kind, including messages without state. These counts help distinguish incoming messages from a connection that only receives heartbeats; they do not prove every state change was received or applied.
 
-Each appliance also counts periodic status reads, reads skipped for rate limits, reads that found a door change push had not reported, and update channel reopens. A rising missed count means push updates are stopping; if it stays near the reopen count, reopening restores them.
+Each appliance also counts periodic status reads, reads skipped for rate limits, reads that found a door change push had not reported, and update channel reopens. Each missed change triggers one reopen. A rising missed count means push is not delivering door changes; if the update count rises after reopens, reopening restores push, and if it stays flat, changes arrive only through status reads. Counts reset when the integration reloads, including after a Configure change.
 
 Enable debug logging for `custom_components.subzero` to record channel-open attempts, notification types and payload key names, parsed state updates, door changes that push missed, and channel reopens. State values exclude network identifiers and nested objects.
 
