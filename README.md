@@ -37,7 +37,7 @@ Entities are created only for recognized properties that each appliance reports,
 
 Celsius and Fahrenheit appliance settings are supported. Home Assistant displays temperatures and accepts setpoints in your preferred unit. Setpoints use whole-degree Fahrenheit precision, so Celsius requests may be rounded. Appliance units are read at startup and on reload, falling back to the last saved unit if the appliance list is temporarily unavailable. Appliances with unknown units keep all of their non-temperature entities.
 
-Timestamp sensors require an explicit timezone offset, either in the timestamp or in the appliance clock, and otherwise show as unknown.
+Timestamp sensors require an explicit timezone offset, either in the timestamp or in the appliance clock, and otherwise show as unknown. Push messages and status reads can report the appliance clock with different offsets, such as local time and UTC, so a timestamp without an offset uses the clock offset last reported by the same source.
 
 Each appliance reports **Active faults**: the count of currently active faults and their details, refreshed every 30 minutes. Clearing faults happens at the appliance.
 
@@ -105,8 +105,8 @@ Each reported oven cavity has its own entities. First-cavity entity IDs are pres
 | Type | Available properties |
 | --- | --- |
 | Temperatures | Measured oven and probe temperatures, oven and probe setpoints |
-| Status | Door, cooking, preheated, remote ready, probe in use, probe target reached, Gourmet mode |
-| Timers | Cooking timer active or complete, both kitchen timers active or complete, reported start/end times |
+| Status | Door, cooking, preheated, remote ready, probe in use, probe within 10° of target, probe target reached, Gourmet mode |
+| Timers | Cooking timer active, under one minute, or complete; both kitchen timers active, under one minute, or complete; reported start/end times |
 | Cooking mode | Recognized mode name and whether the appliance permits mode changes |
 | Gourmet program | Named program reported by each cavity, such as Baked potato or Fresh pizza |
 | Shared status | Sabbath mode, service required, Wi-Fi signal strength |
@@ -154,19 +154,19 @@ Each appliance has an **Appliance event** entity for automations. It reports eve
 
 The event entity keeps its last occurrence when the connection drops. Events found during a status read are delivered immediately, including while the push connection is recovering.
 
-Startup history is not replayed. The first snapshot or status read after loading only sets a baseline, so events reported while the integration starts do not fire, even when the appliance clock runs ahead. While the integration is loaded, repeated notifications and reconnect history are deduplicated, including when the appliance resets its sequence counter. Events from before the integration loaded are ignored; events that occur while Home Assistant is stopped do not trigger automations on startup. Timestamps must include an offset or use the appliance clock's reported offset.
+Startup history is not replayed. The first snapshot or status read after loading only sets a baseline, so events reported while the integration starts do not fire, even when the appliance clock runs ahead. While the integration is loaded, repeated notifications and reconnect history are deduplicated, including when the appliance resets its sequence counter. Events from before the integration loaded are ignored; events that occur while Home Assistant is stopped do not trigger automations on startup. Timestamps must include an offset or use the appliance clock's reported offset from the same source, push or status read.
 
 Replay protection relies on the appliance clock. A clock five minutes behind Home Assistant can suppress the first five minutes of live events after a reload. If the clock moves backward, events can also be ignored until it catches up with the retained history cutoff.
 
 ## Diagnostics
 
-Wi-Fi signal strength is enabled by default. Uptime, IP address, MAC address, and live reporting mode are diagnostic sensors disabled by default. Enable them from the entity settings when needed.
+Wi-Fi signal strength is enabled by default. Uptime, IP address, MAC address, and live reporting mode are diagnostic sensors disabled by default. Enable them from the entity settings when needed. Appliances cut their uptime to eight characters, so from 100 hours it is accurate to ten seconds, and from 1,000 hours to the minute.
 
 Download diagnostics from the integration or individual device page. Downloads use the cached appliance state and omit account credentials, appliance names, serial numbers, and network identifiers. They also list unrecognized state key names, without their values.
 
 Integration diagnostics count appliance notifications received, ignored, or invalid since the last reload. Heartbeats are excluded from the received count. They also show the status refresh interval and whether **Enable polling for changes** is turned off. Each appliance also records parsed snapshots and updates, with the time of the last one, and the time of its last message of any kind, including messages without state. These counts help distinguish incoming messages from a connection that only receives heartbeats; they do not prove every state change was received or applied.
 
-Each appliance also counts periodic status reads, reads skipped for rate limits, reads that found a door change push had not reported, and update channel reopens. Each missed change triggers one reopen. A rising missed count means push is not delivering door changes; if the update count rises after reopens, reopening restores push, and if it stays flat, changes arrive only through status reads. Counts reset when the integration reloads, including after a Configure change.
+Each appliance also counts periodic status reads, reads skipped for rate limits, reads that found a door change push had not reported, and update channel reopens. Each missed change triggers one reopen. A rising missed count means push is not delivering door changes; if the update count rises after reopens, reopening restores push, and if it stays flat, changes arrive only through status reads. Unpushed changes count, for each property, the periodic reads that found a new value push had not reported, leaving out the clock, uptime, Wi-Fi signal, events, and timestamps. A property listed there either changes without push updates, such as a temperature, or shows that push stopped delivering. Counts reset when the integration reloads, including after a Configure change.
 
 Enable debug logging for `custom_components.subzero` to record channel-open attempts, notification types and payload key names, parsed state updates, door changes that push missed, and channel reopens. State values exclude network identifiers and nested objects.
 

@@ -1,7 +1,7 @@
 """Appliance notification decoding and automation replay protection."""
 
 import json
-from datetime import timedelta
+from datetime import UTC, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -231,6 +231,20 @@ async def test_out_of_order_events_and_equal_timestamps_remain_distinct(hass, cl
     await cloud_appliance.update({"notifs": [first]})
     await cloud_appliance.update({"notifs": [same_time, older, first]})
     assert [item.attributes["code"] for item in event_changes(events)] == [201, 205, 202]
+
+
+async def test_pushed_events_keep_the_push_clock_after_a_status_read(hass, cloud_appliance):
+    local = timezone(timedelta(hours=-4))
+    now = (dt_util.utcnow() + timedelta(seconds=1)).astimezone(local)
+    await cloud_appliance.update({"time": now.isoformat()})
+    # Status reads have reported the same clock in UTC.
+    cloud_appliance.state["time"] = now.astimezone(UTC).isoformat()
+    await cloud_appliance.coordinator.async_refresh()
+    await hass.async_block_till_done()
+    events = async_capture_events(hass, "state_changed")
+    await cloud_appliance.update({"notifs": [record(timestamp=now.replace(tzinfo=None))]})
+    [event] = event_changes(events)
+    assert event.attributes["appliance_timestamp"] == now.isoformat()
 
 
 async def test_event_timestamp_uses_only_reported_offset(hass, cloud_appliance):

@@ -7,7 +7,7 @@ import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, tzinfo
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
@@ -47,10 +47,12 @@ from .const import (
     RECONNECT_DELAY,
     STATE_KEYS,
     STATUS_POLL_INTERVALS,
+    UNCOMPARED_READ_KEYS,
 )
 from .controls import (
     appliance_datetime,
     appliance_type,
+    clock_offset,
     control_matches,
     excluded_properties,
     ice_mode,
@@ -63,6 +65,7 @@ from .controls import (
     supports_air_filter_reset,
     validate_control_properties,
     wash_cancel_enabled,
+    with_clock_offset,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -123,6 +126,10 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             "missed_updates": 0,
             "channel_reopens": 0,
         }
+        # Per property, the periodic reads that found a change push had not reported.
+        self.unpushed_changes: dict[str, int] = {}
+        # The latest appliance clock offset from push messages and from status reads.
+        self._clock_offsets: dict[str, tzinfo] = {}
         self._reopen_channel = False
         self._command_lock = asyncio.Lock()
         self._unsettled = False
@@ -482,7 +489,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             self._read_error = None
             try:
                 try:
-                    data = await self.client.state(self.device_id)
+                    data = self._with_source_clock(await self.client.state(self.device_id), "read")
                 except ApiError:
                     model = self._read_updates.get("appliance_model")
                     if not isinstance(model, str) or not model:
@@ -520,9 +527,27 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
                 self._read_updates = None
                 self._read_error = None
 
+    def _with_source_clock(self, properties: dict, source: str) -> dict:
+        """Read naive timestamps with the latest clock offset from the same source."""
+        if (clock := clock_offset(properties)) is not None:
+            self._clock_offsets[source] = clock
+        return with_clock_offset(properties, self._clock_offsets.get(source))
+
     def _check_missed_updates(self, data: dict) -> None:
-        """Note a door change that a periodic read found before push reported it."""
+        """Note changes, and door changes in particular, a periodic read found before push."""
         self.push_stats["periodic_reads"] += 1
+        compared = (data.keys() & self.data.keys()).difference(
+            UNCOMPARED_READ_KEYS, self._read_updates
+        )
+        unpushed = sorted(key for key in compared if data[key] != self.data[key])
+        for key in unpushed:
+            self.unpushed_changes[key] = self.unpushed_changes.get(key, 0) + 1
+        if unpushed:
+            _LOGGER.debug(
+                "A status read found changes push had not reported for %s: %s",
+                self.device["name"],
+                ", ".join(unpushed),
+            )
         missed = sorted(
             key
             for key in DOOR_KEYS.difference(self._read_updates)
@@ -578,7 +603,9 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
     @callback
     def apply_update(self, update: StateUpdate) -> None:
         self.unrecognized_keys.update(update.properties.keys() - STATE_KEYS)
-        properties = {key: value for key, value in update.properties.items() if key in STATE_KEYS}
+        properties = self._with_source_clock(
+            {key: value for key, value in update.properties.items() if key in STATE_KEYS}, "push"
+        )
         if "appliance_type" in properties and appliance_type(properties) is None:
             # Like the app, an unusable type does not replace the known one.
             del properties["appliance_type"]

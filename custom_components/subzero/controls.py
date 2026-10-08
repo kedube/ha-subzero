@@ -1,7 +1,7 @@
 """Reported control capabilities, appliance interlocks, and protocol values."""
 
 import math
-from datetime import datetime
+from datetime import datetime, tzinfo
 
 from homeassistant.exceptions import ServiceValidationError
 
@@ -28,6 +28,7 @@ from .const import (
     OVEN_PREFIXES,
     OVEN_TEMPERATURE_RANGES,
     SETPOINT_KEYS,
+    TIMESTAMP_KEYS,
     WASH_CYCLES,
     WINE_SETPOINT_KEYS,
     WRITABLE_BOOLEAN_KEYS,
@@ -166,6 +167,46 @@ def appliance_datetime(value, data: dict) -> datetime | None:
         return parsed if parsed.tzinfo is not None else None
     except ValueError, TypeError:
         return None
+
+
+def clock_offset(data: dict) -> tzinfo | None:
+    """The offset of the appliance clock reported in data, if any."""
+    try:
+        return datetime.fromisoformat(data["time"]).tzinfo
+    except KeyError, TypeError, ValueError:
+        return None
+
+
+def with_clock_offset(properties: dict, clock: tzinfo | None) -> dict:
+    """Give naive timestamps the offset of the clock that reported them.
+
+    Push snapshots can report the appliance clock in local time while status reads
+    report it in UTC, so a naive timestamp must not borrow the offset of a later
+    message from the other source.
+    """
+    if clock is None:
+        return properties
+
+    def resolve(value):
+        if not isinstance(value, str):
+            return value
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return value
+        return parsed.replace(tzinfo=clock).isoformat() if parsed.tzinfo is None else value
+
+    resolved = {
+        key: resolve(value) if key in TIMESTAMP_KEYS else value for key, value in properties.items()
+    }
+    if isinstance(resolved.get("notifs"), list):
+        resolved["notifs"] = [
+            {**record, "timestamp": resolve(record["timestamp"])}
+            if isinstance(record, dict) and "timestamp" in record
+            else record
+            for record in resolved["notifs"]
+        ]
+    return resolved
 
 
 def ice_mode(data: dict) -> str | None:

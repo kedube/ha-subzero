@@ -111,7 +111,12 @@ EXCLUDED_PROPERTIES = {
 # Entities the app hides with a discarded property, besides the property's own.
 DEPENDENT_ENTITY_KEYS = {
     "air_filter_pct_remaining": ("reset_air_filter",),
-    "cav2_probe_on": ("cav2_probe_at_set_temp", "cav2_probe_set_temp", "cav2_probe_temp"),
+    "cav2_probe_on": (
+        "cav2_probe_at_set_temp",
+        "cav2_probe_within_10deg",
+        "cav2_probe_set_temp",
+        "cav2_probe_temp",
+    ),
     "high_use_on": ("high_use_start_time", "high_use_end_time"),
     "ice_maker_on": (
         "ice_maker_mode",
@@ -123,6 +128,7 @@ DEPENDENT_ENTITY_KEYS = {
     "kitchen_timer2_active": (
         "kitchen_timer2_duration",
         "kitchen_timer2_complete",
+        "kitchen_timer2_within_1min",
         "kitchen_timer2_start_time",
         "kitchen_timer2_end_time",
         "dismiss_kitchen_timer2",
@@ -349,7 +355,8 @@ WASH_CYCLES = {
 }
 WASH_STATUSES = {
     0: "Idle",
-    1: "Start pending",
+    # Upstream calls this Start pending, but an idle DW2450 reports it.
+    1: "Ready",
     2: "Running",
     3: "Restart pending",
     4: "Cancel pending",
@@ -483,16 +490,18 @@ BINARY_KEYS = {
             "remote_ready",
             "probe_on",
             "probe_at_set_temp",
+            "probe_within_10deg",
             "gourmet_mode_on",
             "mode_change_enabled",
             "cook_timer_active",
             "cook_timer_complete",
+            "cook_timer_within_1min",
         )
     ),
     *(
         f"{prefix}_{state}"
         for prefix in KITCHEN_TIMERS.values()
-        for state in ("active", "complete")
+        for state in ("active", "complete", "within_1min")
     ),
     "door_ajar",
     "wash_cycle_on",
@@ -523,6 +532,9 @@ TIMESTAMP_KEYS = {
     "delay_start_timer_start_time",
     "delay_start_timer_end_time",
 }
+# Not compared when counting changes a periodic read found without push: values that
+# change between any two reads, and timestamps, whose offset depends on their source.
+UNCOMPARED_READ_KEYS = {"time", "uptime", "ap_rssi", "notifs", *TIMESTAMP_KEYS}
 STATE_KEYS = (
     SENSOR_KEYS
     | BINARY_KEYS

@@ -166,6 +166,40 @@ async def test_status_refresh_without_a_missed_door_change_keeps_the_channel(has
     client.open_channel.assert_not_awaited()
     assert coordinator.push_stats["periodic_reads"] == 1
     assert coordinator.push_stats["missed_updates"] == 0
+    assert coordinator.unpushed_changes == {"ref_set_temp": 1}
+
+
+async def test_status_refresh_counts_only_changes_push_should_have_reported(hass, loaded):
+    entry, client, updates, _, _ = loaded
+    coordinator = entry.runtime_data.coordinators["test-fridge"]
+    read = dict(client.state.return_value)
+    await updates.put(
+        StateUpdate(
+            {
+                "time": "2026-10-08T02:00:00-04:00",
+                "uptime": "387:52:1",
+                "ap_rssi": -50,
+                "ref_set_temp": 37,
+                "version": {"fw": "1.0"},
+            },
+            full=False,
+        )
+    )
+    await hass.async_block_till_done()
+    client.state.return_value = {
+        **read,
+        "time": "2026-10-08T06:10:00+00:00",
+        "uptime": "388:02:3",
+        "ap_rssi": -52,
+        "ref_set_temp": 38,
+        "version": {"fw": "1.1"},
+    }
+    for minutes in (10, 20):
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=minutes, seconds=1))
+        await hass.async_block_till_done()
+    assert coordinator.push_stats["periodic_reads"] == 2
+    assert coordinator.unpushed_changes == {"ref_set_temp": 1, "version": 1}
+    assert coordinator.push_stats["missed_updates"] == 0
 
 
 async def test_door_change_pushed_during_a_status_refresh_is_not_missed(hass, loaded):
@@ -187,6 +221,7 @@ async def test_door_change_pushed_during_a_status_refresh_is_not_missed(hass, lo
     assert hass.states.get("binary_sensor.kitchen_refrigerator_door").state == "on"
     client.open_channel.assert_not_awaited()
     assert coordinator.push_stats["missed_updates"] == 0
+    assert coordinator.unpushed_changes == {}
 
 
 async def test_failed_channel_reopen_keeps_the_appliance_available(hass, loaded):
@@ -1600,6 +1635,7 @@ DISCARDING_OVEN = {
     "cav2_set_temp": 350,
     "cav2_probe_on": True,
     "cav2_probe_at_set_temp": False,
+    "cav2_probe_within_10deg": False,
     "cav2_probe_temp": 120,
     "cav2_probe_set_temp": 160,
 }
@@ -1614,6 +1650,7 @@ async def test_a_discarded_probe_hides_its_entities(hass, cloud_appliance):
         for key in (
             "cav2_probe_on",
             "cav2_probe_at_set_temp",
+            "cav2_probe_within_10deg",
             "cav2_probe_temp",
             "cav2_probe_set_temp",
         )

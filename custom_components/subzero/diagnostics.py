@@ -23,6 +23,7 @@ def appliance_diagnostics(
         "temperature_unit": coordinator.device.get("temperature_unit"),
         "push": {
             **coordinator.push_stats,
+            "unpushed_changes": dict(sorted(coordinator.unpushed_changes.items())),
             "last_channel_message": coordinator.client.last_messages.get(coordinator.device_id),
         },
         "unrecognized_state_keys": sorted(coordinator.unrecognized_keys),
