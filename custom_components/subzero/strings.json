@@ -1,5 +1,6 @@
 {
   "config": {
+    "initiate_flow": {"user": "Add account"},
     "step": {
       "user": {
         "title": "Sign in to Sub-Zero",

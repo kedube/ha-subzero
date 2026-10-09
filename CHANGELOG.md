@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed
+
+- The integration page's add button reads **Add account** instead of **Add hub**, since each entry is a Sub-Zero account. Home Assistant versions without custom button labels keep showing Add hub.
+
+## 0.8.1 (2026-10-09)
+
 ### Upgrade notes
 
 - **Firebase appliance alerts are now opt-in.** New installations start with them off; turn them on during setup or under **Configure**. Installations that were already receiving them keep them on.
