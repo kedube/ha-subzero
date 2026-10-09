@@ -366,7 +366,7 @@ class SubZeroSensor(SubZeroEntity, SensorEntity):
             )
         value = self.coordinator.data.get(key)
         if self.entity_description.device_class == SensorDeviceClass.TIMESTAMP:
-            return appliance_datetime(value)
+            return appliance_datetime(value, self.coordinator.clock_zone)
         if (
             key.endswith("_gourmet_recipe")
             and self.coordinator.data.get(key.replace("recipe", "mode_on")) is False

@@ -1431,6 +1431,61 @@ async def test_phone_alert_endpoints_accept_primitive_responses(
     assert requests[4][3] == {"valueTypes": ["101"], "deviceId": "test-device"}
 
 
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        # Like the app, the lookup is a list holding the appliance's record.
+        (
+            [
+                {"id": "other", "deviceId": "other-device"},
+                {"id": "ours", "deviceId": "test-device"},
+            ],
+            {"id": "ours", "deviceId": "test-device"},
+        ),
+        ([], None),
+        ([{"deviceId": "test-device"}], None),
+        ({"id": "registration-id"}, {"id": "registration-id"}),
+    ],
+)
+async def test_alert_registration_reads_the_appliance_record(
+    aiohttp_server, monkeypatch, socket_enabled, tokens, body, expected
+):
+    async def lookup(request):
+        return web.json_response(body)
+
+    app = web.Application()
+    app.router.add_route("GET", "/consumerapp/api/notification/{path:.*}", lookup)
+    server = await aiohttp_server(app)
+    monkeypatch.setattr(api, "API_BASE", str(server.make_url("/")).rstrip("/"))
+    async with aiohttp.ClientSession() as session:
+        client = api.SubZeroClient(session, "test-key", tokens)
+        assert await client.alert_registration("test-psid", "test-device") == expected
+
+
+@pytest.mark.parametrize(("subscribed", "deletes"), [([{"valueType": "101"}], 1), ([], 0)])
+async def test_unsubscribing_all_alerts_removes_only_current_ones(
+    aiohttp_server, monkeypatch, socket_enabled, tokens, subscribed, deletes
+):
+    requests = []
+
+    async def alerts(request):
+        body = await request.json() if request.method == "DELETE" else None
+        requests.append((request.method, body))
+        return web.json_response(subscribed if request.method == "GET" else True)
+
+    app = web.Application()
+    app.router.add_route("*", "/consumerapp/api/notification/{path:.*}", alerts)
+    server = await aiohttp_server(app)
+    monkeypatch.setattr(api, "API_BASE", str(server.make_url("/")).rstrip("/"))
+    async with aiohttp.ClientSession() as session:
+        await api.SubZeroClient(session, "test-key", tokens).unsubscribe_all_alerts(
+            "test-psid", "test-device"
+        )
+    assert [method for method, _ in requests] == ["GET"] + ["DELETE"] * deletes
+    if deletes:
+        assert requests[1][1] == {"valueTypes": ["101"], "deviceId": "test-device"}
+
+
 async def test_http_404_on_other_endpoints_keeps_the_status(fault_server, tokens):
     async with aiohttp.ClientSession() as session:
         with pytest.raises(api.ApiError) as error:

@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from functools import partial
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -10,7 +11,7 @@ import pytest
 from homeassistant.helpers import device_registry as dr
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.subzero.api import Appliance, StateUpdate, token_state
+from custom_components.subzero.api import Appliance, StateUpdate, SubZeroClient, token_state
 from custom_components.subzero.const import DOMAIN
 
 pytest_plugins = ["pytest_homeassistant_custom_component"]
@@ -55,12 +56,13 @@ async def cloud_appliance(hass, tokens, request, enable_custom_integrations):
     entry = MockConfigEntry(
         domain=DOMAIN,
         version=2,
-        minor_version=3,
+        minor_version=4,
         title="Account",
         data={
             "tokens": token_state(tokens),
             "devices": {"appliance": {"name": "Kitchen", "temperature_unit": "F"}},
         },
+        options={"firebase_alerts": True},
     )
     entry.add_to_hass(hass)
     updates = asyncio.Queue()
@@ -100,6 +102,8 @@ async def cloud_appliance(hass, tokens, request, enable_custom_integrations):
         client.set_ice_delay = AsyncMock(side_effect=delay)
         client.exit_ice_delay = AsyncMock(side_effect=exit_delay)
         client.appliance_faults = AsyncMock(return_value=[])
+        # Built on the mocked alert requests that each test sets up.
+        client.unsubscribe_all_alerts = partial(SubZeroClient.unsubscribe_all_alerts, client)
         client.watch = watch
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()

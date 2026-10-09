@@ -2,7 +2,8 @@
 
 import asyncio
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
+from functools import partial
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, call, patch
 
@@ -16,16 +17,19 @@ from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_system import METRIC_SYSTEM, US_CUSTOMARY_SYSTEM
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_capture_events
 
+from custom_components.subzero import async_remove_entry
 from custom_components.subzero.api import (
     ApiError,
     Appliance,
     ApplianceFault,
     StateUpdate,
+    SubZeroClient,
     parse_notification,
     token_state,
 )
 from custom_components.subzero.auth import InvalidAuth
 from custom_components.subzero.const import DOMAIN
+from custom_components.subzero.controls import clock_zone
 from custom_components.subzero.diagnostics import (
     async_get_config_entry_diagnostics,
     async_get_device_diagnostics,
@@ -138,8 +142,12 @@ async def appliances(hass, tokens, request, unit_system):
         },
     }
     updates = asyncio.Queue()
-    # `clock` is how far the appliance's clock is from Home Assistant's.
-    behavior = {"accept": True, "push": True, "clock": timedelta(0)}
+    # `zone` is the appliance's local time zone, when it reports times without an offset.
+    behavior = {"accept": True, "push": True, "zone": None}
+
+    def appliance_time(value):
+        zone = behavior["zone"]
+        return value.astimezone(zone).replace(tzinfo=None) if zone else value
 
     async def update(device_id, properties, *, full=False):
         if full:
@@ -158,12 +166,12 @@ async def appliances(hass, tokens, request, unit_system):
             return
         if key in {"kitchen_timer_duration", "kitchen_timer2_duration"}:
             prefix = key.removesuffix("_duration")
-            start = dt_util.utcnow() + behavior["clock"]
+            start = dt_util.utcnow()
             properties = {
                 f"{prefix}_active": value > 0,
                 f"{prefix}_complete": False,
-                f"{prefix}_start_time": start.isoformat() if value else None,
-                f"{prefix}_end_time": (start + timedelta(minutes=value)).isoformat()
+                f"{prefix}_start_time": appliance_time(start).isoformat() if value else None,
+                f"{prefix}_end_time": appliance_time(start + timedelta(minutes=value)).isoformat()
                 if value
                 else None,
             }
@@ -1120,11 +1128,8 @@ async def test_timer_ack_without_correct_end_time_is_not_success(
 
 
 @pytest.mark.parametrize("push", [True, False])
-@pytest.mark.parametrize("clock", [timedelta(minutes=-7), timedelta(minutes=5)])
-async def test_timer_start_is_confirmed_whatever_the_appliance_clock_reads(
-    hass, appliances, push, clock
-):
-    appliances.behavior.update(push=push, clock=clock)
+async def test_timer_restarts_are_confirmed(hass, appliances, push):
+    appliances.behavior["push"] = push
     entity_id = "number.oven_kitchen_timer_duration"
     for minutes in (15, 15, 30):
         await hass.services.async_call(
@@ -1134,33 +1139,55 @@ async def test_timer_start_is_confirmed_whatever_the_appliance_clock_reads(
     assert appliances.client.set_property.await_count == 3
 
 
-async def test_timer_end_time_in_another_format_is_not_a_restart(hass, appliances):
-    # A timer running on an appliance clock 10 minutes ahead.
-    end = dt_util.now() + timedelta(minutes=25)
-    start = end - timedelta(minutes=15)
-    await appliances.update(
-        "oven",
-        {
-            "kitchen_timer_active": True,
-            "kitchen_timer_start_time": start.replace(tzinfo=None).isoformat(),
-            "kitchen_timer_end_time": end.replace(tzinfo=None).isoformat(),
-        },
-    )
-    in_utc = {"kitchen_timer_end_time": end.astimezone(UTC).isoformat()}
+async def test_rejected_timer_write_is_not_confirmed_by_a_late_restart(hass, appliances):
+    entity_id = "number.oven_kitchen_timer_duration"
+    started = dt_util.utcnow() - timedelta(minutes=3)
+    earlier = {
+        "kitchen_timer_active": True,
+        "kitchen_timer_start_time": started.isoformat(),
+        "kitchen_timer_end_time": (started + timedelta(minutes=15)).isoformat(),
+    }
 
     async def write(device_id, key, value):
-        # The appliance ignores the write but reports the same end time in UTC.
-        await appliances.updates.put((device_id, StateUpdate(in_utc, full=False)))
+        # A timer restarted minutes ago arrives late, and the API rejects this write.
+        await appliances.update("oven", earlier)
+        raise ApiError("Sub-Zero returned HTTP 503.")
 
     appliances.client.set_property.side_effect = write
     with pytest.raises(HomeAssistantError, match="did not confirm"):
         await hass.services.async_call(
-            "number",
-            "set_value",
-            {"entity_id": "number.oven_kitchen_timer_duration", "value": 15},
-            blocking=True,
+            "number", "set_value", {"entity_id": entity_id, "value": 15}, blocking=True
         )
     assert appliances.client.set_property.await_count == 3
+
+
+async def test_timer_times_without_an_offset_follow_the_pushed_clock(hass, appliances):
+    # The appliance keeps local time three hours ahead of Home Assistant's time zone.
+    zone = timezone(dt_util.now().utcoffset() + timedelta(hours=3))
+    appliances.behavior["zone"] = zone
+    entity_id = "number.oven_kitchen_timer_duration"
+    # Until a push reports the appliance clock, they read as Home Assistant's local time.
+    with pytest.raises(HomeAssistantError, match="did not confirm"):
+        await hass.services.async_call(
+            "number", "set_value", {"entity_id": entity_id, "value": 15}, blocking=True
+        )
+    await appliances.update("oven", {"time": dt_util.now(zone).isoformat()})
+    # Status reads report the clock in UTC, which does not replace the pushed zone.
+    appliances.states["oven"]["time"] = dt_util.utcnow().isoformat()
+    await appliances.entry.runtime_data.coordinators["oven"].async_refresh()
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": entity_id, "value": 20}, blocking=True
+    )
+    assert hass.states.get(entity_id).state == "20"
+    assert appliances.client.set_property.await_count == 4
+
+
+def test_clock_zone_prefers_home_time_zone_when_offsets_match(hass):
+    home = dt_util.get_default_time_zone()
+    assert clock_zone(dt_util.now().isoformat()) is home
+    assert clock_zone("2026-10-05T15:29:24+05:30") == timezone(timedelta(hours=5, minutes=30))
+    for value in ("2026-10-05T15:29:24", "not a time", None):
+        assert clock_zone(value) is None
 
 
 async def test_appliance_without_a_status_keeps_its_device_details(hass, appliances):
@@ -1269,6 +1296,46 @@ async def test_dishwasher_cancel_follows_wash_status(hass, appliances):
     assert hass.states.get(entity_id).state == "unavailable"
 
 
+@pytest.mark.parametrize("accept", [True, False])
+async def test_remote_delayed_start_can_be_canceled(hass, appliances, accept):
+    entity_id = "button.dishwasher_cancel_wash_cycle"
+    start = dt_util.utcnow()
+    # A delayed start set remotely leaves the dishwasher reporting it is waiting to start.
+    await appliances.update(
+        "dishwasher",
+        {
+            "wash_status": 1,
+            "wash_cycle_on": False,
+            "remote_ready": True,
+            "delay_start_timer_duration": 2,
+            "delay_start_timer_active": True,
+            "delay_start_timer_start_time": start.isoformat(),
+            "delay_start_timer_end_time": (start + timedelta(hours=2)).isoformat(),
+        },
+    )
+    assert hass.states.get(entity_id).state != "unavailable"
+
+    async def write(device_id, key, value):
+        if accept:
+            ended = {"delay_start_timer_active": False, "delay_start_timer_end_time": None}
+            appliances.states[device_id].update(ended)
+            await appliances.updates.put((device_id, StateUpdate(ended, full=False)))
+
+    appliances.client.set_property.side_effect = write
+    if accept:
+        await hass.services.async_call("button", "press", {"entity_id": entity_id}, blocking=True)
+        assert hass.states.get(entity_id).state == "unavailable"
+    else:
+        # The cycle already reports off, which cannot confirm the cancel.
+        with pytest.raises(HomeAssistantError, match="did not confirm"):
+            await hass.services.async_call(
+                "button", "press", {"entity_id": entity_id}, blocking=True
+            )
+    assert appliances.client.set_property.await_args_list == [
+        call("dishwasher", "wash_cycle_on", False)
+    ] * (1 if accept else 3)
+
+
 @pytest.mark.parametrize("status", [5, 7])
 async def test_failed_cancel_is_not_confirmed_by_a_cycle_already_off(hass, appliances, status):
     entity_id = "button.dishwasher_cancel_wash_cycle"
@@ -1294,7 +1361,7 @@ async def test_queued_cancel_rechecks_the_wash_status(appliances):
     appliances.client.set_property.assert_not_awaited()
 
 
-async def test_dishwasher_modes_follow_capability_and_block_start_in_sabbath(hass, appliances):
+async def test_dishwasher_modes_follow_capability_and_sabbath_allows_only_off(hass, appliances):
     entity_id = "select.dishwasher_mode"
     assert hass.states.get(entity_id) is None
     await appliances.update("dishwasher", {"mode": 0, "remote_ready": True})
@@ -1303,16 +1370,19 @@ async def test_dishwasher_modes_follow_capability_and_block_start_in_sabbath(has
             "select", "select_option", {"entity_id": entity_id, "option": option}, blocking=True
         )
         appliances.client.set_property.assert_awaited_with("dishwasher", "mode", value)
-        # Like the app, Sabbath mode disables every control, including the mode itself.
-        assert hass.states.get(entity_id).state == (option if value != 2 else "unavailable")
+        assert hass.states.get(entity_id).state == option
     assert hass.states.get("button.dishwasher_start_wash_cycle").state == "unavailable"
-    with pytest.raises(ServiceValidationError, match="Sabbath mode is on"):
-        await appliances.entry.runtime_data.coordinators["dishwasher"].async_set_properties(
-            {"wash_cycle_on": True}
-        )
-    await appliances.update("dishwasher", {"mode": 0})
+    coordinator = appliances.entry.runtime_data.coordinators["dishwasher"]
+    for properties in ({"wash_cycle_on": True}, {"mode": 1}, {"heated_dry_on": True}):
+        with pytest.raises(ServiceValidationError, match="Sabbath mode is on"):
+            await coordinator.async_set_properties(properties)
+    # Turning Sabbath mode off is the one change it allows.
+    await hass.services.async_call(
+        "select", "select_option", {"entity_id": entity_id, "option": "Off"}, blocking=True
+    )
+    appliances.client.set_property.assert_awaited_with("dishwasher", "mode", 0)
     assert hass.states.get(entity_id).state == "Off"
-    assert appliances.client.set_property.await_count == 3
+    assert appliances.client.set_property.await_count == 4
     await appliances.update("oven", {"mode": 0})
     assert hass.states.get("select.oven_mode") is None
 
@@ -1463,15 +1533,16 @@ async def test_unknown_enum_values_do_not_become_known_modes(hass, appliances):
     assert hass.states.get("select.oven_cooking_mode").state == "unavailable"
 
 
-async def test_naive_timestamps_use_the_home_time_zone(hass, appliances):
+async def test_naive_timestamps_use_the_pushed_clock_zone(hass, appliances):
     coordinator = appliances.entry.runtime_data.coordinators["fridge"]
     local = datetime(2026, 9, 5, 10, tzinfo=dt_util.get_default_time_zone())
-    expected = local.astimezone(UTC).isoformat()
     await appliances.update("fridge", {"max_ice_start_time": "2026-09-05T10:00:00"})
-    assert hass.states.get("sensor.fridge_max_ice_start").state == expected
-    # Like the app, ignore the clock offset, which status reads report in UTC.
+    # Until a push reports the appliance clock, like the app, Home Assistant's time zone.
+    assert hass.states.get("sensor.fridge_max_ice_start").state == local.astimezone(UTC).isoformat()
+    expected = "2026-09-05T14:00:00+00:00"
     await appliances.update("fridge", {"time": "2026-09-05T11:00:00-04:00"})
     assert hass.states.get("sensor.fridge_max_ice_start").state == expected
+    # Status reads report the clock in UTC, which does not replace the pushed zone.
     appliances.states["fridge"]["time"] = "2026-09-05T15:00:00+00:00"
     await coordinator.async_refresh()
     assert hass.states.get("sensor.fridge_max_ice_start").state == expected
@@ -1710,7 +1781,7 @@ async def test_minor_upgrade_removes_only_retired_entities(hass, appliances):
     hass.config_entries.async_update_entry(entry, minor_version=1)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert entry.minor_version == 3
+    assert entry.minor_version == 4
     for entity in retired:
         assert registry.async_get(entity.entity_id) is None
         assert hass.states.get(entity.entity_id) is None
@@ -1720,6 +1791,64 @@ async def test_minor_upgrade_removes_only_retired_entities(hass, appliances):
         assert current.disabled_by is switch.disabled_by
     assert registry.async_get(mode.entity_id).id == mode.id
     assert hass.states.get(mode.entity_id).state == "off"
+
+
+@pytest.mark.parametrize(
+    ("options", "registered", "enabled"),
+    [({}, True, True), ({}, False, False), ({"firebase_alerts": False}, True, False)],
+)
+async def test_upgrade_keeps_firebase_alerts_on_only_where_already_registered(
+    hass, appliances, options, registered, enabled
+):
+    entry = appliances.entry
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    registration = {"fcm_psid": "test-psid", "fcm_registration_ids": {"fridge": "registration-id"}}
+    hass.config_entries.async_update_entry(
+        entry,
+        data={**entry.data, **(registration if registered else {})},
+        options=options,
+        minor_version=3,
+    )
+    with patch("custom_components.subzero.fcm.FcmAlerts.start_cleanup"):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    assert entry.minor_version == 4
+    assert entry.options.get("firebase_alerts", False) is enabled
+
+
+async def test_removing_the_integration_removes_its_alert_subscriptions(hass, appliances):
+    entry = appliances.entry
+    client = appliances.client
+    subscribed = {"fridge": {101, 106}, "oven": {209}, "dishwasher": set()}
+    client.alert_types = AsyncMock(side_effect=lambda psid, device_id: subscribed[device_id])
+
+    async def unsubscribe(psid, device_id, codes):
+        if device_id == "fridge":
+            raise ApiError("Sub-Zero returned HTTP 503.")
+
+    client.unsubscribe_alerts = AsyncMock(side_effect=unsubscribe)
+    client.unsubscribe_all_alerts = partial(SubZeroClient.unsubscribe_all_alerts, client)
+    hass.config_entries.async_update_entry(
+        entry,
+        data={
+            **entry.data,
+            "fcm_psid": "test-psid",
+            "fcm_registration_ids": {key: f"{key}-registration" for key in subscribed},
+        },
+    )
+    await async_remove_entry(hass, entry)
+    # One appliance failing does not keep the others subscribed.
+    assert client.unsubscribe_alerts.await_args_list == [
+        call("test-psid", "fridge", {101, 106}),
+        call("test-psid", "oven", {209}),
+    ]
+
+
+async def test_removing_the_integration_without_alerts_sends_nothing(hass, appliances):
+    appliances.client.alert_types = AsyncMock()
+    await async_remove_entry(hass, appliances.entry)
+    appliances.client.alert_types.assert_not_awaited()
 
 
 @pytest.mark.parametrize("minor_version", [1, 2])
@@ -1759,7 +1888,7 @@ async def test_upgrade_retires_only_accent_light_number(
     ]
     assert registry.async_get(retired.entity_id) is None
     assert hass.states.get(retired.entity_id) is None
-    assert entry.minor_version == 3
+    assert entry.minor_version == 4
     current = registry.async_get(light.entity_id)
     assert current.id == light.id
     assert current.disabled_by is er.RegistryEntryDisabler.USER
@@ -1876,6 +2005,8 @@ async def test_diagnostics_count_push_updates(hass, appliances):
         "silent_channels": 0,
         "connection_renewals": 0,
         "unpushed_changes": {},
+        "recent_silent_channels": [],
+        "recent_connection_renewals": [],
         "last_channel_message": None,
     }
     before = await async_get_device_diagnostics(hass, appliances.entry, device)

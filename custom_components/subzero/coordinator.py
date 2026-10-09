@@ -4,10 +4,11 @@ import asyncio
 import logging
 import random
 import time
+from collections import deque
 from collections.abc import AsyncIterator, Callable, Collection
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, tzinfo
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
@@ -51,8 +52,10 @@ from .const import (
     UNCOMPARED_READ_KEYS,
 )
 from .controls import (
+    SABBATH_LOCKED,
     appliance_datetime,
     appliance_type,
+    clock_zone,
     control_matches,
     excluded_properties,
     ice_mode,
@@ -61,6 +64,7 @@ from .controls import (
     is_hood,
     is_ice_maker,
     is_oven,
+    sabbath_allows,
     sabbath_enabled,
     start_properties,
     supports_air_filter_reset,
@@ -73,6 +77,11 @@ INITIAL_STATE_TIMEOUT = 16
 # The app sends a fallback get when no properties arrive this many seconds
 # after it opens a channel.
 SNAPSHOT_TIMEOUT = 16
+# Sequence 0 does not tell events apart, so a live event with it copies an earlier
+# Firebase alert only within this many seconds of it.
+SEQUENCE_ZERO_COPY_WINDOW = timedelta(seconds=5)
+# How many silent reopens and connection renewals diagnostics list, newest last.
+RECENT_PUSH_EVENTS = 10
 # Set in the task of a periodic status read until the read starts.
 _periodic_read: ContextVar[bool] = ContextVar("subzero_periodic_read", default=False)
 
@@ -96,8 +105,8 @@ def status_poll_interval(entry: ConfigEntry) -> int:
 
 
 def firebase_alerts_enabled(entry: ConfigEntry) -> bool:
-    """New and existing entries use Firebase alerts unless the owner turns them off."""
-    return entry.options.get(CONF_FIREBASE_ALERTS) is not False
+    """Firebase alerts are used only when the owner turns them on."""
+    return entry.options.get(CONF_FIREBASE_ALERTS) is True
 
 
 class SubZeroCoordinator(DataUpdateCoordinator[dict]):
@@ -125,6 +134,8 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         self.device = dict(device)
         self._read_failed = read_failed
         self.unrecognized_keys: set[str] = set()
+        # The zone of the appliance clock's last pushed time, for times without an offset.
+        self.clock_zone: tzinfo | None = None
         self.push_stats: dict[str, int | str | None] = {
             "snapshots": 0,
             "updates": 0,
@@ -138,6 +149,9 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         }
         # Per property, the periodic reads that found a change push had not reported.
         self.unpushed_changes: dict[str, int] = {}
+        # When recent silent reopens and renewals happened, to compare across appliances.
+        self.silent_channel_times: deque[str] = deque(maxlen=RECENT_PUSH_EVENTS)
+        self.connection_renewal_times: deque[str] = deque(maxlen=RECENT_PUSH_EVENTS)
         self._channel_snapshot: asyncio.Future[None] | None = None
         self._renewed = False
         self._command_lock = asyncio.Lock()
@@ -187,6 +201,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             # in case this appliance never answers a reopen.
             self._renewed = True
             self.push_stats["connection_renewals"] += 1
+            self.connection_renewal_times.append(dt_util.utcnow().isoformat())
             _LOGGER.debug("Renewing push because %s stopped answering", self.device["name"])
             self.client.renew_connection()
 
@@ -214,6 +229,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
                 return None
             except TimeoutError:
                 self.push_stats["silent_channels"] += 1
+                self.silent_channel_times.append(dt_util.utcnow().isoformat())
                 _LOGGER.debug(
                     "%s pushed no snapshot after its channel reopened", self.device["name"]
                 )
@@ -240,7 +256,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         self._history_seen |= history
         events = []
         for record in notification_records(properties):
-            timestamp = appliance_datetime(record["timestamp"])
+            timestamp = appliance_datetime(record["timestamp"], self.clock_zone)
             if timestamp is not None:
                 events.append((timestamp, record["notif_seq"], record["notif_type"]))
         for identity in sorted(events):
@@ -267,6 +283,11 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
                 self._paired_events.add(identity)
             return False
         counterparts = {"channel", "history"} if source == "firebase" else {"firebase"}
+        window = (
+            SEQUENCE_ZERO_COPY_WINDOW
+            if source == "channel" and sequence == 0
+            else timedelta(minutes=5)
+        )
         counterpart = next(
             (
                 old
@@ -274,7 +295,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
                 if old not in self._paired_events
                 and self._event_sources[old] in counterparts
                 and old[1:] == (sequence, code)
-                and abs(old[0] - timestamp) <= timedelta(minutes=5)
+                and abs(old[0] - timestamp) <= window
             ),
             None,
         )
@@ -288,7 +309,8 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             del self._event_sources[oldest]
             self._paired_events.discard(oldest)
             self._event_cutoff = max(self._event_cutoff, oldest[0] + timedelta(microseconds=1))
-        if (source in {"firebase", "history"} and counterpart is not None) or not deliver:
+        # Each copy, whichever source reports it first, fires the event once.
+        if counterpart is not None or not deliver:
             return False
         event = {
             "code": code,
@@ -323,21 +345,22 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         return info
 
     @asynccontextmanager
-    async def _command(self) -> AsyncIterator[None]:
+    async def _command(self, properties: dict | None = None) -> AsyncIterator[None]:
         """Serialize commands.
 
         A cancelled command can still change the appliance after the last read, so
-        the next command reads state before deciding what to write.
+        the next command reads state before deciding what to write. `properties`
+        are the writes a command makes, if they are all it does.
         """
         async with self._command_lock:
             if self._unsettled:
                 await self.async_refresh()
                 self._unsettled = False
-            if sabbath_enabled(self.data):
-                # Like the app, which disables every control, including Sabbath mode itself.
-                raise ServiceValidationError(
-                    "Sabbath mode is on. Change settings at the appliance."
-                )
+            if sabbath_enabled(self.data) and not (
+                properties and all(sabbath_allows(key, value) for key, value in properties.items())
+            ):
+                # Like the appliance, which accepts nothing but turning Sabbath mode off.
+                raise ServiceValidationError(SABBATH_LOCKED)
             try:
                 yield
             except asyncio.CancelledError:
@@ -351,7 +374,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         which is how the app starts ovens and cancels wash cycles. A value the appliance already reports
         is re-sent as is, without the checks a change needs.
         """
-        async with self._command():
+        async with self._command(properties):
             await self._async_write(dict(properties), force=force)
 
     async def async_start(self, key: str, temperature: int | None = None) -> None:
@@ -390,12 +413,10 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         changes = {
             key: value
             for key, value in properties.items()
-            if not (force and control_matches(self.data, key, value, now))
+            if not (force and control_matches(self.data, key, value, now, self.clock_zone))
         }
         if changes or not force:
             validate_control_properties(self.data, self.device.get("temperature_unit"), changes)
-        # Updates replace state rather than change it, so this keeps the state before writing.
-        previous = self.data
         requested_at = {}
         try:
             for key, value in properties.items():
@@ -409,13 +430,15 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
                         # Setting a finished timer to 0 clears it, as the app does.
                         and (value > 0 or self.data.get(f"{KITCHEN_TIMERS[key]}_complete") is True)
                     )
-                    or not control_matches(self.data, key, value, requested_at[key])
+                    or not control_matches(
+                        self.data, key, value, requested_at[key], self.clock_zone
+                    )
                 ):
                     requested_at[key] = await self._async_set_property(
                         key, value, resend=key not in changes
                     )
             if not self.last_update_success or any(
-                not control_matches(self.data, key, value, requested_at[key], previous)
+                not control_matches(self.data, key, value, requested_at[key], self.clock_zone)
                 for key, value in properties.items()
             ):
                 raise HomeAssistantError("The appliance did not confirm the requested setting.")
@@ -465,14 +488,13 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         self, key: str, value: bool | int, *, resend: bool = False
     ) -> datetime:
         last_error = None
-        previous = self.data
         for attempt in range(3):
             if not self.last_update_success:
                 if attempt:
                     break
                 raise ServiceValidationError("The appliance is unavailable.")
             requested_at = dt_util.utcnow()
-            matched = control_matches(self.data, key, value, requested_at)
+            matched = control_matches(self.data, key, value, requested_at, self.clock_zone)
             if not resend or not matched:
                 validate_control_properties(
                     self.data, self.device.get("temperature_unit"), {key: value}
@@ -483,7 +505,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             @callback
             def confirm() -> None:
                 if self.last_update_success and control_matches(
-                    self.data, key, value, requested_at, previous
+                    self.data, key, value, requested_at, self.clock_zone
                 ):
                     confirmed.set()
                 else:
@@ -705,6 +727,8 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
     @callback
     def apply_update(self, update: StateUpdate) -> None:
         self.unrecognized_keys.update(update.properties.keys() - STATE_KEYS)
+        if zone := clock_zone(update.properties.get("time")):
+            self.clock_zone = zone
         properties = {key: value for key, value in update.properties.items() if key in STATE_KEYS}
         if "appliance_type" in properties and appliance_type(properties) is None:
             # Like the app, an unusable type does not replace the known one.

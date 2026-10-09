@@ -626,7 +626,10 @@ class SubZeroClient:
         )
 
     async def alert_registration(self, psid: str, device_id: str) -> dict | None:
-        """Return the alert registration of a phone ID for an appliance, if there is one."""
+        """Return the alert registration of a phone ID for an appliance, if there is one.
+
+        Like the app, read the response as a list and take the appliance's record.
+        """
         try:
             data = await self._alerts_request(
                 "GET",
@@ -638,7 +641,16 @@ class SubZeroClient:
             if error.status == 404:
                 return None
             raise
-        return data if isinstance(data, dict) and isinstance(data.get("id"), str) else None
+        return next(
+            (
+                record
+                for record in (data if isinstance(data, list) else [data])
+                if isinstance(record, dict)
+                and isinstance(record.get("id"), str)
+                and record.get("deviceId", device_id) == device_id
+            ),
+            None,
+        )
 
     async def register_for_alerts(self, registration: dict, *, update: bool) -> None:
         """Create or update an appliance's alert registration, as the app does."""
@@ -684,6 +696,14 @@ class SubZeroClient:
             psid,
             json={"valueTypes": [str(code) for code in sorted(codes)], "deviceId": device_id},
         )
+
+    async def unsubscribe_all_alerts(self, psid: str, device_id: str) -> None:
+        """Stop every alert to a phone ID for an appliance.
+
+        No request removes the registration itself, so this is all the cleanup there is.
+        """
+        if codes := await self.alert_types(psid, device_id):
+            await self.unsubscribe_alerts(psid, device_id, codes)
 
     def renew_connection(self) -> None:
         """Replace the notification connection, which reopens every appliance channel.

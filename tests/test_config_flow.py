@@ -67,7 +67,8 @@ async def test_setup_creates_entry_with_selected_appliances(hass, tokens, select
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
         result = await hass.config_entries.flow.async_configure(result["flow_id"], CREDENTIALS)
         assert result["step_id"] == "device"
-        assert result["data_schema"]({})["firebase_alerts"] is True
+        # Firebase alerts are opt-in.
+        assert result["data_schema"]({})["firebase_alerts"] is False
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {"device_ids": selected}
         )
@@ -82,10 +83,11 @@ async def test_setup_creates_entry_with_selected_appliances(hass, tokens, select
     assert "password" not in result["data"]
     assert result["result"].unique_id == "test-owner"
     assert result["result"].version == 2
-    assert result["result"].minor_version == 3
+    assert result["result"].minor_version == 4
+    assert result["result"].options == {}
 
 
-async def test_setup_can_disable_firebase_alerts(hass, tokens):
+async def test_setup_can_enable_firebase_alerts(hass, tokens):
     with (
         patch("custom_components.subzero.config_flow.SubZeroLogin.login", return_value=tokens),
         patch("custom_components.subzero.api.SubZeroClient.appliances", return_value=APPLIANCES),
@@ -94,10 +96,10 @@ async def test_setup_can_disable_firebase_alerts(hass, tokens):
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
         result = await hass.config_entries.flow.async_configure(result["flow_id"], CREDENTIALS)
         result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {"device_ids": ["test-fridge"], "firebase_alerts": False}
+            result["flow_id"], {"device_ids": ["test-fridge"], "firebase_alerts": True}
         )
         await hass.async_block_till_done()
-    assert result["result"].options["firebase_alerts"] is False
+    assert result["result"].options["firebase_alerts"] is True
 
 
 @pytest.mark.parametrize(
@@ -892,7 +894,7 @@ async def test_options_can_disable_status_polling(hass, tokens):
     }
 
 
-async def test_options_can_turn_firebase_alerts_off_and_back_on(hass, tokens):
+async def test_options_can_turn_firebase_alerts_on_and_back_off(hass, tokens):
     entry = MockConfigEntry(
         domain=DOMAIN,
         version=2,
@@ -904,17 +906,17 @@ async def test_options_can_turn_firebase_alerts_off_and_back_on(hass, tokens):
         patch("custom_components.subzero.async_setup_entry", return_value=True),
     ):
         result = await hass.config_entries.options.async_init(entry.entry_id)
-        assert result["data_schema"]({})["firebase_alerts"] is True
-        await hass.config_entries.options.async_configure(
-            result["flow_id"], {"device_ids": list(DEVICES), "firebase_alerts": False}
-        )
-        await hass.async_block_till_done()
-        assert entry.options["firebase_alerts"] is False
-
-        result = await hass.config_entries.options.async_init(entry.entry_id)
         assert result["data_schema"]({})["firebase_alerts"] is False
         await hass.config_entries.options.async_configure(
             result["flow_id"], {"device_ids": list(DEVICES), "firebase_alerts": True}
+        )
+        await hass.async_block_till_done()
+        assert entry.options["firebase_alerts"] is True
+
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        assert result["data_schema"]({})["firebase_alerts"] is True
+        await hass.config_entries.options.async_configure(
+            result["flow_id"], {"device_ids": list(DEVICES), "firebase_alerts": False}
         )
         await hass.async_block_till_done()
     assert "firebase_alerts" not in entry.options

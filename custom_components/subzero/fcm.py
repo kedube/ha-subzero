@@ -323,9 +323,7 @@ class FcmAlerts:
         ids = dict(self.entry.data.get("fcm_registration_ids", {}))
         for device_id in ids.keys() - retain:
             try:
-                current = await self.client.alert_types(psid, device_id)
-                if current:
-                    await self.client.unsubscribe_alerts(psid, device_id, current)
+                await self.client.unsubscribe_all_alerts(psid, device_id)
             except ApiError:
                 succeeded = False
             else:

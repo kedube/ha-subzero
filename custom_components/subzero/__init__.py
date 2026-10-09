@@ -1,5 +1,7 @@
 """Sub-Zero, Wolf, and Cove appliance cloud integration."""
 
+import asyncio
+import logging
 from functools import partial
 
 from homeassistant.config_entries import ConfigEntry
@@ -11,10 +13,10 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import SubZeroClient
+from .api import ApiError, SubZeroClient
 from .app_config import SUBSCRIPTION_KEY
 from .auth import InvalidAuth
-from .const import DISHWASHER_SWITCHES, DOMAIN
+from .const import CONF_FIREBASE_ALERTS, DISHWASHER_SWITCHES, DOMAIN
 from .controls import excluded_entity_keys
 from .coordinator import (
     SubZeroAccount,
@@ -38,6 +40,9 @@ PLATFORMS = [
 ]
 type SubZeroConfigEntry = ConfigEntry[SubZeroAccount]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+_LOGGER = logging.getLogger(__name__)
+# How long removing the integration waits for Sub-Zero to drop its alert subscriptions.
+REMOVE_ALERTS_TIMEOUT = 30
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
@@ -104,6 +109,28 @@ async def async_unload_entry(hass: HomeAssistant, entry: SubZeroConfigEntry) -> 
     return unloaded
 
 
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Stop Sub-Zero sending Firebase alerts to an integration that was removed."""
+    psid = entry.data.get("fcm_psid")
+    device_ids = entry.data.get("fcm_registration_ids") or {}
+    if not isinstance(psid, str) or not psid or not device_ids:
+        return
+    try:
+        client = SubZeroClient(
+            async_get_clientsession(hass), SUBSCRIPTION_KEY, entry.data["tokens"]
+        )
+        async with asyncio.timeout(REMOVE_ALERTS_TIMEOUT):
+            for device_id in device_ids:
+                try:
+                    await client.unsubscribe_all_alerts(psid, device_id)
+                except ApiError as error:
+                    _LOGGER.warning(
+                        "Could not remove Sub-Zero alert subscriptions for %s: %s", device_id, error
+                    )
+    except (InvalidAuth, TimeoutError) as error:
+        _LOGGER.warning("Could not remove Sub-Zero alert subscriptions: %s", type(error).__name__)
+
+
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if entry.version > 2:
         return False
@@ -161,4 +188,11 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if entity.domain == "number" and entity.unique_id in removed_number_ids:
                 registry.async_remove(entity.entity_id)
         hass.config_entries.async_update_entry(entry, minor_version=3)
+    if entry.minor_version < 4:
+        options = dict(entry.options)
+        if CONF_FIREBASE_ALERTS not in options and entry.data.get("fcm_registration_ids"):
+            # Firebase alerts became opt-in. Entries already receiving them, which had
+            # them on by default, keep them on.
+            options[CONF_FIREBASE_ALERTS] = True
+        hass.config_entries.async_update_entry(entry, options=options, minor_version=4)
     return True

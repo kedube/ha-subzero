@@ -226,9 +226,9 @@ async def test_sabbath_mode_disables_wine_controls(hass, cloud_appliance):
         "climate.kitchen_upper_wine",
         "number.kitchen_lower_wine_setpoint",
         "select.kitchen_accent_light",
-        "select.kitchen_mode",
     ):
         assert state(hass, entity_id) == "unavailable"
+    assert state(hass, "select.kitchen_mode") == "Sabbath"
     assert state(hass, "sensor.kitchen_upper_wine_setpoint") == "40"
 
 
@@ -258,13 +258,36 @@ async def test_sabbath_mode_disables_fridge_controls_and_commands(hass, cloud_ap
         "climate.kitchen_freezer",
         "number.kitchen_refrigerator_setpoint",
         "switch.kitchen_air_purification",
-        "select.kitchen_mode",
     ):
         assert state(hass, entity_id) == "unavailable"
+    coordinator = cloud_appliance.coordinator
+    for properties in (
+        {"ref_set_temp": 37},
+        {"sabbath_on": False, "ref_set_temp": 37},
+        {"sabbath_on": False, "high_use_on": True},
+    ):
+        with pytest.raises(ServiceValidationError, match="Sabbath mode is on"):
+            await coordinator.async_set_properties(properties)
     with pytest.raises(ServiceValidationError, match="Sabbath mode is on"):
-        await cloud_appliance.coordinator.async_set_properties({"sabbath_on": False})
+        await coordinator.async_set_ice_mode("Off")
+    with pytest.raises(ServiceValidationError, match="Sabbath mode is on"):
+        await hass.services.async_call(
+            "select",
+            "select_option",
+            {"entity_id": "select.kitchen_mode", "option": "High use"},
+            blocking=True,
+        )
     cloud_appliance.client.set_property.assert_not_awaited()
-    await cloud_appliance.update({"sabbath_on": False})
+    # Turning Sabbath mode off is the one change it allows.
+    assert state(hass, "select.kitchen_mode") == "Sabbath"
+    await hass.services.async_call(
+        "select",
+        "select_option",
+        {"entity_id": "select.kitchen_mode", "option": "Normal"},
+        blocking=True,
+    )
+    cloud_appliance.client.set_property.assert_awaited_once_with("appliance", "sabbath_on", False)
+    assert state(hass, "select.kitchen_mode") == "Normal"
     assert state(hass, "climate.kitchen_refrigerator") == "cool"
 
 

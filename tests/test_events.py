@@ -1,7 +1,7 @@
 """Appliance notification decoding and automation replay protection."""
 
 import json
-from datetime import UTC, timedelta
+from datetime import UTC, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -249,5 +249,16 @@ async def test_naive_event_timestamps_use_the_home_time_zone(hass, cloud_applian
     cloud_appliance.state["time"] = now.astimezone(UTC).isoformat()
     await cloud_appliance.coordinator.async_refresh()
     await cloud_appliance.update({"notifs": [record(timestamp=now.replace(tzinfo=None))]})
+    [event] = event_changes(events)
+    assert event.attributes["appliance_timestamp"] == now.isoformat()
+
+
+async def test_naive_event_timestamps_follow_the_pushed_clock(hass, cloud_appliance):
+    events = async_capture_events(hass, "state_changed")
+    zone = timezone(dt_util.now().utcoffset() + timedelta(hours=3))
+    now = dt_util.now(zone) + timedelta(seconds=1)
+    await cloud_appliance.update(
+        {"time": now.isoformat(), "notifs": [record(timestamp=now.replace(tzinfo=None))]}
+    )
     [event] = event_changes(events)
     assert event.attributes["appliance_timestamp"] == now.isoformat()

@@ -164,6 +164,10 @@ async def test_silent_channel_falls_back_to_a_status_read(hass, freezer, loaded)
     assert coordinator.push_stats["periodic_reads"] == 1
     assert coordinator.push_stats["missed_updates"] == 1
     assert coordinator.push_stats["connection_renewals"] == 1
+    # Each is recorded at the time of the check, to compare across appliances.
+    now = dt_util.utcnow().isoformat()
+    assert list(coordinator.silent_channel_times) == [now]
+    assert list(coordinator.connection_renewal_times) == [now]
     client.renew_connection.assert_called_once_with()
     await updates.put(StateUpdate({"ref_door_ajar": False}, full=False))
     await hass.async_block_till_done()
@@ -252,6 +256,8 @@ async def test_silent_channel_renews_push_once_per_silent_spell(hass, loaded, mo
     assert coordinator.push_stats["silent_channels"] == 3
     assert coordinator.push_stats["connection_renewals"] == 2
     assert client.renew_connection.call_count == 2
+    assert len(coordinator.silent_channel_times) == 3
+    assert len(coordinator.connection_renewal_times) == 2
 
 
 async def test_push_during_a_silent_check_leaves_one_next_check(hass, loaded):

@@ -185,22 +185,31 @@ async def test_repeated_sequence_zero_events_each_absorb_one_firebase_copy(hass,
 
 
 @oven
-async def test_firebase_first_never_suppresses_a_later_channel_event(cloud_appliance):
+async def test_firebase_first_absorbs_its_channel_copy(cloud_appliance):
     manager = cloud_appliance.entry.runtime_data.alerts
     coordinator = cloud_appliance.coordinator
     received = []
     coordinator.async_add_event_listener(received.append)
+
+    def millis(when):
+        return dt_util.utc_from_timestamp(int(when.timestamp() * 1000) / 1000).isoformat()
+
+    # A nonzero sequence identifies the event, even at another time.
     first = dt_util.utcnow() + timedelta(seconds=1)
-    second = first + timedelta(minutes=2)
-    manager._on_alert(message(code="106", sequence="0", timestamp=first), "one", None)
-    coordinator.async_receive_event(first + timedelta(seconds=10), 0, 106)
+    manager._on_alert(message(code="209", sequence="50", timestamp=first), "one", None)
+    coordinator.async_receive_event(first + timedelta(seconds=20), 50, 209)
+    # Sequence 0 does not, so only a channel event at the same time is a copy.
+    second = first + timedelta(minutes=10)
     manager._on_alert(message(code="106", sequence="0", timestamp=second), "two", None)
     coordinator.async_receive_event(second, 0, 106)
+    third = second + timedelta(minutes=10)
+    manager._on_alert(message(code="106", sequence="0", timestamp=third), "three", None)
+    coordinator.async_receive_event(third + timedelta(seconds=10), 0, 106)
     assert [item["appliance_timestamp"] for item in received] == [
-        dt_util.utc_from_timestamp(int(first.timestamp() * 1000) / 1000).isoformat(),
-        (first + timedelta(seconds=10)).isoformat(),
-        dt_util.utc_from_timestamp(int(second.timestamp() * 1000) / 1000).isoformat(),
-        second.isoformat(),
+        millis(first),
+        millis(second),
+        millis(third),
+        (third + timedelta(seconds=10)).isoformat(),
     ]
 
 

@@ -1,7 +1,7 @@
 """Reported control capabilities, appliance interlocks, and protocol values."""
 
 import math
-from datetime import datetime
+from datetime import datetime, timezone, tzinfo
 
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.util import dt as dt_util
@@ -155,14 +155,32 @@ def wash_settings_enabled(data: dict) -> bool:
 
 def wash_cancel_enabled(data: dict) -> bool:
     # The app offers cancel while a cycle runs, dries, or waits for a delayed start.
+    # A delayed start set remotely has been seen without that status, so a delay
+    # counting down offers cancel as well.
     status = data.get("wash_status")
-    return type(status) is int and status in {2, 5, 7}
+    return (type(status) is int and status in {2, 5, 7}) or data.get(
+        "delay_start_timer_active"
+    ) is True
+
+
+SABBATH_LOCKED = "Sabbath mode is on. Turn it off before changing other settings."
 
 
 def sabbath_enabled(data: dict) -> bool:
-    """Whether Sabbath mode is on, in which the app disables every control."""
+    """Whether Sabbath mode is on, in which only turning it off is allowed."""
     mode = data.get("mode")
     return data.get("sabbath_on") is True or type(mode) is int and mode == 2
+
+
+def sabbath_allows(key: str, value: bool | int | None = None) -> bool:
+    """Whether Sabbath mode allows a write: only one that turns modes off.
+
+    Like the appliance, which accepts no other change until Sabbath mode ends.
+    Without a value, whether any write to the setting is allowed.
+    """
+    if key in FRIDGE_MODE_KEYS:
+        return value is None or value is False
+    return key == "mode" and (value is None or type(value) is int and value == 0)
 
 
 def control_lock(data: dict, key: str, value: bool | int | None = None) -> str | None:
@@ -170,8 +188,8 @@ def control_lock(data: dict, key: str, value: bool | int | None = None) -> str |
 
     Without a value, the setting is locked only when no change is allowed.
     """
-    if sabbath_enabled(data):
-        return "Sabbath mode is on. Change settings at the appliance."
+    if sabbath_enabled(data) and not sabbath_allows(key, value):
+        return SABBATH_LOCKED
     if key.startswith(("cav_", "cav2_")):
         if any(data.get(f"{prefix}_cook_mode") == SELF_CLEAN for prefix in OVEN_PREFIXES) and not (
             key.endswith("_unit_on") and value is not True
@@ -250,11 +268,30 @@ def supports_control(data: dict, key: str) -> bool:
     }
 
 
-def appliance_datetime(value) -> datetime | None:
+def clock_zone(value) -> tzinfo | None:
+    """The time zone of a pushed `time`, which carries the appliance's local offset.
+
+    Status reads report `time` in UTC, so only pushes show the offset. When it
+    matches Home Assistant's time zone, that zone also follows daylight saving.
+    """
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    offset = parsed.utcoffset()
+    if offset is None:
+        return None
+    home = dt_util.get_default_time_zone()
+    return home if parsed.astimezone(home).utcoffset() == offset else timezone(offset)
+
+
+def appliance_datetime(value, zone: tzinfo | None = None) -> datetime | None:
     """Read an appliance timestamp, taking one without an offset as local time.
 
-    Like the app, which sets the appliance clock to the phone's local time, local
-    time is Home Assistant's time zone, not the offset of the reported clock.
+    Local time is the zone of the appliance's last pushed clock, or, like the app,
+    which sets the appliance clock to the phone's local time, Home Assistant's.
     """
     if not isinstance(value, str):
         return None
@@ -263,7 +300,7 @@ def appliance_datetime(value) -> datetime | None:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=dt_util.get_default_time_zone())
+        return parsed.replace(tzinfo=zone or dt_util.get_default_time_zone())
     return parsed
 
 
@@ -304,14 +341,14 @@ def ice_mode_properties(data: dict, mode: str) -> dict[str, bool]:
     }
 
 
-def timer_minutes(data: dict, key: str) -> float | None:
+def timer_minutes(data: dict, key: str, zone: tzinfo | None = None) -> float | None:
     prefix = KITCHEN_TIMERS[key]
     if data.get(f"{prefix}_active") is False:
         return 0
     if data.get(f"{prefix}_active") is not True:
         return None
-    start = appliance_datetime(data.get(f"{prefix}_start_time"))
-    end = appliance_datetime(data.get(f"{prefix}_end_time"))
+    start = appliance_datetime(data.get(f"{prefix}_start_time"), zone)
+    end = appliance_datetime(data.get(f"{prefix}_end_time"), zone)
     if start is not None and end is not None and end >= start:
         return round((end - start).total_seconds() / 60)
     duration = data.get(key)
@@ -323,12 +360,11 @@ def control_matches(
     key: str,
     value: bool | int,
     requested_at: datetime,
-    previous: dict | None = None,
+    zone: tzinfo | None = None,
 ) -> bool:
     """Whether the appliance reports a setting as requested.
 
-    `previous` is the state before the request. A kitchen timer that restarted since
-    then confirms its write.
+    `zone` is the appliance clock's time zone, for timer times without an offset.
     """
     if key == "accent_light_level":
         return (
@@ -344,25 +380,27 @@ def control_matches(
             ready = key.replace("unit_on", "remote_ready")
             if ready in data and data[ready] is not False:
                 return False
+        if (
+            key == "wash_cycle_on"
+            and value is False
+            and data.get("delay_start_timer_active") is True
+        ):
+            # A delayed start can already report the cycle off, so only the delay
+            # ending confirms its cancel.
+            return False
         return data.get(key) == value and isinstance(data.get(key), bool) == isinstance(value, bool)
     prefix = KITCHEN_TIMERS[key]
     if value == 0:
         return data.get(f"{prefix}_active") is False
-    end = appliance_datetime(data.get(f"{prefix}_end_time"))
-    duration = timer_minutes(data, key)
+    end = appliance_datetime(data.get(f"{prefix}_end_time"), zone)
+    duration = timer_minutes(data, key, zone)
     if (
         data.get(f"{prefix}_active") is not True
         or end is None
         or (duration is not None and duration != value)
     ):
         return False
-    if previous is not None and (
-        previous.get(f"{prefix}_active") is not True
-        or appliance_datetime(previous.get(f"{prefix}_end_time")) != end
-    ):
-        # The end time is on the appliance's clock, which can differ from Home
-        # Assistant's, so a restart shows the write took effect.
-        return True
+    # The appliance clock has been seen within about 15 seconds of real time.
     return abs((end - requested_at).total_seconds() - value * 60) <= 65
 
 

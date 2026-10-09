@@ -21,7 +21,7 @@
       },
       "device": {
         "title": "Select appliances",
-        "description": "Choose the appliances to include in Home Assistant. Firebase appliance alerts register Home Assistant as an additional alert receiver with Sub-Zero and connect to Google. You can change this later using Configure.",
+        "description": "Choose the appliances to include in Home Assistant. Firebase appliance alerts are off unless you turn them on. They register Home Assistant as an additional alert receiver with Sub-Zero and connect to Google. You can change this later using Configure.",
         "data": {"device_ids": "Appliances", "firebase_alerts": "Firebase appliance alerts"}
       }
     },

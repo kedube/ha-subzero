@@ -77,7 +77,7 @@ def holds_login_session(step):
 
 class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 2
-    MINOR_VERSION = 3
+    MINOR_VERSION = 4
     _client: SubZeroClient
     _devices: dict[str, dict]
     _title: str | None = None
@@ -418,15 +418,15 @@ class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         "devices": {key: self._devices[key] for key in selected},
                     },
                     options=(
-                        {CONF_FIREBASE_ALERTS: False}
-                        if user_input.get(CONF_FIREBASE_ALERTS) is False
+                        {CONF_FIREBASE_ALERTS: True}
+                        if user_input.get(CONF_FIREBASE_ALERTS) is True
                         else {}
                     ),
                 )
         return self.async_show_form(
             step_id="device",
             data_schema=device_schema(self._devices, list(self._devices)).extend(
-                {vol.Required(CONF_FIREBASE_ALERTS, default=True): BooleanSelector()}
+                {vol.Required(CONF_FIREBASE_ALERTS, default=False): BooleanSelector()}
             ),
             errors=errors,
         )
@@ -498,8 +498,8 @@ class SubZeroOptionsFlow(config_entries.OptionsFlowWithReload):
                         user_input.get("status_poll_interval", status_poll_interval(entry))
                     ),
                 }
-                if user_input.get(CONF_FIREBASE_ALERTS, firebase_alerts_enabled(entry)) is False:
-                    options[CONF_FIREBASE_ALERTS] = False
+                if user_input.get(CONF_FIREBASE_ALERTS, firebase_alerts_enabled(entry)) is True:
+                    options[CONF_FIREBASE_ALERTS] = True
                 return self.async_create_entry(data=options)
         return self.async_show_form(
             step_id="init",

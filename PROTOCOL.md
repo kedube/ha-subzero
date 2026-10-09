@@ -403,6 +403,7 @@ Coordinator handling (`coordinator.py: apply_update`) [I]:
 - Failed opens are reported per appliance (the appliance becomes unavailable). They are retried with backoff: 30 s, doubling to at most 900 s, plus 0–5 s jitter. A 429 aborts the connection (§10). [I]
 - A state update from an appliance also marks its channel as open. [I]
 - Push for one appliance can stop while the shared connection stays up, which can leave a door shown as open. [O] (README)
+- Measured on 2026-10-09 with v0.8.0 over about 5 hours of 10-minute checks on five appliances. Each appliance had 4–6 reopens that got no snapshot within 16 s while its `get` still succeeded (`silent_channels`). The connection renewal that followed restored push every time (3–4 `connection_renewals` each). The counts are nearly equal across appliances, which points to the shared connection going quiet rather than one channel expiring, but per-event times were not recorded. Diagnostics now list the times of the last 10 of each (`recent_silent_channels`, `recent_connection_renewals`). `missed_updates` stayed 0. [O]
 - The periodic check reopens each channel, like the app on each return to the foreground. It runs by default every 10 min without a state change; the options are 1, 2, 5 or 10 min, or push only. [I] (`coordinator.py: _handle_refresh_interval`, `_async_check_channel`)
   1. Send `open_cloud_async`, then wait up to 16 s for a pushed snapshot. The snapshot is the check's status read. It is compared with current state before the merge, to count changes push had not reported (`unpushed_changes`, `missed_updates`).
   2. If no snapshot arrives (`silent_channels`), or the reopen fails, fall back to `get`, as the app does.
@@ -513,13 +514,14 @@ No-reading values [I]:
 - `cav*_probe_temp` of `0` or `1` means no reading; the app's probe tile also treats −18 (0 °F shown in °C) as none (`probe_tile_controller.dart`). [A][I]
 - Probe values count only while `cav*_probe_on` is true.
 - The app shows Off instead of `cav*_temp` unless that cavity's `unit_on` is true, and Clean during self clean (`oven_temperature_tile_controller.dart`). The integration shows no reading in both cases. [A][I]
+- `cav*_temp` stops updating once the cavity turns off and keeps its last value, as seen through an ESPHome BLE gateway ([kedube/esphome-subzero-ble](https://github.com/kedube/esphome-subzero-ble)). A reading such as `"cav_temp": 403` with `cav_unit_on` false is stale, not residual heat: the same range read 403 on 2026-10-07 and 402 on 2026-10-09, off both times. [O]
 
 ### 6.5 Timestamps
 
 - A timestamp without an offset is local wall time. The app parses with `DateTime.parse` and only converts with `toUtc`/`toLocal`. It sets the appliance clock from the phone's local time over BLE (`set_time`). [A]
-- The integration reads offset-less timestamps in Home Assistant's time zone and keeps any explicit offset (`controls.py: appliance_datetime`). [I]
+- The integration reads offset-less timestamps in the zone of the appliance's last pushed `time`, and in Home Assistant's time zone until a push reports one. It keeps any explicit offset. When the pushed offset matches Home Assistant's zone at that moment, it uses that zone, which also follows daylight saving (`controls.py: clock_zone`, `appliance_datetime`; `coordinator.py: clock_zone`, shown in diagnostics). [I]
 - App demo data uses offset-less values such as `"next_clean_time": "2025-10-07T11:03:37"`. [A]
-- **`time` is not a reliable offset source.** Push snapshots have reported `"time": "2026-10-05T15:29:24-04:00"` while `get` responses reported `"2026-10-08T02:53:29+00:00"`. [O] The app never reads `time` except to set the clock over BLE. [A] The integration ignores it and leaves it out of change detection (`UNCOMPARED_READ_KEYS`). [I]
+- **Only pushed `time` carries the appliance's offset.** Push snapshots have reported `"time": "2026-10-05T15:29:24-04:00"` while `get` responses reported `"2026-10-08T02:53:29+00:00"`. Both were correct instants: the push arrived 8 s after its `time`, and the `get` value was 14 s before the diagnostics download, so the appliance clock was within about 15 s of real time. [O] The app never reads `time` except to set the clock over BLE. [A] The integration takes the clock's zone from pushes only and leaves `time` out of change detection (`UNCOMPARED_READ_KEYS`). [I]
 - The time zone is set separately through the time-settings endpoint (§3.2). SignalR payloads may carry `timezone_id_name`. [A]
 
 ### 6.6 `uptime`
@@ -554,6 +556,8 @@ An appliance reports events in two forms:
 
 - **Inline**, in a push update or snapshot: the keys `notif_seq` (int), `notif_type` (int) and `timestamp` (string) sit directly among the state properties. [I][A]
 - **History**, in snapshots and `get`: `"notifs": [{"notif_seq": 41, "notif_type": 101, "timestamp": "2026-10-07T22:14:05"}, ...]`. [I][A]
+- Real appliances report milliseconds and an explicit offset, such as `"2026-10-09T14:30:33.872-04:00"`. A Firebase alert's `event_time` has whole seconds (§11), so the two copies of an event never share a timestamp exactly. [O]
+- The range and dishwasher count `notif_seq` up (range 51–54, dishwasher 9–13). The CL4850SID refrigerator reported its door alert (101) with `notif_seq` 0. [O]
 
 The app appends inline records to its `notifs` list (`_processNotification`). [A] The integration does the same:
 - It converts an inline record to `notifs: [record]` and drops records with the wrong types (`api.py: notification_records`).
@@ -782,7 +786,7 @@ When no `appliance_type` is reported, the refrigerator maximum falls back to the
 
 | Rule | Source |
 | --- | --- |
-| Sabbath (`sabbath_on` true, or `mode == 2`) disables every app control, including turning Sabbath off | [A][I] (`controls.py: sabbath_enabled`, `coordinator.py: _command`) |
+| Sabbath (`sabbath_on` true, or `mode == 2`) disables every app control, including turning Sabbath off [A]. The integration allows only writes that turn modes off, `false` for the refrigerator mode keys or dishwasher `mode` 0, and refuses everything else, as the appliance does [I] | [A][I] (`controls.py: sabbath_allows`, `control_lock`; `coordinator.py: _command`) |
 | While either cavity's `cook_mode` is 11 (self clean), only `cav*_unit_on = false` is allowed, for both cavities | [A][I] (`control_lock`) |
 | `cav*_light_on` is locked while that cavity is on in Proof (mode 9) | [A][I] |
 | `cav*_set_temp` and `cav*_cook_mode` writes require `cav*_unit_on` or `cav*_remote_ready` | [I] |
@@ -821,7 +825,7 @@ Preconditions [I]: `cav*_remote_ready` true, door closed, a supported cook mode 
 
 The integration writes cycle, delay and options whenever the user changes them, and its Start button sends only a forced `wash_cycle_on: true`. Preconditions: `remote_ready` true, `door_ajar` false, `mode != 2`. [I]
 
-**Dishwasher cancel**: a forced `set {"wash_cycle_on": false}`, available while `wash_status` ∈ {2, 5, 7}. It is sent even when `wash_cycle_on` already reads false, which happens during a delayed start. [I]
+**Dishwasher cancel**: a forced `set {"wash_cycle_on": false}`. The app enables its cancel button only while `wash_status` ∈ {2, 5, 7} and shows Start (or Make remote ready) for 0 and 1 (`dishwasher_header_controller.dart: updateActionButtonText`, `actionButtonEnabled`). It never reads `delay_start_timer_active`. [A] A delayed start set remotely did not report 7: the app showed no cancel and the integration offered none. [O] The integration offers cancel while `wash_status` ∈ {2, 5, 7} or `delay_start_timer_active` is true. It sends the write even when `wash_cycle_on` already reads false, and during a delay only `delay_start_timer_active` turning false confirms it. [I] Whether `wash_cycle_on: false` ends a remote delayed start is unconfirmed [?].
 
 **Ice modes** (refrigerator, `controls.py: ice_mode_properties`) [I]; the README attributes the order to the app:
 
@@ -848,7 +852,7 @@ The integration writes cycle, delay and options whenever the user changes them, 
 **Kitchen timers** [I]:
 - `set {"kitchen_timer_duration": N}` with N = 1–719 minutes starts or restarts the timer.
 - `0` cancels a running timer, or dismisses a completed one (the app's "Tap to Dismiss").
-- A write is confirmed when `kitchen_timer_active` is true with a duration of N minutes (end − start) and the timer restarted: it was not running before the write, or its end time changed. Start and end are on the appliance's clock, which can differ from Home Assistant's. A timer whose end time did not change confirms only when it is within ±65 s of request time + N minutes, such as a restart within the same second. A cancel is confirmed when `*_active` is false. (`controls.py: control_matches`)
+- A write is confirmed when `kitchen_timer_active` is true with a duration of N minutes (end − start) and an end time within ±65 s of request time + N minutes. Times without an offset are read in the appliance clock's zone (§6.5), and the clock has been seen within about 15 s of real time [O]. A cancel is confirmed when `*_active` is false. (`controls.py: control_matches`)
 
 **Hood** [I]:
 - Fan on: `fan_speed` (`ceil(percent / 25)`), then `fan_on: true`.
@@ -934,7 +938,7 @@ Sub-Zero publishes no quota. At the default 10-minute check, an appliance whose 
 - **Phone alerts (Firebase Cloud Messaging)**: Sub-Zero's cloud sends alerts such as a door left open as FCM messages, independent of the §5.7 channels. [A] (`services/notifications/push_notifications_service.dart`)
   - The alert types are the 48 `notif_type` codes the integration already turns into events (`const.py: NOTIFICATION_TYPES`): 1xx refrigeration and ice, 2xx cooking, 3xx dishwasher, 400 faults, 401 feedback. [A]
   - Each phone registers under its own `psid`, the Android ID cached in shared preferences. Records are per `psid`, so each phone keeps its own registration. [A]
-  - Register, per appliance: `POST /consumerapp/api/notification/registrations` with `{"id": <new UUID>, "fcmToken", "deviceId": <appliance>, "psid", "mobile_name"}`. Updates use `PUT`. The current record is at `GET .../registrations/devices/{psid}/appliances/{deviceId}`. [A]
+  - Register, per appliance: `POST /consumerapp/api/notification/registrations` with `{"id": <new UUID>, "fcmToken", "deviceId": <appliance>, "psid", "mobile_name"}`. Updates use `PUT`. The current record is at `GET .../registrations/devices/{psid}/appliances/{deviceId}`. The app decodes that response as a list and takes the entry whose `deviceId` matches (`getNotificationRegistration`); the integration does the same and also accepts a single record (`api.py: alert_registration`). [A][I]
   - Choose alerts: `POST /consumerapp/api/notification/devices/{psid}/events` with header `uuid: <psid>` and a JSON list of `{"deviceId", "mutable_content": false, "valueType": <code>, "body_loc_key", "sound": null, "clickAction": null}`. `body_loc_key` is an app localization key (`NotificationKeyToLocalizable`, for example `fridge_refrigerator_door_open` for 101). Setup sends the alert codes applicable to the appliance (`ConnectedAppliance._getNotificationTypes`). The integration chooses cavity-specific right/left keys for dual-cavity ranges; those names are present in the APK resources, though live delivery has only been verified for the earlier prototype subscriptions. `GET .../devices/{psid}/appliances/{deviceId}/events` returns the current list. [A][O]
   - Remove alerts: `DELETE .../devices/{psid}/events/type` with header `uuid: <psid>` and `{"valueTypes": ["101", ...], "deviceId"}`. [A]
   - Faults (400) use a second, per-user store: `/api-user-fcm/v2/user-fcms`, keyed by `user/{userId}/psid/{psid}` with `{userId, fcm, psid, createdDate}`, and `/api-user-fcm/v2/subscriptions` with `{userId, psid, valueType, titleLocKey, bodyLocKey, sound, clickAction, createdDate}`. [A]
@@ -944,7 +948,7 @@ Sub-Zero publishes no quota. At the default 10-minute check, an appliance whose 
     - Registration returns HTTP 200 with the record ID as a JSON string.
     - Choosing alerts returns a list of IDs. Reading back returns the stored entries, with `valueType` as a string and `title_loc_key` filled in by the server.
     - Removing alerts returns `true`.
-    - No call removes the registration itself, so a client should reuse its `psid`.
+    - No call removes the registration itself, so a client should reuse its `psid`. The integration removes its alert choices when alerts are turned off or the integration is removed (`fcm.py: _remove_subscriptions`, `__init__.py: async_remove_entry`). [I]
   - Alerts arrive about 1 s after the event. Example from four range kitchen-timer alerts (209, 210, 207, 208) [O]:
 
     ```json
@@ -975,9 +979,10 @@ Sub-Zero publishes no quota. At the default 10-minute check, an appliance whose 
 9. **Hood units.** Are `filter_count` and `filter_max_count` in seconds? Is the 2700–5000 K mapping of `color_level` correct?
 10. **`reset_filter` and `start_immediately`.** In 4.6.0, `reset_filter` reaches the hood only over BLE and `start_immediately` is a UI toggle. A cloud path for either is unconfirmed.
 11. **`winterize_on`.** Does it ever appear in `get` or push for DICE, or only in the device twin?
-12. **Pushed properties.** Which properties are pushed on change? Temperatures sometimes change only between reads; door changes are expected to be pushed.
+12. **Pushed properties.** Which properties are pushed on change? Temperatures sometimes change only between reads; door changes are expected to be pushed. During one dishwasher cycle on 2026-10-09, status reads found two `wash_cycle_on` changes and one `wash_status` change before push reported them, among 41 pushed updates.
 13. **Legacy argument form.** When is the two-argument SignalR form (`[userId, envelope]`) still sent?
 14. **Oven start on series 3/4.** Confirm the power-only start in the app, and the full per-series setpoint ranges.
+15. **Remote delayed start.** What do `wash_status`, `wash_cycle_on` and `delay_start_timer_active` report while a remotely set delay counts down, and does `wash_cycle_on: false` cancel it?
 
 ---
 
