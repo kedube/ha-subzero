@@ -4,7 +4,14 @@
 
 ### Changed
 
+- The integration type is **hub** again, as Home Assistant documents for integrations that add several devices. The **Add account** label does not depend on it.
+
+## 0.8.2 (2026-10-09)
+
+### Changed
+
 - The integration page's add button reads **Add account** instead of **Add hub**, since each entry is a Sub-Zero account. Home Assistant versions without custom button labels keep showing Add hub.
+- The integration type changed from hub to service.
 
 ## 0.8.1 (2026-10-09)
 
