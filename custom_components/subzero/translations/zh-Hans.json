@@ -1,0 +1,154 @@
+{
+  "config": {
+    "initiate_flow": {"user": "添加账户"},
+    "step": {
+      "user": {
+        "title": "登录 Sub-Zero",
+        "description": "使用你的 Sub-Zero Group Owner 账户的电子邮件地址和密码。密码仅用于登录，不会被保存。",
+        "data": {"username": "电子邮件", "password": "密码"}
+      },
+      "mfa_challenge": {
+        "title": "多重身份验证",
+        "description": "Sub-Zero 需要验证 {masked_phone}。请选择接收验证码的方式。{captcha_image}",
+        "data": {"captcha": "图形验证码字符", "method": "验证方式"}
+      },
+      "mfa_code": {
+        "title": "输入验证码",
+        "description": "输入发送到 {masked_phone} 的 6 位验证码，或留空以请求新的验证码。",
+        "data": {"code": "验证码"}
+      },
+      "mfa_call": {
+        "title": "电话验证"
+      },
+      "device": {
+        "title": "选择电器",
+        "description": "选择要添加到 Home Assistant 的电器。Firebase 电器提醒默认关闭，需要手动开启。开启后，Home Assistant 会在 Sub-Zero 注册为额外的提醒接收方，并连接到 Google。之后可以在“配置”中更改。",
+        "data": {"device_ids": "电器", "firebase_alerts": "Firebase 电器提醒"}
+      }
+    },
+    "progress": {
+      "wait_for_call": "请接听拨打到 {masked_phone} 的电话，并按 # 完成验证。"
+    },
+    "error": {
+      "invalid_auth": "Sub-Zero 未接受登录信息，或会话已过期。如有需要，请重新开始设置。",
+      "invalid_captcha": "输入的字符与图形验证码不匹配。请使用新图片重试。",
+      "invalid_mfa_code": "验证码未被接受。请检查验证码后重试，或留空以请求新的验证码。",
+      "mfa_code_expired": "验证码已过期或被拒绝次数过多。请请求新的验证码后重试。",
+      "mfa_call_failed": "验证电话未能及时完成。请重试。",
+      "cannot_connect": "无法连接到 Sub-Zero 或读取电器状态。请稍后重试。",
+      "rate_limited": "Sub-Zero 要求降低请求频率。请稍候再试。",
+      "verification_required": "此账户需要额外的验证步骤，当前版本尚不支持。",
+      "invalid_device": "请选择此账户中的电器。",
+      "select_device": "请至少选择一台电器。"
+    },
+    "abort": {
+      "already_configured": "此账户已配置。请在现有的 Sub-Zero 条目上打开“配置”以添加电器。",
+      "all_configured": "这些电器已由另一个 Sub-Zero 条目管理。",
+      "no_appliances": "此账户中未找到已连接的电器。",
+      "wrong_account": "请使用原来的 Sub-Zero 账户登录。",
+      "reauth_successful": "Sub-Zero 登录已更新。"
+    }
+  },
+  "services": {
+    "schedule_ice_delay": {
+      "name": "安排制冰暂停",
+      "description": "将独立制冰机暂停 1 到 12 小时，可以立即开始，也可以在今天稍后开始。",
+      "fields": {
+        "device_id": {"name": "制冰机", "description": "要暂停的独立制冰机。"},
+        "duration": {"name": "时长", "description": "暂停制冰的小时数。"},
+        "start_in": {"name": "延迟开始", "description": "距离暂停开始的分钟数。0 表示立即开始。"},
+        "repeat": {"name": "每天重复", "description": "每天重复此暂停。"}
+      }
+    },
+    "refresh": {
+      "name": "刷新",
+      "description": "读取电器的当前状态，并在实时更新中断时将其恢复。请在自动化根据传感器执行操作前使用。",
+      "fields": {
+        "device_id": {"name": "电器", "description": "要刷新的电器。"}
+      }
+    }
+  },
+  "selector": {
+    "mfa_method": {
+      "options": {"onewaysms": "短信 (SMS)", "dialphone": "电话"}
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "选择电器",
+        "description": "列表已从你的 Sub-Zero 账户刷新。取消选择某台电器会从 Home Assistant 中删除其设备和实体。每次电器事件后以及门打开期间都会检查推送更新。开启共享连接检查后，只要在设定的间隔（默认 3 分钟）内没有收到任何消息，就会再检查一台电器，从而更早发现推送更新已停止；间隔越短，云端请求越多。关闭 Firebase 电器提醒会断开与 Google 的连接，并删除此集成的 Sub-Zero 提醒订阅。",
+        "data": {"device_ids": "电器", "shared_connection_check": "共享连接检查", "shared_connection_check_interval": "共享连接检查间隔", "firebase_alerts": "Firebase 电器提醒"}
+      }
+    },
+    "error": {
+      "cannot_connect": "无法刷新电器列表，因此仅显示已保存的电器。你仍然可以更改其他设置。",
+      "rate_limited": "Sub-Zero 要求降低请求频率，因此仅显示已保存的电器。你仍然可以更改其他设置。",
+      "invalid_device": "请选择此账户中的电器。"
+    },
+    "abort": {
+      "reauth_required": "请通过 Home Assistant 的 Sub-Zero 登录提示重新登录，然后重新打开“配置”。",
+      "all_configured": "这些电器已由另一个 Sub-Zero 条目管理。请重新打开“配置”以刷新列表。"
+    }
+  },
+  "entity": {
+    "event": {
+      "appliance_event": {
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "unknown": "未知",
+              "refrigerator_door_ajar": "冰箱门未关",
+              "freezer_door_ajar": "冷冻室门未关",
+              "wine_door_ajar": "酒柜门未关",
+              "wine_setpoint_changed": "酒柜设定温度已更改",
+              "refrigerator_service_required": "冰箱需要维修",
+              "refrigerator_setpoint_changed": "冰箱设定温度已更改",
+              "freezer_setpoint_changed": "冷冻室设定温度已更改",
+              "water_filter_expired": "滤水器已到期",
+              "air_filter_expired": "空气过滤器已到期",
+              "wine_temperature_alert": "酒柜温度超出范围",
+              "ice_maker_door_ajar": "制冰机门未关",
+              "ice_cleaning_required": "制冰机需要清洁",
+              "ice_cleaning_due_soon": "制冰机即将需要清洁",
+              "ice_cleaning_add_descaler": "制冰机清洁程序需要添加除垢剂",
+              "ice_cleaning_add_sanitizer": "制冰机清洁程序需要添加消毒剂",
+              "ice_cleaning_cancelled": "制冰机清洁程序已取消",
+              "ice_cleaning_complete": "制冰机清洁程序已完成",
+              "oven_preheated": "烤箱预热完成",
+              "lower_oven_preheated": "下烤箱预热完成",
+              "oven_probe_connected": "烤箱探针使用中",
+              "lower_oven_probe_connected": "下烤箱探针使用中",
+              "oven_probe_target_reached": "烤箱探针已达到目标温度",
+              "lower_oven_probe_target_reached": "下烤箱探针已达到目标温度",
+              "kitchen_timer_complete": "厨房定时器结束",
+              "kitchen_timer_2_complete": "厨房定时器 2 结束",
+              "kitchen_timer_under_one_minute": "厨房定时器剩余一分钟",
+              "kitchen_timer_2_under_one_minute": "厨房定时器 2 剩余一分钟",
+              "oven_cooking_timer_complete": "烤箱烹饪定时器结束",
+              "lower_oven_cooking_timer_complete": "下烤箱烹饪定时器结束",
+              "oven_cooking_timer_under_one_minute": "烤箱烹饪定时器剩余一分钟",
+              "lower_oven_cooking_timer_under_one_minute": "下烤箱烹饪定时器剩余一分钟",
+              "oven_probe_within_ten_degrees": "烤箱探针温度距目标不足 10°F",
+              "lower_oven_probe_within_ten_degrees": "下烤箱探针温度距目标不足 10°F",
+              "oven_service_required": "烤箱需要维修",
+              "oven_door_ajar": "烤箱门未关",
+              "lower_oven_door_ajar": "下烤箱门未关",
+              "oven_self_clean_complete": "烤箱清洁完成",
+              "lower_oven_self_clean_complete": "下烤箱清洁完成",
+              "dishwasher_started": "洗涤程序已开始",
+              "dishwasher_complete": "洗涤程序已完成",
+              "softener_salt_low": "软水盐不足",
+              "rinse_aid_low": "光亮剂不足",
+              "dishwasher_service_required": "洗碗机需要维修",
+              "dishwasher_paused": "洗涤程序已中断",
+              "dishwasher_cancelled": "洗涤程序已取消",
+              "fault_notification": "电器故障",
+              "feedback_notification": "反馈请求"
+            }
+          }
+        }
+      }
+    }
+  }
+}

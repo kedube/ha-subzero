@@ -1,0 +1,154 @@
+{
+  "config": {
+    "initiate_flow": {"user": "Dodaj konto"},
+    "step": {
+      "user": {
+        "title": "Zaloguj się do Sub-Zero",
+        "description": "Użyj adresu e-mail i hasła do swojego konta Sub-Zero Group Owner. Hasło służy tylko do logowania i nie jest zapisywane.",
+        "data": {"username": "Adres e-mail", "password": "Hasło"}
+      },
+      "mfa_challenge": {
+        "title": "Uwierzytelnianie wieloskładnikowe",
+        "description": "Sub-Zero wymaga weryfikacji numeru {masked_phone}. Wybierz, jak chcesz otrzymać kod weryfikacyjny.{captcha_image}",
+        "data": {"captcha": "Znaki CAPTCHA", "method": "Metoda weryfikacji"}
+      },
+      "mfa_code": {
+        "title": "Wprowadź kod weryfikacyjny",
+        "description": "Wprowadź 6-cyfrowy kod weryfikacyjny wysłany na numer {masked_phone} albo pozostaw pole puste, aby poprosić o nowy kod.",
+        "data": {"code": "Kod weryfikacyjny"}
+      },
+      "mfa_call": {
+        "title": "Weryfikacja przez połączenie telefoniczne"
+      },
+      "device": {
+        "title": "Wybierz urządzenia",
+        "description": "Wybierz urządzenia, które mają zostać dodane do Home Assistant. Alerty urządzeń Firebase są wyłączone, dopóki ich nie włączysz. Rejestrują one Home Assistant w Sub-Zero jako dodatkowego odbiorcę alertów i łączą się z Google. Możesz to później zmienić w opcji Konfiguruj.",
+        "data": {"device_ids": "Urządzenia", "firebase_alerts": "Alerty urządzeń Firebase"}
+      }
+    },
+    "progress": {
+      "wait_for_call": "Odbierz połączenie na numer {masked_phone} i naciśnij #, aby potwierdzić."
+    },
+    "error": {
+      "invalid_auth": "Sub-Zero nie zaakceptowało danych logowania lub sesja wygasła. W razie potrzeby rozpocznij konfigurację od nowa.",
+      "invalid_captcha": "Znaki nie pasują do CAPTCHA. Spróbuj ponownie z nowym obrazem.",
+      "invalid_mfa_code": "Kod weryfikacyjny nie został zaakceptowany. Sprawdź kod i spróbuj ponownie albo pozostaw pole puste, aby poprosić o nowy kod.",
+      "mfa_code_expired": "Kod weryfikacyjny wygasł lub został odrzucony zbyt wiele razy. Poproś o nowy kod, aby spróbować ponownie.",
+      "mfa_call_failed": "Połączenie weryfikacyjne nie zostało zakończone na czas. Spróbuj ponownie.",
+      "cannot_connect": "Nie można połączyć się z Sub-Zero ani odczytać urządzenia. Spróbuj ponownie później.",
+      "rate_limited": "Sub-Zero poprosiło o ograniczenie liczby żądań. Odczekaj chwilę przed ponowną próbą.",
+      "verification_required": "To konto wymaga dodatkowego kroku weryfikacji, którego ta wersja jeszcze nie obsługuje.",
+      "invalid_device": "Wybierz urządzenia z tego konta.",
+      "select_device": "Wybierz co najmniej jedno urządzenie."
+    },
+    "abort": {
+      "already_configured": "To konto jest już skonfigurowane. Otwórz opcję Konfiguruj w istniejącym wpisie Sub-Zero, aby dodać urządzenia.",
+      "all_configured": "Te urządzenia są już zarządzane przez inny wpis Sub-Zero.",
+      "no_appliances": "Na tym koncie nie znaleziono połączonych urządzeń.",
+      "wrong_account": "Zaloguj się na pierwotne konto Sub-Zero.",
+      "reauth_successful": "Logowanie do Sub-Zero zostało odnowione."
+    }
+  },
+  "services": {
+    "schedule_ice_delay": {
+      "name": "Zaplanuj przerwę w produkcji lodu",
+      "description": "Wstrzymuje samodzielną kostkarkę do lodu na 1–12 godzin, od razu lub później tego dnia.",
+      "fields": {
+        "device_id": {"name": "Kostkarka do lodu", "description": "Samodzielna kostkarka do lodu, którą chcesz wstrzymać."},
+        "duration": {"name": "Czas trwania", "description": "Liczba godzin wstrzymania produkcji lodu."},
+        "start_in": {"name": "Rozpocznij za", "description": "Liczba minut do rozpoczęcia przerwy. Zero rozpoczyna ją od razu."},
+        "repeat": {"name": "Powtarzaj codziennie", "description": "Powtarza przerwę każdego dnia."}
+      }
+    },
+    "refresh": {
+      "name": "Odśwież",
+      "description": "Odczytuje bieżący stan urządzeń i przywraca ich aktualizacje na żywo, jeśli ustały. Użyj przed automatyzacją, która reaguje na czujnik.",
+      "fields": {
+        "device_id": {"name": "Urządzenia", "description": "Urządzenia do odświeżenia."}
+      }
+    }
+  },
+  "selector": {
+    "mfa_method": {
+      "options": {"onewaysms": "Wiadomość SMS", "dialphone": "Połączenie telefoniczne"}
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Wybierz urządzenia",
+        "description": "Lista jest odświeżana z Twojego konta Sub-Zero. Odznaczenie urządzenia usuwa odpowiadające mu urządzenie i encje z Home Assistant. Aktualizacje push są sprawdzane po każdym zdarzeniu urządzenia i gdy drzwi są otwarte. Włącz wspólne sprawdzanie połączenia, aby dodatkowo sprawdzać jedno urządzenie, gdy przez ustawiony interwał, domyślnie 3 minuty, nic nie nadchodzi, co pozwala wcześniej wykryć, że aktualizacje push ustały; krótsze interwały oznaczają więcej żądań do chmury. Wyłączenie alertów urządzeń Firebase przerywa połączenie z Google i usuwa subskrypcje alertów Sub-Zero tej integracji.",
+        "data": {"device_ids": "Urządzenia", "shared_connection_check": "Wspólne sprawdzanie połączenia", "shared_connection_check_interval": "Interwał wspólnego sprawdzania połączenia", "firebase_alerts": "Alerty urządzeń Firebase"}
+      }
+    },
+    "error": {
+      "cannot_connect": "Nie udało się odświeżyć listy urządzeń, więc wyświetlane są tylko zapisane urządzenia. Nadal możesz zmienić pozostałe ustawienia.",
+      "rate_limited": "Sub-Zero poprosiło o ograniczenie liczby żądań, więc wyświetlane są tylko zapisane urządzenia. Nadal możesz zmienić pozostałe ustawienia.",
+      "invalid_device": "Wybierz urządzenia z tego konta."
+    },
+    "abort": {
+      "reauth_required": "Zaloguj się ponownie za pomocą monitu logowania Sub-Zero w Home Assistant, a następnie ponownie otwórz opcję Konfiguruj.",
+      "all_configured": "Te urządzenia są już zarządzane przez inny wpis Sub-Zero. Ponownie otwórz opcję Konfiguruj, aby odświeżyć listę."
+    }
+  },
+  "entity": {
+    "event": {
+      "appliance_event": {
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "unknown": "Nieznane",
+              "refrigerator_door_ajar": "Drzwi lodówki otwarte",
+              "freezer_door_ajar": "Drzwi zamrażarki otwarte",
+              "wine_door_ajar": "Drzwi chłodziarki do wina otwarte",
+              "wine_setpoint_changed": "Zmieniono temperaturę zadaną chłodziarki do wina",
+              "refrigerator_service_required": "Lodówka wymaga serwisu",
+              "refrigerator_setpoint_changed": "Zmieniono temperaturę zadaną lodówki",
+              "freezer_setpoint_changed": "Zmieniono temperaturę zadaną zamrażarki",
+              "water_filter_expired": "Filtr wody do wymiany",
+              "air_filter_expired": "Filtr powietrza do wymiany",
+              "wine_temperature_alert": "Temperatura w chłodziarce do wina poza zakresem",
+              "ice_maker_door_ajar": "Drzwi kostkarki do lodu otwarte",
+              "ice_cleaning_required": "Wymagany cykl czyszczenia kostkarki do lodu",
+              "ice_cleaning_due_soon": "Wkrótce wymagany cykl czyszczenia kostkarki do lodu",
+              "ice_cleaning_add_descaler": "Cykl czyszczenia kostkarki do lodu wymaga odkamieniacza",
+              "ice_cleaning_add_sanitizer": "Cykl czyszczenia kostkarki do lodu wymaga środka dezynfekującego",
+              "ice_cleaning_cancelled": "Anulowano cykl czyszczenia kostkarki do lodu",
+              "ice_cleaning_complete": "Zakończono cykl czyszczenia kostkarki do lodu",
+              "oven_preheated": "Zakończono nagrzewanie piekarnika",
+              "lower_oven_preheated": "Zakończono nagrzewanie dolnego piekarnika",
+              "oven_probe_connected": "Sonda piekarnika w użyciu",
+              "lower_oven_probe_connected": "Sonda dolnego piekarnika w użyciu",
+              "oven_probe_target_reached": "Osiągnięto temperaturę sondy piekarnika",
+              "lower_oven_probe_target_reached": "Osiągnięto temperaturę sondy dolnego piekarnika",
+              "kitchen_timer_complete": "Minutnik kuchenny zakończył odliczanie",
+              "kitchen_timer_2_complete": "Minutnik kuchenny 2 zakończył odliczanie",
+              "kitchen_timer_under_one_minute": "Na minutniku kuchennym została minuta",
+              "kitchen_timer_2_under_one_minute": "Na minutniku kuchennym 2 została minuta",
+              "oven_cooking_timer_complete": "Minutnik pieczenia piekarnika zakończył odliczanie",
+              "lower_oven_cooking_timer_complete": "Minutnik pieczenia dolnego piekarnika zakończył odliczanie",
+              "oven_cooking_timer_under_one_minute": "Na minutniku pieczenia piekarnika została minuta",
+              "lower_oven_cooking_timer_under_one_minute": "Na minutniku pieczenia dolnego piekarnika została minuta",
+              "oven_probe_within_ten_degrees": "Sonda piekarnika mniej niż 10 °F od celu",
+              "lower_oven_probe_within_ten_degrees": "Sonda dolnego piekarnika mniej niż 10 °F od celu",
+              "oven_service_required": "Piekarnik wymaga serwisu",
+              "oven_door_ajar": "Drzwi piekarnika otwarte",
+              "lower_oven_door_ajar": "Drzwi dolnego piekarnika otwarte",
+              "oven_self_clean_complete": "Zakończono czyszczenie piekarnika",
+              "lower_oven_self_clean_complete": "Zakończono czyszczenie dolnego piekarnika",
+              "dishwasher_started": "Rozpoczęto cykl zmywania",
+              "dishwasher_complete": "Zakończono cykl zmywania",
+              "softener_salt_low": "Niski poziom soli zmiękczającej",
+              "rinse_aid_low": "Niski poziom nabłyszczacza",
+              "dishwasher_service_required": "Zmywarka wymaga serwisu",
+              "dishwasher_paused": "Przerwano cykl zmywania",
+              "dishwasher_cancelled": "Anulowano cykl zmywania",
+              "fault_notification": "Usterka urządzenia",
+              "feedback_notification": "Prośba o opinię"
+            }
+          }
+        }
+      }
+    }
+  }
+}

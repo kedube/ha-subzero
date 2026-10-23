@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="256" viewBox="0 0 1200 256">
+  <title>Sub-Zero for Home Assistant</title>
+  <!-- The mark is the same as icon.svg. The text is set in SF Pro Display, with
+       Helvetica Neue or Arial as fallbacks; the PNGs were rendered on macOS. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#45c8f2"/>
+      <stop offset="0.55" stop-color="#1683cf"/>
+      <stop offset="1" stop-color="#0a3f80"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.22" cy="0.12" r="0.75">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <g transform="scale(0.5)">
+    <rect width="512" height="512" rx="116" fill="url(#tile)"/>
+    <rect width="512" height="512" rx="116" fill="url(#glow)"/>
+    <!-- A six-armed snowflake, each arm with one chevron. -->
+    <g fill="none" stroke="#fff" stroke-width="32" stroke-linecap="round" stroke-linejoin="round">
+      <g id="arm"><path d="M256,256 V100"/><path d="M212,128 L256,172 L300,128"/></g>
+      <use href="#arm" transform="rotate(60 256 256)"/>
+      <use href="#arm" transform="rotate(120 256 256)"/>
+      <use href="#arm" transform="rotate(180 256 256)"/>
+      <use href="#arm" transform="rotate(240 256 256)"/>
+      <use href="#arm" transform="rotate(300 256 256)"/>
+    </g>
+  </g>
+  <text x="304" y="148" font-family="'SF Pro Display','Helvetica Neue',Helvetica,Arial,sans-serif" font-weight="700" font-size="124" letter-spacing="-2" fill="#0b2a4a">Sub-Zero</text>
+  <text x="308" y="222" font-family="'SF Pro Display','Helvetica Neue',Helvetica,Arial,sans-serif" font-weight="500" font-size="50" fill="#5b6b7f">for Home Assistant</text>
+</svg>

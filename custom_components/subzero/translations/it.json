@@ -1,0 +1,154 @@
+{
+  "config": {
+    "initiate_flow": {"user": "Aggiungi account"},
+    "step": {
+      "user": {
+        "title": "Accedi a Sub-Zero",
+        "description": "Usa l'email e la password del tuo account Sub-Zero Group Owner. La password serve solo per l'accesso e non viene salvata.",
+        "data": {"username": "Email", "password": "Password"}
+      },
+      "mfa_challenge": {
+        "title": "Autenticazione a più fattori",
+        "description": "Sub-Zero richiede una verifica per {masked_phone}. Scegli come ricevere il codice di verifica.{captcha_image}",
+        "data": {"captcha": "Caratteri CAPTCHA", "method": "Metodo di verifica"}
+      },
+      "mfa_code": {
+        "title": "Inserisci il codice di verifica",
+        "description": "Inserisci il codice di verifica a 6 cifre inviato a {masked_phone}, oppure lascia vuoto il campo per richiedere un nuovo codice.",
+        "data": {"code": "Codice di verifica"}
+      },
+      "mfa_call": {
+        "title": "Verifica tramite telefonata"
+      },
+      "device": {
+        "title": "Seleziona gli elettrodomestici",
+        "description": "Scegli gli elettrodomestici da includere in Home Assistant. Gli avvisi Firebase degli elettrodomestici restano disattivati finché non li attivi. Registrano Home Assistant presso Sub-Zero come destinatario aggiuntivo degli avvisi e si collegano a Google. Puoi cambiare questa scelta in seguito con Configura.",
+        "data": {"device_ids": "Elettrodomestici", "firebase_alerts": "Avvisi Firebase degli elettrodomestici"}
+      }
+    },
+    "progress": {
+      "wait_for_call": "Rispondi alla chiamata al {masked_phone} e premi # per confermare."
+    },
+    "error": {
+      "invalid_auth": "Sub-Zero non ha accettato i dati di accesso, oppure la sessione è scaduta. Se necessario, riavvia la configurazione.",
+      "invalid_captcha": "I caratteri non corrispondono al CAPTCHA. Riprova con la nuova immagine.",
+      "invalid_mfa_code": "Il codice di verifica non è stato accettato. Controlla il codice e riprova, oppure lascia vuoto il campo per richiederne uno nuovo.",
+      "mfa_code_expired": "Il codice di verifica è scaduto o è stato rifiutato troppe volte. Richiedi un nuovo codice per riprovare.",
+      "mfa_call_failed": "La telefonata di verifica non è stata completata in tempo. Riprova.",
+      "cannot_connect": "Impossibile connettersi a Sub-Zero o leggere l'elettrodomestico. Riprova più tardi.",
+      "rate_limited": "Sub-Zero ha chiesto di ridurre la frequenza delle richieste. Attendi prima di riprovare.",
+      "verification_required": "Questo account richiede un ulteriore passaggio di verifica che questa versione non supporta ancora.",
+      "invalid_device": "Seleziona elettrodomestici di questo account.",
+      "select_device": "Seleziona almeno un elettrodomestico."
+    },
+    "abort": {
+      "already_configured": "Questo account è già configurato. Apri Configura sulla voce Sub-Zero esistente per aggiungere elettrodomestici.",
+      "all_configured": "Questi elettrodomestici sono già gestiti da un'altra voce Sub-Zero.",
+      "no_appliances": "Nessun elettrodomestico connesso trovato in questo account.",
+      "wrong_account": "Accedi con l'account Sub-Zero originale.",
+      "reauth_successful": "Accesso a Sub-Zero rinnovato."
+    }
+  },
+  "services": {
+    "schedule_ice_delay": {
+      "name": "Programma pausa del fabbricatore di ghiaccio",
+      "description": "Mette in pausa un fabbricatore di ghiaccio indipendente da 1 a 12 ore, subito o più tardi oggi.",
+      "fields": {
+        "device_id": {"name": "Fabbricatore di ghiaccio", "description": "Il fabbricatore di ghiaccio indipendente da mettere in pausa."},
+        "duration": {"name": "Durata", "description": "Ore di pausa della produzione di ghiaccio."},
+        "start_in": {"name": "Inizia tra", "description": "Minuti prima dell'inizio della pausa. Zero la avvia subito."},
+        "repeat": {"name": "Ripeti ogni giorno", "description": "Ripete la pausa ogni giorno."}
+      }
+    },
+    "refresh": {
+      "name": "Aggiorna",
+      "description": "Legge lo stato attuale degli elettrodomestici e ripristina i loro aggiornamenti in tempo reale se si sono interrotti. Da usare prima che un'automazione agisca in base a un sensore.",
+      "fields": {
+        "device_id": {"name": "Elettrodomestici", "description": "Gli elettrodomestici da aggiornare."}
+      }
+    }
+  },
+  "selector": {
+    "mfa_method": {
+      "options": {"onewaysms": "SMS", "dialphone": "Telefonata"}
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Scegli gli elettrodomestici",
+        "description": "L'elenco viene aggiornato dal tuo account Sub-Zero. Deselezionando un elettrodomestico vengono rimossi da Home Assistant il relativo dispositivo e le sue entità. Gli aggiornamenti push vengono controllati dopo ogni evento di un elettrodomestico e mentre una porta è aperta. Attiva il controllo condiviso della connessione per controllare anche un elettrodomestico quando non arriva nulla per il suo intervallo, 3 minuti per impostazione predefinita, così gli aggiornamenti push interrotti vengono rilevati prima; intervalli più brevi generano più richieste al cloud. Disattivando gli avvisi Firebase degli elettrodomestici ci si disconnette da Google e vengono rimosse le iscrizioni agli avvisi Sub-Zero di questa integrazione.",
+        "data": {"device_ids": "Elettrodomestici", "shared_connection_check": "Controllo condiviso della connessione", "shared_connection_check_interval": "Intervallo del controllo condiviso della connessione", "firebase_alerts": "Avvisi Firebase degli elettrodomestici"}
+      }
+    },
+    "error": {
+      "cannot_connect": "Impossibile aggiornare l'elenco degli elettrodomestici, quindi vengono mostrati solo quelli salvati. Puoi comunque modificare le altre impostazioni.",
+      "rate_limited": "Sub-Zero ha chiesto di ridurre la frequenza delle richieste, quindi vengono mostrati solo gli elettrodomestici salvati. Puoi comunque modificare le altre impostazioni.",
+      "invalid_device": "Seleziona elettrodomestici di questo account."
+    },
+    "abort": {
+      "reauth_required": "Accedi di nuovo tramite la richiesta di accesso Sub-Zero di Home Assistant, poi riapri Configura.",
+      "all_configured": "Questi elettrodomestici sono già gestiti da un'altra voce Sub-Zero. Riapri Configura per aggiornare l'elenco."
+    }
+  },
+  "entity": {
+    "event": {
+      "appliance_event": {
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "unknown": "Sconosciuto",
+              "refrigerator_door_ajar": "Porta del frigorifero aperta",
+              "freezer_door_ajar": "Porta del congelatore aperta",
+              "wine_door_ajar": "Porta della cantinetta aperta",
+              "wine_setpoint_changed": "Temperatura impostata della cantinetta modificata",
+              "refrigerator_service_required": "Assistenza al frigorifero necessaria",
+              "refrigerator_setpoint_changed": "Temperatura impostata del frigorifero modificata",
+              "freezer_setpoint_changed": "Temperatura impostata del congelatore modificata",
+              "water_filter_expired": "Filtro dell'acqua scaduto",
+              "air_filter_expired": "Filtro dell'aria scaduto",
+              "wine_temperature_alert": "Temperatura della cantinetta fuori intervallo",
+              "ice_maker_door_ajar": "Sportello del fabbricatore di ghiaccio aperto",
+              "ice_cleaning_required": "Ciclo di pulizia del fabbricatore di ghiaccio necessario",
+              "ice_cleaning_due_soon": "Ciclo di pulizia del fabbricatore di ghiaccio necessario a breve",
+              "ice_cleaning_add_descaler": "Il ciclo di pulizia del fabbricatore di ghiaccio richiede il decalcificante",
+              "ice_cleaning_add_sanitizer": "Il ciclo di pulizia del fabbricatore di ghiaccio richiede il disinfettante",
+              "ice_cleaning_cancelled": "Ciclo di pulizia del fabbricatore di ghiaccio annullato",
+              "ice_cleaning_complete": "Ciclo di pulizia del fabbricatore di ghiaccio completato",
+              "oven_preheated": "Preriscaldamento del forno completato",
+              "lower_oven_preheated": "Preriscaldamento del forno inferiore completato",
+              "oven_probe_connected": "Sonda del forno in uso",
+              "lower_oven_probe_connected": "Sonda del forno inferiore in uso",
+              "oven_probe_target_reached": "Temperatura della sonda del forno raggiunta",
+              "lower_oven_probe_target_reached": "Temperatura della sonda del forno inferiore raggiunta",
+              "kitchen_timer_complete": "Timer da cucina terminato",
+              "kitchen_timer_2_complete": "Timer da cucina 2 terminato",
+              "kitchen_timer_under_one_minute": "Al timer da cucina manca un minuto",
+              "kitchen_timer_2_under_one_minute": "Al timer da cucina 2 manca un minuto",
+              "oven_cooking_timer_complete": "Timer di cottura del forno terminato",
+              "lower_oven_cooking_timer_complete": "Timer di cottura del forno inferiore terminato",
+              "oven_cooking_timer_under_one_minute": "Al timer di cottura del forno manca un minuto",
+              "lower_oven_cooking_timer_under_one_minute": "Al timer di cottura del forno inferiore manca un minuto",
+              "oven_probe_within_ten_degrees": "Sonda del forno a meno di 10 °F dall'obiettivo",
+              "lower_oven_probe_within_ten_degrees": "Sonda del forno inferiore a meno di 10 °F dall'obiettivo",
+              "oven_service_required": "Assistenza al forno necessaria",
+              "oven_door_ajar": "Porta del forno aperta",
+              "lower_oven_door_ajar": "Porta del forno inferiore aperta",
+              "oven_self_clean_complete": "Pulizia del forno completata",
+              "lower_oven_self_clean_complete": "Pulizia del forno inferiore completata",
+              "dishwasher_started": "Ciclo di lavaggio avviato",
+              "dishwasher_complete": "Ciclo di lavaggio completato",
+              "softener_salt_low": "Sale addolcitore in esaurimento",
+              "rinse_aid_low": "Brillantante in esaurimento",
+              "dishwasher_service_required": "Assistenza alla lavastoviglie necessaria",
+              "dishwasher_paused": "Ciclo di lavaggio interrotto",
+              "dishwasher_cancelled": "Ciclo di lavaggio annullato",
+              "fault_notification": "Guasto dell'elettrodomestico",
+              "feedback_notification": "Richiesta di feedback"
+            }
+          }
+        }
+      }
+    }
+  }
+}

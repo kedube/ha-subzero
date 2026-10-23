@@ -1,0 +1,154 @@
+{
+  "config": {
+    "initiate_flow": {"user": "Add account"},
+    "step": {
+      "user": {
+        "title": "Sign in to Sub-Zero",
+        "description": "Use the email and password for your Sub-Zero Group Owner account. Your password is used to sign in and is not saved.",
+        "data": {"username": "Email", "password": "Password"}
+      },
+      "mfa_challenge": {
+        "title": "Multi-factor authentication",
+        "description": "Sub-Zero requires verification for {masked_phone}. Choose how to receive your verification code.{captcha_image}",
+        "data": {"captcha": "CAPTCHA characters", "method": "Verification method"}
+      },
+      "mfa_code": {
+        "title": "Enter verification code",
+        "description": "Enter the 6-digit verification code sent to {masked_phone}, or leave it blank to request a new code.",
+        "data": {"code": "Verification code"}
+      },
+      "mfa_call": {
+        "title": "Phone call verification"
+      },
+      "device": {
+        "title": "Select appliances",
+        "description": "Choose the appliances to include in Home Assistant. Firebase appliance alerts are off unless you turn them on. They register Home Assistant as an additional alert receiver with Sub-Zero and connect to Google. You can change this later using Configure.",
+        "data": {"device_ids": "Appliances", "firebase_alerts": "Firebase appliance alerts"}
+      }
+    },
+    "progress": {
+      "wait_for_call": "Answer the call to {masked_phone} and press # to verify."
+    },
+    "error": {
+      "invalid_auth": "Sub-Zero did not accept the sign-in details, or the session expired. Start setup again if needed.",
+      "invalid_captcha": "The characters did not match the CAPTCHA challenge. Please try again with the new image.",
+      "invalid_mfa_code": "The verification code was not accepted. Check the code and try again, or leave it blank to request a new code.",
+      "mfa_code_expired": "The verification code expired or was rejected too many times. Request a new code to try again.",
+      "mfa_call_failed": "The verification phone call was not completed in time. Please try again.",
+      "cannot_connect": "Could not connect to Sub-Zero or read the appliance. Try again later.",
+      "rate_limited": "Sub-Zero asked us to slow down. Wait before trying again.",
+      "verification_required": "This account requires an additional verification step that this release does not yet support.",
+      "invalid_device": "Select appliances from this account.",
+      "select_device": "Select at least one appliance."
+    },
+    "abort": {
+      "already_configured": "This account is already configured. Open Configure on its existing Sub-Zero entry to add appliances.",
+      "all_configured": "These appliances are already managed by another Sub-Zero entry.",
+      "no_appliances": "No connected appliances were found on this account.",
+      "wrong_account": "Sign in with the original Sub-Zero account.",
+      "reauth_successful": "Sub-Zero sign-in renewed."
+    }
+  },
+  "services": {
+    "schedule_ice_delay": {
+      "name": "Schedule ice delay",
+      "description": "Pause a dedicated ice maker for 1 to 12 hours, now or later today.",
+      "fields": {
+        "device_id": {"name": "Ice maker", "description": "The dedicated ice maker to pause."},
+        "duration": {"name": "Duration", "description": "Hours to pause ice production."},
+        "start_in": {"name": "Start in", "description": "Minutes until the pause begins. Zero starts now."},
+        "repeat": {"name": "Repeat daily", "description": "Repeat the pause every day."}
+      }
+    },
+    "refresh": {
+      "name": "Refresh",
+      "description": "Read the current state of appliances and restore their live updates if they stopped. Use it before an automation acts on a sensor.",
+      "fields": {
+        "device_id": {"name": "Appliances", "description": "The appliances to refresh."}
+      }
+    }
+  },
+  "selector": {
+    "mfa_method": {
+      "options": {"onewaysms": "Text message (SMS)", "dialphone": "Phone call"}
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Choose appliances",
+        "description": "The list is refreshed from your Sub-Zero account. Deselecting an appliance removes its Home Assistant device and entities. Push updates are checked after each appliance event and while a door is open. Turn on the shared connection check to also check one appliance whenever nothing arrives for its interval, 3 minutes by default, which finds stopped push updates sooner; shorter intervals make more cloud requests. Turning off Firebase appliance alerts disconnects from Google and removes this integration's Sub-Zero alert subscriptions.",
+        "data": {"device_ids": "Appliances", "shared_connection_check": "Shared connection check", "shared_connection_check_interval": "Shared connection check interval", "firebase_alerts": "Firebase appliance alerts"}
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not refresh the appliance list, so only the saved appliances are shown. You can still change the other settings.",
+      "rate_limited": "Sub-Zero asked us to slow down, so only the saved appliances are shown. You can still change the other settings.",
+      "invalid_device": "Select appliances from this account."
+    },
+    "abort": {
+      "reauth_required": "Sign in again using Home Assistant's Sub-Zero sign-in prompt, then reopen Configure.",
+      "all_configured": "These appliances are already managed by another Sub-Zero entry. Reopen Configure to refresh the list."
+    }
+  },
+  "entity": {
+    "event": {
+      "appliance_event": {
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "unknown": "Unknown",
+              "refrigerator_door_ajar": "Refrigerator door open",
+              "freezer_door_ajar": "Freezer door open",
+              "wine_door_ajar": "Wine storage door open",
+              "wine_setpoint_changed": "Wine storage setpoint changed",
+              "refrigerator_service_required": "Refrigerator service required",
+              "refrigerator_setpoint_changed": "Refrigerator setpoint changed",
+              "freezer_setpoint_changed": "Freezer setpoint changed",
+              "water_filter_expired": "Water filter expired",
+              "air_filter_expired": "Air filter expired",
+              "wine_temperature_alert": "Wine storage temperature out of range",
+              "ice_maker_door_ajar": "Ice maker door open",
+              "ice_cleaning_required": "Ice maker clean cycle due",
+              "ice_cleaning_due_soon": "Ice maker clean cycle due soon",
+              "ice_cleaning_add_descaler": "Ice maker clean cycle needs descaler",
+              "ice_cleaning_add_sanitizer": "Ice maker clean cycle needs sanitizer",
+              "ice_cleaning_cancelled": "Ice maker clean cycle canceled",
+              "ice_cleaning_complete": "Ice maker clean cycle complete",
+              "oven_preheated": "Oven preheat complete",
+              "lower_oven_preheated": "Lower oven preheat complete",
+              "oven_probe_connected": "Oven probe in use",
+              "lower_oven_probe_connected": "Lower oven probe in use",
+              "oven_probe_target_reached": "Oven probe temperature reached",
+              "lower_oven_probe_target_reached": "Lower oven probe temperature reached",
+              "kitchen_timer_complete": "Kitchen timer ended",
+              "kitchen_timer_2_complete": "Kitchen timer 2 ended",
+              "kitchen_timer_under_one_minute": "Kitchen timer has one minute remaining",
+              "kitchen_timer_2_under_one_minute": "Kitchen timer 2 has one minute remaining",
+              "oven_cooking_timer_complete": "Oven cooking timer ended",
+              "lower_oven_cooking_timer_complete": "Lower oven cooking timer ended",
+              "oven_cooking_timer_under_one_minute": "Oven cooking timer has one minute remaining",
+              "lower_oven_cooking_timer_under_one_minute": "Lower oven cooking timer has one minute remaining",
+              "oven_probe_within_ten_degrees": "Oven probe within 10°F of target",
+              "lower_oven_probe_within_ten_degrees": "Lower oven probe within 10°F of target",
+              "oven_service_required": "Oven service required",
+              "oven_door_ajar": "Oven door open",
+              "lower_oven_door_ajar": "Lower oven door open",
+              "oven_self_clean_complete": "Oven clean complete",
+              "lower_oven_self_clean_complete": "Lower oven clean complete",
+              "dishwasher_started": "Wash cycle started",
+              "dishwasher_complete": "Wash cycle complete",
+              "softener_salt_low": "Water softener salt low",
+              "rinse_aid_low": "Rinse aid low",
+              "dishwasher_service_required": "Dishwasher service required",
+              "dishwasher_paused": "Wash cycle interrupted",
+              "dishwasher_cancelled": "Wash cycle canceled",
+              "fault_notification": "Appliance fault",
+              "feedback_notification": "Feedback request"
+            }
+          }
+        }
+      }
+    }
+  }
+}

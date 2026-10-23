@@ -1,0 +1,154 @@
+{
+  "config": {
+    "initiate_flow": {"user": "Añadir cuenta"},
+    "step": {
+      "user": {
+        "title": "Iniciar sesión en Sub-Zero",
+        "description": "Usa el correo electrónico y la contraseña de tu cuenta de Sub-Zero Group Owner. Tu contraseña solo se usa para iniciar sesión y no se guarda.",
+        "data": {"username": "Correo electrónico", "password": "Contraseña"}
+      },
+      "mfa_challenge": {
+        "title": "Autenticación multifactor",
+        "description": "Sub-Zero requiere verificar {masked_phone}. Elige cómo quieres recibir tu código de verificación.{captcha_image}",
+        "data": {"captcha": "Caracteres del CAPTCHA", "method": "Método de verificación"}
+      },
+      "mfa_code": {
+        "title": "Introduce el código de verificación",
+        "description": "Introduce el código de verificación de 6 dígitos enviado a {masked_phone}, o déjalo en blanco para solicitar uno nuevo.",
+        "data": {"code": "Código de verificación"}
+      },
+      "mfa_call": {
+        "title": "Verificación por llamada telefónica"
+      },
+      "device": {
+        "title": "Selecciona los electrodomésticos",
+        "description": "Elige los electrodomésticos que quieres incluir en Home Assistant. Las alertas de electrodomésticos de Firebase están desactivadas hasta que las actives. Registran Home Assistant en Sub-Zero como receptor adicional de alertas y se conectan a Google. Puedes cambiarlo más tarde desde Configurar.",
+        "data": {"device_ids": "Electrodomésticos", "firebase_alerts": "Alertas de electrodomésticos de Firebase"}
+      }
+    },
+    "progress": {
+      "wait_for_call": "Responde a la llamada a {masked_phone} y pulsa # para verificar."
+    },
+    "error": {
+      "invalid_auth": "Sub-Zero no aceptó los datos de inicio de sesión, o la sesión caducó. Vuelve a iniciar la configuración si es necesario.",
+      "invalid_captcha": "Los caracteres no coinciden con el CAPTCHA. Inténtalo de nuevo con la nueva imagen.",
+      "invalid_mfa_code": "No se aceptó el código de verificación. Comprueba el código e inténtalo de nuevo, o déjalo en blanco para solicitar uno nuevo.",
+      "mfa_code_expired": "El código de verificación caducó o se rechazó demasiadas veces. Solicita un código nuevo para intentarlo de nuevo.",
+      "mfa_call_failed": "La llamada de verificación no se completó a tiempo. Inténtalo de nuevo.",
+      "cannot_connect": "No se pudo conectar con Sub-Zero ni leer el electrodoméstico. Inténtalo más tarde.",
+      "rate_limited": "Sub-Zero pidió reducir la frecuencia de las solicitudes. Espera antes de volver a intentarlo.",
+      "verification_required": "Esta cuenta requiere un paso de verificación adicional que esta versión aún no admite.",
+      "invalid_device": "Selecciona electrodomésticos de esta cuenta.",
+      "select_device": "Selecciona al menos un electrodoméstico."
+    },
+    "abort": {
+      "already_configured": "Esta cuenta ya está configurada. Abre Configurar en su entrada de Sub-Zero existente para añadir electrodomésticos.",
+      "all_configured": "Estos electrodomésticos ya los gestiona otra entrada de Sub-Zero.",
+      "no_appliances": "No se encontraron electrodomésticos conectados en esta cuenta.",
+      "wrong_account": "Inicia sesión con la cuenta de Sub-Zero original.",
+      "reauth_successful": "Inicio de sesión de Sub-Zero renovado."
+    }
+  },
+  "services": {
+    "schedule_ice_delay": {
+      "name": "Programar pausa de la máquina de hielo",
+      "description": "Pausa una máquina de hielo independiente entre 1 y 12 horas, ahora o más tarde hoy.",
+      "fields": {
+        "device_id": {"name": "Máquina de hielo", "description": "La máquina de hielo independiente que se va a pausar."},
+        "duration": {"name": "Duración", "description": "Horas que se pausa la producción de hielo."},
+        "start_in": {"name": "Empezar en", "description": "Minutos hasta que empiece la pausa. Cero empieza ahora."},
+        "repeat": {"name": "Repetir a diario", "description": "Repite la pausa todos los días."}
+      }
+    },
+    "refresh": {
+      "name": "Actualizar",
+      "description": "Lee el estado actual de los electrodomésticos y restablece sus actualizaciones en directo si se detuvieron. Úsala antes de que una automatización actúe según un sensor.",
+      "fields": {
+        "device_id": {"name": "Electrodomésticos", "description": "Los electrodomésticos que se actualizarán."}
+      }
+    }
+  },
+  "selector": {
+    "mfa_method": {
+      "options": {"onewaysms": "Mensaje de texto (SMS)", "dialphone": "Llamada telefónica"}
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Elige los electrodomésticos",
+        "description": "La lista se actualiza desde tu cuenta de Sub-Zero. Al deseleccionar un electrodoméstico se eliminan su dispositivo y sus entidades de Home Assistant. Las actualizaciones push se comprueban después de cada evento de un electrodoméstico y mientras una puerta está abierta. Activa la comprobación compartida de la conexión para comprobar además un electrodoméstico cuando no llega nada durante su intervalo, 3 minutos de forma predeterminada, lo que detecta antes las actualizaciones push detenidas; los intervalos más cortos generan más solicitudes a la nube. Desactivar las alertas de electrodomésticos de Firebase desconecta de Google y elimina las suscripciones de alertas de Sub-Zero de esta integración.",
+        "data": {"device_ids": "Electrodomésticos", "shared_connection_check": "Comprobación compartida de la conexión", "shared_connection_check_interval": "Intervalo de la comprobación compartida de la conexión", "firebase_alerts": "Alertas de electrodomésticos de Firebase"}
+      }
+    },
+    "error": {
+      "cannot_connect": "No se pudo actualizar la lista de electrodomésticos, así que solo se muestran los guardados. Aún puedes cambiar los demás ajustes.",
+      "rate_limited": "Sub-Zero pidió reducir la frecuencia de las solicitudes, así que solo se muestran los electrodomésticos guardados. Aún puedes cambiar los demás ajustes.",
+      "invalid_device": "Selecciona electrodomésticos de esta cuenta."
+    },
+    "abort": {
+      "reauth_required": "Vuelve a iniciar sesión desde el aviso de inicio de sesión de Sub-Zero de Home Assistant y después abre Configurar de nuevo.",
+      "all_configured": "Estos electrodomésticos ya los gestiona otra entrada de Sub-Zero. Vuelve a abrir Configurar para actualizar la lista."
+    }
+  },
+  "entity": {
+    "event": {
+      "appliance_event": {
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "unknown": "Desconocido",
+              "refrigerator_door_ajar": "Puerta del frigorífico abierta",
+              "freezer_door_ajar": "Puerta del congelador abierta",
+              "wine_door_ajar": "Puerta de la vinoteca abierta",
+              "wine_setpoint_changed": "Temperatura objetivo de la vinoteca cambiada",
+              "refrigerator_service_required": "El frigorífico necesita servicio técnico",
+              "refrigerator_setpoint_changed": "Temperatura objetivo del frigorífico cambiada",
+              "freezer_setpoint_changed": "Temperatura objetivo del congelador cambiada",
+              "water_filter_expired": "Filtro de agua caducado",
+              "air_filter_expired": "Filtro de aire caducado",
+              "wine_temperature_alert": "Temperatura de la vinoteca fuera de rango",
+              "ice_maker_door_ajar": "Puerta de la máquina de hielo abierta",
+              "ice_cleaning_required": "Ciclo de limpieza de la máquina de hielo pendiente",
+              "ice_cleaning_due_soon": "Ciclo de limpieza de la máquina de hielo próximo",
+              "ice_cleaning_add_descaler": "El ciclo de limpieza de la máquina de hielo necesita desincrustante",
+              "ice_cleaning_add_sanitizer": "El ciclo de limpieza de la máquina de hielo necesita desinfectante",
+              "ice_cleaning_cancelled": "Ciclo de limpieza de la máquina de hielo cancelado",
+              "ice_cleaning_complete": "Ciclo de limpieza de la máquina de hielo completado",
+              "oven_preheated": "Precalentamiento del horno completado",
+              "lower_oven_preheated": "Precalentamiento del horno inferior completado",
+              "oven_probe_connected": "Sonda del horno en uso",
+              "lower_oven_probe_connected": "Sonda del horno inferior en uso",
+              "oven_probe_target_reached": "Temperatura de la sonda del horno alcanzada",
+              "lower_oven_probe_target_reached": "Temperatura de la sonda del horno inferior alcanzada",
+              "kitchen_timer_complete": "Temporizador de cocina finalizado",
+              "kitchen_timer_2_complete": "Temporizador de cocina 2 finalizado",
+              "kitchen_timer_under_one_minute": "Queda un minuto en el temporizador de cocina",
+              "kitchen_timer_2_under_one_minute": "Queda un minuto en el temporizador de cocina 2",
+              "oven_cooking_timer_complete": "Temporizador de cocción del horno finalizado",
+              "lower_oven_cooking_timer_complete": "Temporizador de cocción del horno inferior finalizado",
+              "oven_cooking_timer_under_one_minute": "Queda un minuto en el temporizador de cocción del horno",
+              "lower_oven_cooking_timer_under_one_minute": "Queda un minuto en el temporizador de cocción del horno inferior",
+              "oven_probe_within_ten_degrees": "Sonda del horno a menos de 10 °F del objetivo",
+              "lower_oven_probe_within_ten_degrees": "Sonda del horno inferior a menos de 10 °F del objetivo",
+              "oven_service_required": "El horno necesita servicio técnico",
+              "oven_door_ajar": "Puerta del horno abierta",
+              "lower_oven_door_ajar": "Puerta del horno inferior abierta",
+              "oven_self_clean_complete": "Limpieza del horno completada",
+              "lower_oven_self_clean_complete": "Limpieza del horno inferior completada",
+              "dishwasher_started": "Ciclo de lavado iniciado",
+              "dishwasher_complete": "Ciclo de lavado completado",
+              "softener_salt_low": "Nivel bajo de sal descalcificadora",
+              "rinse_aid_low": "Nivel bajo de abrillantador",
+              "dishwasher_service_required": "El lavavajillas necesita servicio técnico",
+              "dishwasher_paused": "Ciclo de lavado interrumpido",
+              "dishwasher_cancelled": "Ciclo de lavado cancelado",
+              "fault_notification": "Fallo del electrodoméstico",
+              "feedback_notification": "Solicitud de opinión"
+            }
+          }
+        }
+      }
+    }
+  }
+}

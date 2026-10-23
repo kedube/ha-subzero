@@ -1,0 +1,154 @@
+{
+  "config": {
+    "initiate_flow": {"user": "Lägg till konto"},
+    "step": {
+      "user": {
+        "title": "Logga in på Sub-Zero",
+        "description": "Använd e-postadressen och lösenordet för ditt Sub-Zero Group Owner-konto. Lösenordet används bara för inloggningen och sparas inte.",
+        "data": {"username": "E-post", "password": "Lösenord"}
+      },
+      "mfa_challenge": {
+        "title": "Multifaktorautentisering",
+        "description": "Sub-Zero kräver verifiering för {masked_phone}. Välj hur du vill ta emot din verifieringskod.{captcha_image}",
+        "data": {"captcha": "CAPTCHA-tecken", "method": "Verifieringsmetod"}
+      },
+      "mfa_code": {
+        "title": "Ange verifieringskod",
+        "description": "Ange den 6-siffriga verifieringskoden som skickades till {masked_phone}, eller lämna fältet tomt för att begära en ny kod.",
+        "data": {"code": "Verifieringskod"}
+      },
+      "mfa_call": {
+        "title": "Verifiering via telefonsamtal"
+      },
+      "device": {
+        "title": "Välj vitvaror",
+        "description": "Välj vilka vitvaror som ska ingå i Home Assistant. Firebase-aviseringar för vitvaror är avstängda tills du slår på dem. De registrerar Home Assistant hos Sub-Zero som ytterligare mottagare av aviseringar och ansluter till Google. Du kan ändra detta senare under Konfigurera.",
+        "data": {"device_ids": "Vitvaror", "firebase_alerts": "Firebase-aviseringar för vitvaror"}
+      }
+    },
+    "progress": {
+      "wait_for_call": "Svara på samtalet till {masked_phone} och tryck på # för att verifiera."
+    },
+    "error": {
+      "invalid_auth": "Sub-Zero godkände inte inloggningsuppgifterna, eller så har sessionen gått ut. Starta konfigurationen igen vid behov.",
+      "invalid_captcha": "Tecknen matchade inte CAPTCHA:n. Försök igen med den nya bilden.",
+      "invalid_mfa_code": "Verifieringskoden godkändes inte. Kontrollera koden och försök igen, eller lämna fältet tomt för att begära en ny kod.",
+      "mfa_code_expired": "Verifieringskoden har gått ut eller nekats för många gånger. Begär en ny kod för att försöka igen.",
+      "mfa_call_failed": "Verifieringssamtalet slutfördes inte i tid. Försök igen.",
+      "cannot_connect": "Det gick inte att ansluta till Sub-Zero eller läsa vitvaran. Försök igen senare.",
+      "rate_limited": "Sub-Zero bad oss att skicka färre förfrågningar. Vänta innan du försöker igen.",
+      "verification_required": "Det här kontot kräver ett ytterligare verifieringssteg som den här versionen ännu inte stöder.",
+      "invalid_device": "Välj vitvaror från det här kontot.",
+      "select_device": "Välj minst en vitvara."
+    },
+    "abort": {
+      "already_configured": "Det här kontot är redan konfigurerat. Öppna Konfigurera på dess befintliga Sub-Zero-post för att lägga till vitvaror.",
+      "all_configured": "Dessa vitvaror hanteras redan av en annan Sub-Zero-post.",
+      "no_appliances": "Inga anslutna vitvaror hittades på det här kontot.",
+      "wrong_account": "Logga in med det ursprungliga Sub-Zero-kontot.",
+      "reauth_successful": "Sub-Zero-inloggningen har förnyats."
+    }
+  },
+  "services": {
+    "schedule_ice_delay": {
+      "name": "Schemalägg ispaus",
+      "description": "Pausar en fristående ismaskin i 1 till 12 timmar, nu eller senare i dag.",
+      "fields": {
+        "device_id": {"name": "Ismaskin", "description": "Den fristående ismaskin som ska pausas."},
+        "duration": {"name": "Varaktighet", "description": "Antal timmar som isproduktionen pausas."},
+        "start_in": {"name": "Starta efter", "description": "Minuter innan pausen börjar. Noll startar den direkt."},
+        "repeat": {"name": "Upprepa dagligen", "description": "Upprepar pausen varje dag."}
+      }
+    },
+    "refresh": {
+      "name": "Uppdatera",
+      "description": "Läser vitvarornas aktuella status och återställer deras liveuppdateringar om de har slutat komma. Använd före en automation som reagerar på en sensor.",
+      "fields": {
+        "device_id": {"name": "Vitvaror", "description": "Vitvarorna som ska uppdateras."}
+      }
+    }
+  },
+  "selector": {
+    "mfa_method": {
+      "options": {"onewaysms": "Sms", "dialphone": "Telefonsamtal"}
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Välj vitvaror",
+        "description": "Listan uppdateras från ditt Sub-Zero-konto. Om du avmarkerar en vitvara tas dess enhet och entiteter bort från Home Assistant. Push-uppdateringar kontrolleras efter varje händelse från en vitvara och medan en dörr står öppen. Slå på den gemensamma anslutningskontrollen för att även kontrollera en vitvara när inget har kommit under dess intervall, som standard 3 minuter, så att stoppade push-uppdateringar upptäcks tidigare; kortare intervall ger fler molnförfrågningar. Om du stänger av Firebase-aviseringar för vitvaror kopplas anslutningen till Google bort och integrationens Sub-Zero-aviseringsprenumerationer tas bort.",
+        "data": {"device_ids": "Vitvaror", "shared_connection_check": "Gemensam anslutningskontroll", "shared_connection_check_interval": "Intervall för den gemensamma anslutningskontrollen", "firebase_alerts": "Firebase-aviseringar för vitvaror"}
+      }
+    },
+    "error": {
+      "cannot_connect": "Det gick inte att uppdatera listan över vitvaror, så endast de sparade visas. Du kan fortfarande ändra de andra inställningarna.",
+      "rate_limited": "Sub-Zero bad oss att skicka färre förfrågningar, så endast de sparade vitvarorna visas. Du kan fortfarande ändra de andra inställningarna.",
+      "invalid_device": "Välj vitvaror från det här kontot."
+    },
+    "abort": {
+      "reauth_required": "Logga in igen via Home Assistants inloggningsuppmaning för Sub-Zero och öppna sedan Konfigurera igen.",
+      "all_configured": "Dessa vitvaror hanteras redan av en annan Sub-Zero-post. Öppna Konfigurera igen för att uppdatera listan."
+    }
+  },
+  "entity": {
+    "event": {
+      "appliance_event": {
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "unknown": "Okänd",
+              "refrigerator_door_ajar": "Kylskåpsdörren är öppen",
+              "freezer_door_ajar": "Frysdörren är öppen",
+              "wine_door_ajar": "Vinkylens dörr är öppen",
+              "wine_setpoint_changed": "Vinkylens inställda temperatur har ändrats",
+              "refrigerator_service_required": "Kylskåpet behöver service",
+              "refrigerator_setpoint_changed": "Kylskåpets inställda temperatur har ändrats",
+              "freezer_setpoint_changed": "Frysens inställda temperatur har ändrats",
+              "water_filter_expired": "Vattenfiltret behöver bytas",
+              "air_filter_expired": "Luftfiltret behöver bytas",
+              "wine_temperature_alert": "Vinkylens temperatur är utanför intervallet",
+              "ice_maker_door_ajar": "Ismaskinens lucka är öppen",
+              "ice_cleaning_required": "Ismaskinens rengöringscykel behövs",
+              "ice_cleaning_due_soon": "Ismaskinens rengöringscykel behövs snart",
+              "ice_cleaning_add_descaler": "Ismaskinens rengöringscykel behöver avkalkningsmedel",
+              "ice_cleaning_add_sanitizer": "Ismaskinens rengöringscykel behöver desinfektionsmedel",
+              "ice_cleaning_cancelled": "Ismaskinens rengöringscykel har avbrutits",
+              "ice_cleaning_complete": "Ismaskinens rengöringscykel är klar",
+              "oven_preheated": "Ugnens förvärmning är klar",
+              "lower_oven_preheated": "Nedre ugnens förvärmning är klar",
+              "oven_probe_connected": "Ugnens stektermometer används",
+              "lower_oven_probe_connected": "Nedre ugnens stektermometer används",
+              "oven_probe_target_reached": "Ugnens stektermometer har nått måltemperaturen",
+              "lower_oven_probe_target_reached": "Nedre ugnens stektermometer har nått måltemperaturen",
+              "kitchen_timer_complete": "Kökstimern är klar",
+              "kitchen_timer_2_complete": "Kökstimer 2 är klar",
+              "kitchen_timer_under_one_minute": "Kökstimern har en minut kvar",
+              "kitchen_timer_2_under_one_minute": "Kökstimer 2 har en minut kvar",
+              "oven_cooking_timer_complete": "Ugnens tillagningstimer är klar",
+              "lower_oven_cooking_timer_complete": "Nedre ugnens tillagningstimer är klar",
+              "oven_cooking_timer_under_one_minute": "Ugnens tillagningstimer har en minut kvar",
+              "lower_oven_cooking_timer_under_one_minute": "Nedre ugnens tillagningstimer har en minut kvar",
+              "oven_probe_within_ten_degrees": "Ugnens stektermometer är inom 10 °F från målet",
+              "lower_oven_probe_within_ten_degrees": "Nedre ugnens stektermometer är inom 10 °F från målet",
+              "oven_service_required": "Ugnen behöver service",
+              "oven_door_ajar": "Ugnsluckan är öppen",
+              "lower_oven_door_ajar": "Nedre ugnens lucka är öppen",
+              "oven_self_clean_complete": "Ugnsrengöringen är klar",
+              "lower_oven_self_clean_complete": "Nedre ugnens rengöring är klar",
+              "dishwasher_started": "Diskprogrammet har startat",
+              "dishwasher_complete": "Diskprogrammet är klart",
+              "softener_salt_low": "Avhärdningssaltet håller på att ta slut",
+              "rinse_aid_low": "Spolglansen håller på att ta slut",
+              "dishwasher_service_required": "Diskmaskinen behöver service",
+              "dishwasher_paused": "Diskprogrammet har pausats",
+              "dishwasher_cancelled": "Diskprogrammet har avbrutits",
+              "fault_notification": "Fel på vitvaran",
+              "feedback_notification": "Begäran om återkoppling"
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,194 @@
+"""Fridge modes, accent lighting, oven cooking modes, and dishwasher delay start."""
+
+from homeassistant.components.select import SelectEntity, SelectEntityDescription
+from homeassistant.const import EntityCategory
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+from . import SubZeroConfigEntry
+from .const import (
+    COOK_MODES,
+    DISHWASHER_MODES,
+    DOOR_AJAR_TIMEOUTS,
+    FRIDGE_ENUM_OPTIONS,
+    FRIDGE_MODE_KEYS,
+    HOOD_SENSITIVITY,
+    ICE_KEYS,
+    ICE_MODES,
+    MANUAL_COOK_MODES,
+    WASH_CYCLES,
+)
+from .controls import (
+    cook_mode_offered,
+    enum_labels,
+    fridge_enum_options,
+    ice_mode,
+    is_fridge,
+    is_ice_maker,
+    supports_control,
+    wash_settings_enabled,
+)
+from .entity import SubZeroEntity, async_setup_entities
+
+MODES = {
+    "Sabbath": "sabbath_on",
+    "High use": "high_use_on",
+    "Short vacation": "short_vacation_on",
+    "Long vacation": "long_vacation_on",
+}
+DESCRIPTIONS = (
+    SelectEntityDescription(
+        key="auto_sensivity", name="Automatic fan sensitivity", icon="mdi:fan-auto"
+    ),
+    SelectEntityDescription(key="ice_maker_mode", name="Ice maker", icon="mdi:ice-pop"),
+    SelectEntityDescription(key="operating_mode", name="Mode", icon="mdi:fridge-outline"),
+    SelectEntityDescription(
+        key="crisp_temp_mode", name="Crisper temperature mode", icon="mdi:thermometer-auto"
+    ),
+    SelectEntityDescription(key="humidity_control", name="Humidity control", icon="mdi:water"),
+    SelectEntityDescription(key="night_mode", name="Night mode", icon="mdi:weather-night"),
+    SelectEntityDescription(
+        key="accent_light_level", name="Accent light", icon="mdi:lightbulb-outline"
+    ),
+    SelectEntityDescription(
+        key="door_ajar_timeout",
+        name="Door open delay",
+        icon="mdi:door-open",
+        entity_category=EntityCategory.CONFIG,
+    ),
+    SelectEntityDescription(key="cav_cook_mode", name="Cooking mode", icon="mdi:stove"),
+    SelectEntityDescription(key="cav2_cook_mode", name="Lower oven cooking mode", icon="mdi:stove"),
+    SelectEntityDescription(key="wash_cycle", name="Wash cycle", icon="mdi:dishwasher"),
+    SelectEntityDescription(key="mode", name="Mode", icon="mdi:dishwasher"),
+    SelectEntityDescription(
+        key="delay_start_timer_duration", name="Delay start", icon="mdi:timer-sand"
+    ),
+)
+ENUM_OPTIONS = {
+    "auto_sensivity": HOOD_SENSITIVITY,
+    **FRIDGE_ENUM_OPTIONS,
+    "cav_cook_mode": COOK_MODES,
+    "cav2_cook_mode": COOK_MODES,
+    "wash_cycle": {name: value for value, name in WASH_CYCLES.items() if value != 0},
+    "mode": DISHWASHER_MODES,
+    "door_ajar_timeout": DOOR_AJAR_TIMEOUTS,
+    "delay_start_timer_duration": {
+        "Off": 0,
+        **{f"{hours} hour{'s' if hours != 1 else ''}": hours for hours in range(1, 13)},
+    },
+}
+
+
+def selectable_options(key: str, data: dict) -> dict[str, int]:
+    """The options the app lets the appliance choose for an enumerated setting."""
+    return fridge_enum_options(data, key) if key in FRIDGE_ENUM_OPTIONS else ENUM_OPTIONS[key]
+
+
+def control_keys(key: str, data: dict) -> tuple[str, ...]:
+    if key == "ice_maker_mode":
+        if is_ice_maker(data):
+            return ("ice_maker_on",) if "ice_maker_on" in data else ()
+        return (
+            tuple(k for k in ICE_KEYS if k in data)
+            if is_fridge(data) and "ice_maker_on" in data
+            else ()
+        )
+    if key == "operating_mode":
+        # The app offers the modes an appliance reports when it has a
+        # refrigerator, freezer, or wine setpoint.
+        if all(data.get(k) is None for k in ("ref_set_temp", "frz_set_temp", "wine_set_temp")):
+            return ()
+        return tuple(k for k in FRIDGE_MODE_KEYS if data.get(k) is not None)
+    return (key,) if key in ENUM_OPTIONS and supports_control(data, key) else ()
+
+
+async def async_setup_entry(
+    hass: HomeAssistant, entry: SubZeroConfigEntry, async_add_entities: AddEntitiesCallback
+) -> None:
+    async_setup_entities(
+        entry,
+        async_add_entities,
+        DESCRIPTIONS,
+        SubZeroSelect,
+        lambda coordinator, description: bool(control_keys(description.key, coordinator.data)),
+    )
+
+
+class SubZeroSelect(SubZeroEntity, SelectEntity):
+    @property
+    def options(self) -> list[str]:
+        data = self.coordinator.data
+        if self.entity_description.key == "ice_maker_mode":
+            keys = control_keys("ice_maker_mode", data)
+            return ["Off", "On", *(name for name, key in ICE_MODES.items() if key in keys)]
+        if self.entity_description.key == "operating_mode":
+            keys = control_keys("operating_mode", data)
+            return ["Normal", *(name for name, key in MODES.items() if key in keys)]
+        key = self.entity_description.key
+        if key.endswith("_cook_mode"):
+            return [
+                name
+                for name, value in COOK_MODES.items()
+                if value == data.get(key)
+                or (value not in MANUAL_COOK_MODES and cook_mode_offered(data, key, value))
+            ]
+        names = list(selectable_options(key, data))
+        reported = enum_labels(key).get(data.get(key)) if key in FRIDGE_ENUM_OPTIONS else None
+        return names if reported is None or reported in names else [*names, reported]
+
+    @property
+    def available(self) -> bool:
+        data = self.coordinator.data
+        keys = control_keys(self.entity_description.key, data)
+        if not self.coordinator.last_update_success or not keys:
+            return False
+        if not all(self.control_unlocked(key) for key in keys):
+            return False
+        if self.entity_description.key in {"wash_cycle", "mode"}:
+            key = self.entity_description.key
+            values = WASH_CYCLES if key == "wash_cycle" else DISHWASHER_MODES.values()
+            return type(data[key]) is int and data[key] in values and wash_settings_enabled(data)
+        if self.entity_description.key in ENUM_OPTIONS:
+            key = self.entity_description.key
+            values = enum_labels(key) if key in FRIDGE_ENUM_OPTIONS else ENUM_OPTIONS[key].values()
+            return type(data[key]) is int and data[key] in values
+        return all(type(data[key]) is bool for key in keys)
+
+    @property
+    def current_option(self) -> str | None:
+        if not self.available:
+            return None
+        data = self.coordinator.data
+        key = self.entity_description.key
+        if key in FRIDGE_ENUM_OPTIONS:
+            return enum_labels(key)[data[key]]
+        if key in ENUM_OPTIONS:
+            return next(
+                (name for name, value in ENUM_OPTIONS[key].items() if data[key] == value), None
+            )
+        if self.entity_description.key == "ice_maker_mode":
+            return ice_mode(data)
+        active = [name for name, key in MODES.items() if data.get(key) is True]
+        return active[0] if len(active) == 1 else "Normal" if not active else None
+
+    async def async_select_option(self, option: str) -> None:
+        if option not in self.options:
+            raise ServiceValidationError("The appliance does not support that option.")
+        data = self.coordinator.data
+        key = self.entity_description.key
+        if key in FRIDGE_ENUM_OPTIONS and option not in selectable_options(key, data):
+            raise ServiceValidationError("This setting can only be chosen at the appliance.")
+        if key.endswith("_cook_mode") and option == "Off":
+            properties = {key.replace("cook_mode", "unit_on"): False}
+        elif key in ENUM_OPTIONS:
+            properties = {key: selectable_options(key, data)[option]}
+        elif key == "ice_maker_mode":
+            await self.coordinator.async_set_ice_mode(option)
+            return
+        else:
+            selected = MODES.get(option)
+            properties = {k: False for k in control_keys(key, data) if k != selected}
+            if selected is not None:
+                properties[selected] = True
+        await self.coordinator.async_set_properties(properties)

@@ -1,0 +1,154 @@
+{
+  "config": {
+    "initiate_flow": {"user": "Konto hinzufügen"},
+    "step": {
+      "user": {
+        "title": "Bei Sub-Zero anmelden",
+        "description": "Verwende die E-Mail-Adresse und das Passwort deines Sub-Zero Group Owner-Kontos. Dein Passwort wird nur zur Anmeldung verwendet und nicht gespeichert.",
+        "data": {"username": "E-Mail", "password": "Passwort"}
+      },
+      "mfa_challenge": {
+        "title": "Multi-Faktor-Authentifizierung",
+        "description": "Sub-Zero verlangt eine Bestätigung für {masked_phone}. Wähle, wie du deinen Bestätigungscode erhalten möchtest.{captcha_image}",
+        "data": {"captcha": "CAPTCHA-Zeichen", "method": "Bestätigungsmethode"}
+      },
+      "mfa_code": {
+        "title": "Bestätigungscode eingeben",
+        "description": "Gib den 6-stelligen Bestätigungscode ein, der an {masked_phone} gesendet wurde, oder lass das Feld leer, um einen neuen Code anzufordern.",
+        "data": {"code": "Bestätigungscode"}
+      },
+      "mfa_call": {
+        "title": "Bestätigung per Anruf"
+      },
+      "device": {
+        "title": "Hausgeräte auswählen",
+        "description": "Wähle die Hausgeräte aus, die in Home Assistant eingebunden werden sollen. Firebase-Gerätemeldungen sind ausgeschaltet, bis du sie einschaltest. Sie registrieren Home Assistant bei Sub-Zero als zusätzlichen Empfänger für Meldungen und stellen eine Verbindung zu Google her. Du kannst das später über „Konfigurieren“ ändern.",
+        "data": {"device_ids": "Hausgeräte", "firebase_alerts": "Firebase-Gerätemeldungen"}
+      }
+    },
+    "progress": {
+      "wait_for_call": "Nimm den Anruf an {masked_phone} an und drücke zur Bestätigung #."
+    },
+    "error": {
+      "invalid_auth": "Sub-Zero hat die Anmeldedaten nicht akzeptiert oder die Sitzung ist abgelaufen. Starte die Einrichtung bei Bedarf erneut.",
+      "invalid_captcha": "Die Zeichen stimmen nicht mit dem CAPTCHA überein. Versuche es mit dem neuen Bild erneut.",
+      "invalid_mfa_code": "Der Bestätigungscode wurde nicht akzeptiert. Prüfe den Code und versuche es erneut, oder lass das Feld leer, um einen neuen Code anzufordern.",
+      "mfa_code_expired": "Der Bestätigungscode ist abgelaufen oder wurde zu oft abgelehnt. Fordere einen neuen Code an, um es erneut zu versuchen.",
+      "mfa_call_failed": "Der Bestätigungsanruf wurde nicht rechtzeitig abgeschlossen. Bitte versuche es erneut.",
+      "cannot_connect": "Es konnte keine Verbindung zu Sub-Zero hergestellt oder das Hausgerät nicht gelesen werden. Versuche es später erneut.",
+      "rate_limited": "Sub-Zero hat darum gebeten, weniger Anfragen zu senden. Warte, bevor du es erneut versuchst.",
+      "verification_required": "Dieses Konto erfordert einen zusätzlichen Bestätigungsschritt, den diese Version noch nicht unterstützt.",
+      "invalid_device": "Wähle Hausgeräte aus diesem Konto aus.",
+      "select_device": "Wähle mindestens ein Hausgerät aus."
+    },
+    "abort": {
+      "already_configured": "Dieses Konto ist bereits eingerichtet. Öffne „Konfigurieren“ beim vorhandenen Sub-Zero-Eintrag, um Hausgeräte hinzuzufügen.",
+      "all_configured": "Diese Hausgeräte werden bereits von einem anderen Sub-Zero-Eintrag verwaltet.",
+      "no_appliances": "In diesem Konto wurden keine verbundenen Hausgeräte gefunden.",
+      "wrong_account": "Melde dich mit dem ursprünglichen Sub-Zero-Konto an.",
+      "reauth_successful": "Sub-Zero-Anmeldung erneuert."
+    }
+  },
+  "services": {
+    "schedule_ice_delay": {
+      "name": "Eisbereiter-Pause planen",
+      "description": "Pausiert einen separaten Eisbereiter für 1 bis 12 Stunden, sofort oder später am Tag.",
+      "fields": {
+        "device_id": {"name": "Eisbereiter", "description": "Der separate Eisbereiter, der pausiert werden soll."},
+        "duration": {"name": "Dauer", "description": "Stunden, für die die Eisproduktion pausiert."},
+        "start_in": {"name": "Start in", "description": "Minuten bis zum Beginn der Pause. Null startet sofort."},
+        "repeat": {"name": "Täglich wiederholen", "description": "Wiederholt die Pause jeden Tag."}
+      }
+    },
+    "refresh": {
+      "name": "Aktualisieren",
+      "description": "Liest den aktuellen Zustand der Hausgeräte und stellt ihre Live-Updates wieder her, falls sie ausgeblieben sind. Vor einer Automation verwenden, die auf einen Sensor reagiert.",
+      "fields": {
+        "device_id": {"name": "Hausgeräte", "description": "Die zu aktualisierenden Hausgeräte."}
+      }
+    }
+  },
+  "selector": {
+    "mfa_method": {
+      "options": {"onewaysms": "Textnachricht (SMS)", "dialphone": "Anruf"}
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Hausgeräte auswählen",
+        "description": "Die Liste wird aus deinem Sub-Zero-Konto aktualisiert. Wenn du ein Hausgerät abwählst, werden sein Gerät und seine Entitäten aus Home Assistant entfernt. Push-Updates werden nach jedem Gerätereignis und bei offener Tür geprüft. Schalte die gemeinsame Verbindungsprüfung ein, um zusätzlich ein Hausgerät zu prüfen, sobald während ihres Intervalls, standardmäßig 3 Minuten, nichts ankommt. So werden ausbleibende Push-Updates früher erkannt; kürzere Intervalle erzeugen mehr Cloud-Anfragen. Das Ausschalten der Firebase-Gerätemeldungen trennt die Verbindung zu Google und entfernt die Sub-Zero-Meldungsabonnements dieser Integration.",
+        "data": {"device_ids": "Hausgeräte", "shared_connection_check": "Gemeinsame Verbindungsprüfung", "shared_connection_check_interval": "Intervall der gemeinsamen Verbindungsprüfung", "firebase_alerts": "Firebase-Gerätemeldungen"}
+      }
+    },
+    "error": {
+      "cannot_connect": "Die Liste der Hausgeräte konnte nicht aktualisiert werden, daher werden nur die gespeicherten angezeigt. Du kannst die anderen Einstellungen trotzdem ändern.",
+      "rate_limited": "Sub-Zero hat darum gebeten, weniger Anfragen zu senden, daher werden nur die gespeicherten Hausgeräte angezeigt. Du kannst die anderen Einstellungen trotzdem ändern.",
+      "invalid_device": "Wähle Hausgeräte aus diesem Konto aus."
+    },
+    "abort": {
+      "reauth_required": "Melde dich über die Sub-Zero-Anmeldeaufforderung von Home Assistant erneut an und öffne dann „Konfigurieren“ erneut.",
+      "all_configured": "Diese Hausgeräte werden bereits von einem anderen Sub-Zero-Eintrag verwaltet. Öffne „Konfigurieren“ erneut, um die Liste zu aktualisieren."
+    }
+  },
+  "entity": {
+    "event": {
+      "appliance_event": {
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "unknown": "Unbekannt",
+              "refrigerator_door_ajar": "Kühlschranktür offen",
+              "freezer_door_ajar": "Gefrierschranktür offen",
+              "wine_door_ajar": "Weinschranktür offen",
+              "wine_setpoint_changed": "Solltemperatur des Weinschranks geändert",
+              "refrigerator_service_required": "Kühlschrank-Service erforderlich",
+              "refrigerator_setpoint_changed": "Solltemperatur des Kühlschranks geändert",
+              "freezer_setpoint_changed": "Solltemperatur des Gefrierschranks geändert",
+              "water_filter_expired": "Wasserfilter abgelaufen",
+              "air_filter_expired": "Luftfilter abgelaufen",
+              "wine_temperature_alert": "Weinschranktemperatur außerhalb des Bereichs",
+              "ice_maker_door_ajar": "Eisbereitertür offen",
+              "ice_cleaning_required": "Reinigungszyklus des Eisbereiters fällig",
+              "ice_cleaning_due_soon": "Reinigungszyklus des Eisbereiters bald fällig",
+              "ice_cleaning_add_descaler": "Reinigungszyklus des Eisbereiters benötigt Entkalker",
+              "ice_cleaning_add_sanitizer": "Reinigungszyklus des Eisbereiters benötigt Desinfektionsmittel",
+              "ice_cleaning_cancelled": "Reinigungszyklus des Eisbereiters abgebrochen",
+              "ice_cleaning_complete": "Reinigungszyklus des Eisbereiters abgeschlossen",
+              "oven_preheated": "Vorheizen des Backofens abgeschlossen",
+              "lower_oven_preheated": "Vorheizen des unteren Backofens abgeschlossen",
+              "oven_probe_connected": "Kerntemperaturfühler des Backofens in Verwendung",
+              "lower_oven_probe_connected": "Kerntemperaturfühler des unteren Backofens in Verwendung",
+              "oven_probe_target_reached": "Kerntemperatur im Backofen erreicht",
+              "lower_oven_probe_target_reached": "Kerntemperatur im unteren Backofen erreicht",
+              "kitchen_timer_complete": "Küchentimer abgelaufen",
+              "kitchen_timer_2_complete": "Küchentimer 2 abgelaufen",
+              "kitchen_timer_under_one_minute": "Küchentimer läuft noch eine Minute",
+              "kitchen_timer_2_under_one_minute": "Küchentimer 2 läuft noch eine Minute",
+              "oven_cooking_timer_complete": "Garzeit-Timer des Backofens abgelaufen",
+              "lower_oven_cooking_timer_complete": "Garzeit-Timer des unteren Backofens abgelaufen",
+              "oven_cooking_timer_under_one_minute": "Garzeit-Timer des Backofens läuft noch eine Minute",
+              "lower_oven_cooking_timer_under_one_minute": "Garzeit-Timer des unteren Backofens läuft noch eine Minute",
+              "oven_probe_within_ten_degrees": "Kerntemperatur im Backofen weniger als 10 °F vom Zielwert entfernt",
+              "lower_oven_probe_within_ten_degrees": "Kerntemperatur im unteren Backofen weniger als 10 °F vom Zielwert entfernt",
+              "oven_service_required": "Backofen-Service erforderlich",
+              "oven_door_ajar": "Backofentür offen",
+              "lower_oven_door_ajar": "Tür des unteren Backofens offen",
+              "oven_self_clean_complete": "Backofenreinigung abgeschlossen",
+              "lower_oven_self_clean_complete": "Reinigung des unteren Backofens abgeschlossen",
+              "dishwasher_started": "Spülgang gestartet",
+              "dishwasher_complete": "Spülgang abgeschlossen",
+              "softener_salt_low": "Wenig Regeneriersalz",
+              "rinse_aid_low": "Wenig Klarspüler",
+              "dishwasher_service_required": "Geschirrspüler-Service erforderlich",
+              "dishwasher_paused": "Spülgang unterbrochen",
+              "dishwasher_cancelled": "Spülgang abgebrochen",
+              "fault_notification": "Gerätestörung",
+              "feedback_notification": "Feedback-Anfrage"
+            }
+          }
+        }
+      }
+    }
+  }
+}

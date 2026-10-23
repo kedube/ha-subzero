@@ -1,0 +1,154 @@
+{
+  "config": {
+    "initiate_flow": {"user": "Ajouter un compte"},
+    "step": {
+      "user": {
+        "title": "Se connecter à Sub-Zero",
+        "description": "Utilisez l'adresse e-mail et le mot de passe de votre compte Sub-Zero Group Owner. Votre mot de passe sert uniquement à la connexion et n'est pas enregistré.",
+        "data": {"username": "E-mail", "password": "Mot de passe"}
+      },
+      "mfa_challenge": {
+        "title": "Authentification multifacteur",
+        "description": "Sub-Zero demande une vérification pour le {masked_phone}. Choisissez comment recevoir votre code de vérification.{captcha_image}",
+        "data": {"captcha": "Caractères du CAPTCHA", "method": "Méthode de vérification"}
+      },
+      "mfa_code": {
+        "title": "Saisir le code de vérification",
+        "description": "Saisissez le code de vérification à 6 chiffres envoyé au {masked_phone}, ou laissez le champ vide pour demander un nouveau code.",
+        "data": {"code": "Code de vérification"}
+      },
+      "mfa_call": {
+        "title": "Vérification par appel téléphonique"
+      },
+      "device": {
+        "title": "Sélectionner les appareils",
+        "description": "Choisissez les appareils à inclure dans Home Assistant. Les alertes d'appareil Firebase restent désactivées tant que vous ne les activez pas. Elles enregistrent Home Assistant auprès de Sub-Zero comme destinataire d'alertes supplémentaire et se connectent à Google. Vous pourrez modifier ce choix plus tard avec « Configurer ».",
+        "data": {"device_ids": "Appareils", "firebase_alerts": "Alertes d'appareil Firebase"}
+      }
+    },
+    "progress": {
+      "wait_for_call": "Répondez à l'appel au {masked_phone} et appuyez sur # pour confirmer."
+    },
+    "error": {
+      "invalid_auth": "Sub-Zero n'a pas accepté les identifiants, ou la session a expiré. Recommencez la configuration si nécessaire.",
+      "invalid_captcha": "Les caractères ne correspondent pas au CAPTCHA. Veuillez réessayer avec la nouvelle image.",
+      "invalid_mfa_code": "Le code de vérification n'a pas été accepté. Vérifiez le code et réessayez, ou laissez le champ vide pour demander un nouveau code.",
+      "mfa_code_expired": "Le code de vérification a expiré ou a été refusé trop de fois. Demandez un nouveau code pour réessayer.",
+      "mfa_call_failed": "L'appel de vérification n'a pas abouti à temps. Veuillez réessayer.",
+      "cannot_connect": "Impossible de se connecter à Sub-Zero ou de lire l'appareil. Réessayez plus tard.",
+      "rate_limited": "Sub-Zero a demandé de réduire le nombre de requêtes. Patientez avant de réessayer.",
+      "verification_required": "Ce compte demande une étape de vérification supplémentaire que cette version ne prend pas encore en charge.",
+      "invalid_device": "Sélectionnez des appareils de ce compte.",
+      "select_device": "Sélectionnez au moins un appareil."
+    },
+    "abort": {
+      "already_configured": "Ce compte est déjà configuré. Ouvrez « Configurer » sur son entrée Sub-Zero existante pour ajouter des appareils.",
+      "all_configured": "Ces appareils sont déjà gérés par une autre entrée Sub-Zero.",
+      "no_appliances": "Aucun appareil connecté n'a été trouvé sur ce compte.",
+      "wrong_account": "Connectez-vous avec le compte Sub-Zero d'origine.",
+      "reauth_successful": "Connexion Sub-Zero renouvelée."
+    }
+  },
+  "services": {
+    "schedule_ice_delay": {
+      "name": "Programmer une pause de la machine à glaçons",
+      "description": "Met en pause une machine à glaçons autonome pendant 1 à 12 heures, maintenant ou plus tard dans la journée.",
+      "fields": {
+        "device_id": {"name": "Machine à glaçons", "description": "La machine à glaçons autonome à mettre en pause."},
+        "duration": {"name": "Durée", "description": "Nombre d'heures de pause de la production de glaçons."},
+        "start_in": {"name": "Démarrer dans", "description": "Minutes avant le début de la pause. Zéro la démarre immédiatement."},
+        "repeat": {"name": "Répéter chaque jour", "description": "Répète la pause tous les jours."}
+      }
+    },
+    "refresh": {
+      "name": "Actualiser",
+      "description": "Lit l'état actuel des appareils et rétablit leurs mises à jour en direct si elles se sont arrêtées. À utiliser avant qu'une automatisation n'agisse selon un capteur.",
+      "fields": {
+        "device_id": {"name": "Appareils", "description": "Les appareils à actualiser."}
+      }
+    }
+  },
+  "selector": {
+    "mfa_method": {
+      "options": {"onewaysms": "SMS", "dialphone": "Appel téléphonique"}
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Choisir les appareils",
+        "description": "La liste est actualisée depuis votre compte Sub-Zero. Désélectionner un appareil supprime son appareil et ses entités dans Home Assistant. Les mises à jour push sont vérifiées après chaque événement d'appareil et tant qu'une porte est ouverte. Activez la vérification partagée de la connexion pour vérifier aussi un appareil dès que rien n'arrive pendant son intervalle, 3 minutes par défaut, ce qui détecte plus tôt l'arrêt des mises à jour push ; des intervalles plus courts génèrent davantage de requêtes cloud. Désactiver les alertes d'appareil Firebase coupe la connexion à Google et supprime les abonnements aux alertes Sub-Zero de cette intégration.",
+        "data": {"device_ids": "Appareils", "shared_connection_check": "Vérification partagée de la connexion", "shared_connection_check_interval": "Intervalle de la vérification partagée de la connexion", "firebase_alerts": "Alertes d'appareil Firebase"}
+      }
+    },
+    "error": {
+      "cannot_connect": "Impossible d'actualiser la liste des appareils ; seuls les appareils enregistrés sont affichés. Vous pouvez tout de même modifier les autres paramètres.",
+      "rate_limited": "Sub-Zero a demandé de réduire le nombre de requêtes ; seuls les appareils enregistrés sont affichés. Vous pouvez tout de même modifier les autres paramètres.",
+      "invalid_device": "Sélectionnez des appareils de ce compte."
+    },
+    "abort": {
+      "reauth_required": "Reconnectez-vous via la demande de connexion Sub-Zero de Home Assistant, puis rouvrez « Configurer ».",
+      "all_configured": "Ces appareils sont déjà gérés par une autre entrée Sub-Zero. Rouvrez « Configurer » pour actualiser la liste."
+    }
+  },
+  "entity": {
+    "event": {
+      "appliance_event": {
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "unknown": "Inconnu",
+              "refrigerator_door_ajar": "Porte du réfrigérateur ouverte",
+              "freezer_door_ajar": "Porte du congélateur ouverte",
+              "wine_door_ajar": "Porte de la cave à vin ouverte",
+              "wine_setpoint_changed": "Consigne de la cave à vin modifiée",
+              "refrigerator_service_required": "Entretien du réfrigérateur requis",
+              "refrigerator_setpoint_changed": "Consigne du réfrigérateur modifiée",
+              "freezer_setpoint_changed": "Consigne du congélateur modifiée",
+              "water_filter_expired": "Filtre à eau expiré",
+              "air_filter_expired": "Filtre à air expiré",
+              "wine_temperature_alert": "Température de la cave à vin hors plage",
+              "ice_maker_door_ajar": "Porte de la machine à glaçons ouverte",
+              "ice_cleaning_required": "Cycle de nettoyage de la machine à glaçons requis",
+              "ice_cleaning_due_soon": "Cycle de nettoyage de la machine à glaçons bientôt requis",
+              "ice_cleaning_add_descaler": "Le cycle de nettoyage de la machine à glaçons nécessite du détartrant",
+              "ice_cleaning_add_sanitizer": "Le cycle de nettoyage de la machine à glaçons nécessite du désinfectant",
+              "ice_cleaning_cancelled": "Cycle de nettoyage de la machine à glaçons annulé",
+              "ice_cleaning_complete": "Cycle de nettoyage de la machine à glaçons terminé",
+              "oven_preheated": "Préchauffage du four terminé",
+              "lower_oven_preheated": "Préchauffage du four inférieur terminé",
+              "oven_probe_connected": "Sonde du four en cours d'utilisation",
+              "lower_oven_probe_connected": "Sonde du four inférieur en cours d'utilisation",
+              "oven_probe_target_reached": "Température de la sonde du four atteinte",
+              "lower_oven_probe_target_reached": "Température de la sonde du four inférieur atteinte",
+              "kitchen_timer_complete": "Minuteur de cuisine terminé",
+              "kitchen_timer_2_complete": "Minuteur de cuisine 2 terminé",
+              "kitchen_timer_under_one_minute": "Il reste une minute au minuteur de cuisine",
+              "kitchen_timer_2_under_one_minute": "Il reste une minute au minuteur de cuisine 2",
+              "oven_cooking_timer_complete": "Minuteur de cuisson du four terminé",
+              "lower_oven_cooking_timer_complete": "Minuteur de cuisson du four inférieur terminé",
+              "oven_cooking_timer_under_one_minute": "Il reste une minute au minuteur de cuisson du four",
+              "lower_oven_cooking_timer_under_one_minute": "Il reste une minute au minuteur de cuisson du four inférieur",
+              "oven_probe_within_ten_degrees": "Sonde du four à moins de 10 °F de la cible",
+              "lower_oven_probe_within_ten_degrees": "Sonde du four inférieur à moins de 10 °F de la cible",
+              "oven_service_required": "Entretien du four requis",
+              "oven_door_ajar": "Porte du four ouverte",
+              "lower_oven_door_ajar": "Porte du four inférieur ouverte",
+              "oven_self_clean_complete": "Nettoyage du four terminé",
+              "lower_oven_self_clean_complete": "Nettoyage du four inférieur terminé",
+              "dishwasher_started": "Cycle de lavage démarré",
+              "dishwasher_complete": "Cycle de lavage terminé",
+              "softener_salt_low": "Niveau de sel régénérant bas",
+              "rinse_aid_low": "Niveau de liquide de rinçage bas",
+              "dishwasher_service_required": "Entretien du lave-vaisselle requis",
+              "dishwasher_paused": "Cycle de lavage interrompu",
+              "dishwasher_cancelled": "Cycle de lavage annulé",
+              "fault_notification": "Défaut de l'appareil",
+              "feedback_notification": "Demande d'avis"
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,337 @@
+"""Dedicated ice-maker discovery, scheduling, and read-only cleaning state."""
+
+import asyncio
+
+import pytest
+import voluptuous as vol
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import device_registry as dr
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from custom_components.subzero.api import ApiError, RateLimited, token_state
+from custom_components.subzero.auth import InvalidAuth
+from custom_components.subzero.const import DOMAIN
+
+ICE_STATE = {
+    "appliance_model": "DEC1850CI",
+    "appliance_type": "1.21.2.5",
+    "ice_maker_on": True,
+    "sabbath_on": False,
+    "unit_on": True,
+    "door_ajar_timeout": 5,
+    "ice_door_ajar": False,
+    "water_filter_inserted": True,
+    "water_filter_pct_remaining": 80,
+    "delay_active": False,
+    "delay_duration": 0,
+    "delay_start_offset": 0,
+    "delay_recurring": False,
+    "delay_start_time": None,
+    "delay_end_time": None,
+    "failsafe_on": False,
+    "ice_maker_clean_stage": 50,
+    "clean_soon_on": False,
+    "clean_now_on": False,
+    "next_clean_time": "2027-01-01T12:00:00-08:00",
+    "next_clean_cycles": 100,
+}
+pytestmark = pytest.mark.parametrize("cloud_appliance", [ICE_STATE], indirect=True)
+
+
+async def test_ice_maker_discovery(hass, cloud_appliance):
+    assert hass.states.get("select.kitchen_ice_maker").attributes["options"] == ["Off", "On"]
+    assert hass.states.get("select.kitchen_mode") is None
+    assert hass.states.get("binary_sensor.kitchen_sabbath_mode").state == "off"
+    assert hass.states.get("sensor.kitchen_ice_maker_cleaning_stage").state == "Not cleaning"
+    assert hass.states.get("binary_sensor.kitchen_water_filter_inserted").state == "on"
+    assert hass.states.get("binary_sensor.kitchen_ice_maker_door").state == "off"
+    assert hass.states.get("sensor.kitchen_ice_maker_status").state == "On"
+    assert not hass.states.async_entity_ids("climate")
+    cloud_appliance.client.set_property.assert_not_called()
+    cloud_appliance.client.set_ice_delay.assert_not_called()
+    cloud_appliance.client.exit_ice_delay.assert_not_called()
+
+
+async def test_ice_controls_and_cleaning_updates(hass, cloud_appliance):
+    await hass.services.async_call(
+        "select",
+        "select_option",
+        {"entity_id": "select.kitchen_ice_maker", "option": "Off"},
+        blocking=True,
+    )
+    cloud_appliance.client.set_property.assert_awaited_once_with("appliance", "ice_maker_on", False)
+    await cloud_appliance.update(
+        {"ice_door_ajar": True, "ice_maker_clean_stage": 65, "failsafe_on": True}
+    )
+    assert hass.states.get("binary_sensor.kitchen_ice_maker_door").state == "on"
+    assert hass.states.get("sensor.kitchen_ice_maker_cleaning_stage").state == "Add sanitizer"
+    assert hass.states.get("sensor.kitchen_ice_maker_status").state == "Disabled"
+    for value in [True, "65", 999]:
+        await cloud_appliance.update({"ice_maker_clean_stage": value})
+        assert hass.states.get("sensor.kitchen_ice_maker_cleaning_stage").state == "unknown"
+    for key in ["ice_maker_clean_on", "sabbath_on"]:
+        with pytest.raises(ServiceValidationError):
+            await cloud_appliance.coordinator.async_set_properties({key: True})
+
+
+@pytest.mark.parametrize(
+    ("update", "status"),
+    [
+        ({"winterize_on": True}, "Off"),
+        ({"winterize_on": True, "ice_maker_on": None}, "Off"),
+        ({"winterize_on": True, "delay_active": True}, "Delayed"),
+        ({"winterize_on": True, "failsafe_on": True}, "Disabled"),
+        ({"delay_active": True, "failsafe_on": True}, "Disabled"),
+        ({"ice_maker_on": False, "winterize_on": False}, "Off"),
+    ],
+)
+async def test_ice_status_follows_the_app_order(hass, cloud_appliance, update, status):
+    await cloud_appliance.update(update)
+    assert hass.states.get("sensor.kitchen_ice_maker_status").state == status
+
+
+async def test_schedule_ice_delay_converts_units_and_refreshes(hass, cloud_appliance, caplog):
+    await hass.services.async_call(
+        DOMAIN,
+        "schedule_ice_delay",
+        {"device_id": cloud_appliance.device_id, "duration": 12, "start_in": 1439, "repeat": True},
+        blocking=True,
+    )
+    cloud_appliance.client.set_ice_delay.assert_awaited_once_with("appliance", 43200, 86340, True)
+    assert hass.states.get("sensor.kitchen_ice_delay_duration").state == "43200"
+    assert hass.states.get("binary_sensor.kitchen_ice_delay_repeats_daily").state == "on"
+    cloud_appliance.client.set_property.assert_not_called()
+    assert "deprecated" not in caplog.text
+
+
+async def test_cancel_current_delay_preserves_repeat_schedule(hass, cloud_appliance):
+    await cloud_appliance.update(
+        {"delay_active": True, "delay_duration": 3600, "delay_recurring": True}
+    )
+    await hass.services.async_call(
+        "button", "press", {"entity_id": "button.kitchen_end_current_ice_delay"}, blocking=True
+    )
+    cloud_appliance.client.exit_ice_delay.assert_awaited_once_with("appliance")
+    cloud_appliance.client.set_ice_delay.assert_not_called()
+    assert hass.states.get("binary_sensor.kitchen_ice_delay_active").state == "off"
+    assert hass.states.get("binary_sensor.kitchen_ice_delay_repeats_daily").state == "on"
+    await hass.services.async_call(
+        "button", "press", {"entity_id": "button.kitchen_cancel_ice_delay_schedule"}, blocking=True
+    )
+    cloud_appliance.client.set_ice_delay.assert_awaited_once_with("appliance", 0, 0, False)
+
+
+async def test_delay_rejection_does_not_change_reported_state(hass, cloud_appliance):
+    cloud_appliance.client.set_ice_delay.side_effect = ApiError("Rejected")
+    with pytest.raises(HomeAssistantError, match="Rejected"):
+        await cloud_appliance.coordinator.async_set_ice_delay(3600)
+    assert hass.states.get("sensor.kitchen_ice_delay_duration").state == "0"
+    with pytest.raises(ServiceValidationError, match="no active"):
+        await cloud_appliance.coordinator.async_set_ice_delay(end_current=True)
+    cloud_appliance.client.exit_ice_delay.assert_not_called()
+
+
+@pytest.mark.parametrize("error", [None, ApiError("Sub-Zero returned HTTP 503.")])
+async def test_ending_delay_refreshes_after_acknowledgment_or_command_error(
+    hass, cloud_appliance, error
+):
+    await cloud_appliance.update({"delay_active": True, "delay_duration": 3600})
+    reads = cloud_appliance.client.state.await_count
+
+    async def exit_delay(device_id):
+        cloud_appliance.state["delay_active"] = False
+        if error is not None:
+            raise error
+        return {"status": 0}
+
+    cloud_appliance.client.exit_ice_delay.side_effect = exit_delay
+    if error is None:
+        await cloud_appliance.coordinator.async_set_ice_delay(end_current=True)
+    else:
+        with pytest.raises(HomeAssistantError, match="HTTP 503"):
+            await cloud_appliance.coordinator.async_set_ice_delay(end_current=True)
+    assert cloud_appliance.client.state.await_count == reads + 1
+    assert hass.states.get("binary_sensor.kitchen_ice_delay_active").state == "off"
+
+
+@pytest.mark.parametrize("error", [None, ApiError("Sub-Zero returned HTTP 503.")])
+async def test_cancelled_ice_delay_still_refreshes_status(hass, cloud_appliance, error):
+    coordinator = cloud_appliance.coordinator
+    entered = asyncio.get_running_loop().create_future()
+    finish = asyncio.Event()
+
+    async def delay(device_id, duration, start_offset, recurring):
+        cloud_appliance.state["delay_duration"] = duration
+        if error is not None:
+            raise error
+
+    async def read(device_id):
+        entered.set_result(asyncio.current_task())
+        await finish.wait()
+        return dict(cloud_appliance.state)
+
+    cloud_appliance.client.set_ice_delay.side_effect = delay
+    cloud_appliance.client.state.side_effect = read
+    pending = asyncio.create_task(coordinator.async_set_ice_delay(3600))
+    refresh = await asyncio.wait_for(entered, 1)
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+
+    assert coordinator.last_update_success
+    finish.set()
+    await refresh
+    assert hass.states.get("sensor.kitchen_ice_delay_duration").state == "3600"
+    cloud_appliance.client.set_ice_delay.assert_awaited_once_with("appliance", 3600, 0, False)
+
+
+@pytest.mark.parametrize("error", [InvalidAuth("Expired"), RateLimited(60)])
+async def test_ending_delay_stops_on_authentication_or_rate_limit(cloud_appliance, error):
+    await cloud_appliance.update({"delay_active": True, "delay_duration": 3600})
+    reads = cloud_appliance.client.state.await_count
+    cloud_appliance.client.exit_ice_delay.side_effect = error
+    with pytest.raises(HomeAssistantError):
+        await cloud_appliance.coordinator.async_set_ice_delay(end_current=True)
+    assert cloud_appliance.client.state.await_count == reads
+
+
+async def test_ice_capabilities_are_checked_again_before_writing(hass, cloud_appliance):
+    await cloud_appliance.update({"appliance_type": "23.255.255"})
+    with pytest.raises(ServiceValidationError, match="does not report"):
+        await cloud_appliance.coordinator.async_set_ice_delay(3600)
+    assert hass.states.get("select.kitchen_ice_maker").state == "unavailable"
+    cloud_appliance.client.set_ice_delay.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "duration,offset,repeat",
+    [(True, 0, False), (3601, 0, False), (3600, 86400, False), (3600, 0, 1)],
+)
+async def test_invalid_delays_never_write(cloud_appliance, duration, offset, repeat):
+    with pytest.raises(ServiceValidationError):
+        await cloud_appliance.coordinator.async_set_ice_delay(duration, offset, repeat)
+    cloud_appliance.client.set_ice_delay.assert_not_called()
+
+
+@pytest.mark.parametrize(("duration", "start_in"), [(3.0, "5"), ("3", 5.0)])
+async def test_schedule_service_accepts_whole_numbers_from_templates(
+    hass, cloud_appliance, duration, start_in
+):
+    await hass.services.async_call(
+        DOMAIN,
+        "schedule_ice_delay",
+        {"device_id": cloud_appliance.device_id, "duration": duration, "start_in": start_in},
+        blocking=True,
+    )
+    cloud_appliance.client.set_ice_delay.assert_awaited_once_with("appliance", 10800, 300, False)
+
+
+@pytest.mark.parametrize("duration", [True, 1.5, "soon", None])
+async def test_schedule_service_rejects_other_durations(hass, cloud_appliance, duration):
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(
+            DOMAIN,
+            "schedule_ice_delay",
+            {"device_id": cloud_appliance.device_id, "duration": duration},
+            blocking=True,
+        )
+    cloud_appliance.client.set_ice_delay.assert_not_called()
+
+
+async def test_schedule_service_reaches_a_shared_appliance_through_a_loaded_account(
+    hass, cloud_appliance
+):
+    other = MockConfigEntry(domain=DOMAIN, title="Other account")
+    other.add_to_hass(hass)
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=other.entry_id, identifiers={(DOMAIN, "appliance")}
+    )
+    await hass.services.async_call(
+        DOMAIN,
+        "schedule_ice_delay",
+        {"device_id": device.id, "duration": 2},
+        blocking=True,
+    )
+    cloud_appliance.client.set_ice_delay.assert_awaited_once_with("appliance", 7200, 0, False)
+
+
+@pytest.mark.parametrize(
+    ("target", "broken", "tried", "error"),
+    [
+        ("first", {}, ["first"], None),
+        ("second", {}, ["second"], None),
+        ("second", {"first": "unavailable"}, ["second"], None),
+        ("first", {"second": "unavailable"}, ["first"], None),
+        ("first", {"first": "unavailable"}, ["first", "second"], None),
+        ("first", {"first": "no delay settings"}, ["first", "second"], None),
+        (
+            "first",
+            {"first": "unavailable", "second": "no delay settings"},
+            ["first", "second"],
+            "unavailable",
+        ),
+    ],
+)
+async def test_schedule_service_tries_the_devices_own_account_then_the_others(
+    hass, cloud_appliance, tokens, target, broken, tried, error
+):
+    other = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        minor_version=3,
+        title="Other account",
+        data={
+            "tokens": token_state(tokens),
+            "devices": {"appliance": {"name": "Kitchen", "temperature_unit": "F"}},
+        },
+    )
+    other.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(other.entry_id)
+    await hass.async_block_till_done()
+    entries = {"first": cloud_appliance.entry, "second": other}
+    coordinators = {
+        name: entry.runtime_data.coordinators["appliance"] for name, entry in entries.items()
+    }
+    attempts = []
+    for name, coordinator in coordinators.items():
+        if broken.get(name) == "unavailable":
+            coordinator.last_update_success = False
+        elif broken.get(name) == "no delay settings":
+            del coordinator.data["delay_duration"]
+        original = coordinator.async_set_ice_delay
+
+        async def attempt(*args, name=name, original=original):
+            attempts.append(name)
+            await original(*args)
+
+        coordinator.async_set_ice_delay = attempt
+    device = next(
+        device
+        for device in dr.async_entries_for_config_entry(
+            dr.async_get(hass), entries[target].entry_id
+        )
+        if (DOMAIN, "appliance") in device.identifiers
+    )
+    request = hass.services.async_call(
+        DOMAIN, "schedule_ice_delay", {"device_id": device.id, "duration": 2}, blocking=True
+    )
+    if error:
+        with pytest.raises(ServiceValidationError, match=error):
+            await request
+        cloud_appliance.client.set_ice_delay.assert_not_called()
+    else:
+        await request
+        cloud_appliance.client.set_ice_delay.assert_awaited_once_with("appliance", 7200, 0, False)
+    assert attempts == tried
+    await hass.config_entries.async_unload(other.entry_id)
+
+
+async def test_schedule_service_rejects_an_unknown_device(hass, cloud_appliance):
+    with pytest.raises(ServiceValidationError, match="Select a connected"):
+        await hass.services.async_call(
+            DOMAIN,
+            "schedule_ice_delay",
+            {"device_id": "not-this-device", "duration": 2},
+            blocking=True,
+        )
+    cloud_appliance.client.set_ice_delay.assert_not_called()

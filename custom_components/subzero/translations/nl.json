@@ -1,0 +1,154 @@
+{
+  "config": {
+    "initiate_flow": {"user": "Account toevoegen"},
+    "step": {
+      "user": {
+        "title": "Aanmelden bij Sub-Zero",
+        "description": "Gebruik het e-mailadres en wachtwoord van je Sub-Zero Group Owner-account. Je wachtwoord wordt alleen gebruikt om je aan te melden en wordt niet opgeslagen.",
+        "data": {"username": "E-mail", "password": "Wachtwoord"}
+      },
+      "mfa_challenge": {
+        "title": "Multifactorauthenticatie",
+        "description": "Sub-Zero vereist verificatie voor {masked_phone}. Kies hoe je je verificatiecode wilt ontvangen.{captcha_image}",
+        "data": {"captcha": "CAPTCHA-tekens", "method": "Verificatiemethode"}
+      },
+      "mfa_code": {
+        "title": "Verificatiecode invoeren",
+        "description": "Voer de 6-cijferige verificatiecode in die naar {masked_phone} is gestuurd, of laat het veld leeg om een nieuwe code aan te vragen.",
+        "data": {"code": "Verificatiecode"}
+      },
+      "mfa_call": {
+        "title": "Verificatie via telefoongesprek"
+      },
+      "device": {
+        "title": "Apparaten selecteren",
+        "description": "Kies welke apparaten je in Home Assistant wilt opnemen. Firebase-apparaatmeldingen staan uit totdat je ze inschakelt. Ze registreren Home Assistant bij Sub-Zero als extra ontvanger van meldingen en maken verbinding met Google. Je kunt dit later wijzigen via Configureren.",
+        "data": {"device_ids": "Apparaten", "firebase_alerts": "Firebase-apparaatmeldingen"}
+      }
+    },
+    "progress": {
+      "wait_for_call": "Neem de oproep naar {masked_phone} aan en druk op # om te verifiëren."
+    },
+    "error": {
+      "invalid_auth": "Sub-Zero heeft de aanmeldgegevens niet geaccepteerd, of de sessie is verlopen. Start de installatie zo nodig opnieuw.",
+      "invalid_captcha": "De tekens kwamen niet overeen met de CAPTCHA. Probeer het opnieuw met de nieuwe afbeelding.",
+      "invalid_mfa_code": "De verificatiecode is niet geaccepteerd. Controleer de code en probeer het opnieuw, of laat het veld leeg om een nieuwe code aan te vragen.",
+      "mfa_code_expired": "De verificatiecode is verlopen of te vaak geweigerd. Vraag een nieuwe code aan om het opnieuw te proberen.",
+      "mfa_call_failed": "Het verificatiegesprek is niet op tijd afgerond. Probeer het opnieuw.",
+      "cannot_connect": "Kan geen verbinding maken met Sub-Zero of het apparaat niet uitlezen. Probeer het later opnieuw.",
+      "rate_limited": "Sub-Zero vraagt om minder verzoeken te sturen. Wacht even voordat je het opnieuw probeert.",
+      "verification_required": "Dit account vereist een extra verificatiestap die deze versie nog niet ondersteunt.",
+      "invalid_device": "Selecteer apparaten van dit account.",
+      "select_device": "Selecteer ten minste één apparaat."
+    },
+    "abort": {
+      "already_configured": "Dit account is al geconfigureerd. Open Configureren bij de bestaande Sub-Zero-vermelding om apparaten toe te voegen.",
+      "all_configured": "Deze apparaten worden al beheerd door een andere Sub-Zero-vermelding.",
+      "no_appliances": "Er zijn geen verbonden apparaten gevonden in dit account.",
+      "wrong_account": "Meld je aan met het oorspronkelijke Sub-Zero-account.",
+      "reauth_successful": "Sub-Zero-aanmelding vernieuwd."
+    }
+  },
+  "services": {
+    "schedule_ice_delay": {
+      "name": "IJspauze plannen",
+      "description": "Pauzeert een losse ijsmachine 1 tot 12 uur, nu of later vandaag.",
+      "fields": {
+        "device_id": {"name": "IJsmachine", "description": "De losse ijsmachine die gepauzeerd moet worden."},
+        "duration": {"name": "Duur", "description": "Aantal uren dat de ijsproductie pauzeert."},
+        "start_in": {"name": "Start over", "description": "Minuten tot de pauze begint. Nul start direct."},
+        "repeat": {"name": "Dagelijks herhalen", "description": "Herhaalt de pauze elke dag."}
+      }
+    },
+    "refresh": {
+      "name": "Vernieuwen",
+      "description": "Leest de huidige status van de apparaten en herstelt hun live-updates als die zijn gestopt. Gebruik dit voordat een automatisering op een sensor reageert.",
+      "fields": {
+        "device_id": {"name": "Apparaten", "description": "De apparaten die vernieuwd worden."}
+      }
+    }
+  },
+  "selector": {
+    "mfa_method": {
+      "options": {"onewaysms": "Sms", "dialphone": "Telefoongesprek"}
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Apparaten kiezen",
+        "description": "De lijst wordt vernieuwd vanuit je Sub-Zero-account. Als je een apparaat deselecteert, worden het bijbehorende apparaat en de entiteiten uit Home Assistant verwijderd. Pushupdates worden gecontroleerd na elke apparaatgebeurtenis en zolang een deur openstaat. Schakel de gedeelde verbindingscontrole in om ook een apparaat te controleren zodra er gedurende het interval, standaard 3 minuten, niets binnenkomt, zodat gestopte pushupdates eerder worden opgemerkt; kortere intervallen zorgen voor meer cloudverzoeken. Als je Firebase-apparaatmeldingen uitschakelt, wordt de verbinding met Google verbroken en worden de Sub-Zero-meldingsabonnementen van deze integratie verwijderd.",
+        "data": {"device_ids": "Apparaten", "shared_connection_check": "Gedeelde verbindingscontrole", "shared_connection_check_interval": "Interval van de gedeelde verbindingscontrole", "firebase_alerts": "Firebase-apparaatmeldingen"}
+      }
+    },
+    "error": {
+      "cannot_connect": "Kan de lijst met apparaten niet vernieuwen, dus alleen de opgeslagen apparaten worden getoond. Je kunt de andere instellingen nog wel wijzigen.",
+      "rate_limited": "Sub-Zero vraagt om minder verzoeken te sturen, dus alleen de opgeslagen apparaten worden getoond. Je kunt de andere instellingen nog wel wijzigen.",
+      "invalid_device": "Selecteer apparaten van dit account."
+    },
+    "abort": {
+      "reauth_required": "Meld je opnieuw aan via de Sub-Zero-aanmeldprompt van Home Assistant en open daarna Configureren opnieuw.",
+      "all_configured": "Deze apparaten worden al beheerd door een andere Sub-Zero-vermelding. Open Configureren opnieuw om de lijst te vernieuwen."
+    }
+  },
+  "entity": {
+    "event": {
+      "appliance_event": {
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "unknown": "Onbekend",
+              "refrigerator_door_ajar": "Koelkastdeur open",
+              "freezer_door_ajar": "Vriezerdeur open",
+              "wine_door_ajar": "Deur van wijnklimaatkast open",
+              "wine_setpoint_changed": "Ingestelde temperatuur wijnklimaatkast gewijzigd",
+              "refrigerator_service_required": "Onderhoud koelkast vereist",
+              "refrigerator_setpoint_changed": "Ingestelde temperatuur koelkast gewijzigd",
+              "freezer_setpoint_changed": "Ingestelde temperatuur vriezer gewijzigd",
+              "water_filter_expired": "Waterfilter verlopen",
+              "air_filter_expired": "Luchtfilter verlopen",
+              "wine_temperature_alert": "Temperatuur wijnklimaatkast buiten bereik",
+              "ice_maker_door_ajar": "Deur van ijsmachine open",
+              "ice_cleaning_required": "Reinigingscyclus ijsmachine nodig",
+              "ice_cleaning_due_soon": "Reinigingscyclus ijsmachine binnenkort nodig",
+              "ice_cleaning_add_descaler": "Reinigingscyclus ijsmachine heeft ontkalker nodig",
+              "ice_cleaning_add_sanitizer": "Reinigingscyclus ijsmachine heeft desinfectiemiddel nodig",
+              "ice_cleaning_cancelled": "Reinigingscyclus ijsmachine geannuleerd",
+              "ice_cleaning_complete": "Reinigingscyclus ijsmachine voltooid",
+              "oven_preheated": "Voorverwarmen oven voltooid",
+              "lower_oven_preheated": "Voorverwarmen onderste oven voltooid",
+              "oven_probe_connected": "Kerntemperatuurmeter oven in gebruik",
+              "lower_oven_probe_connected": "Kerntemperatuurmeter onderste oven in gebruik",
+              "oven_probe_target_reached": "Kerntemperatuur oven bereikt",
+              "lower_oven_probe_target_reached": "Kerntemperatuur onderste oven bereikt",
+              "kitchen_timer_complete": "Kookwekker afgelopen",
+              "kitchen_timer_2_complete": "Kookwekker 2 afgelopen",
+              "kitchen_timer_under_one_minute": "Kookwekker heeft nog één minuut",
+              "kitchen_timer_2_under_one_minute": "Kookwekker 2 heeft nog één minuut",
+              "oven_cooking_timer_complete": "Bereidingstimer oven afgelopen",
+              "lower_oven_cooking_timer_complete": "Bereidingstimer onderste oven afgelopen",
+              "oven_cooking_timer_under_one_minute": "Bereidingstimer oven heeft nog één minuut",
+              "lower_oven_cooking_timer_under_one_minute": "Bereidingstimer onderste oven heeft nog één minuut",
+              "oven_probe_within_ten_degrees": "Kerntemperatuurmeter oven binnen 10 °F van doel",
+              "lower_oven_probe_within_ten_degrees": "Kerntemperatuurmeter onderste oven binnen 10 °F van doel",
+              "oven_service_required": "Onderhoud oven vereist",
+              "oven_door_ajar": "Ovendeur open",
+              "lower_oven_door_ajar": "Deur onderste oven open",
+              "oven_self_clean_complete": "Ovenreiniging voltooid",
+              "lower_oven_self_clean_complete": "Reiniging onderste oven voltooid",
+              "dishwasher_started": "Vaatwasprogramma gestart",
+              "dishwasher_complete": "Vaatwasprogramma voltooid",
+              "softener_salt_low": "Onthardingszout bijna op",
+              "rinse_aid_low": "Glansspoelmiddel bijna op",
+              "dishwasher_service_required": "Onderhoud vaatwasser vereist",
+              "dishwasher_paused": "Vaatwasprogramma onderbroken",
+              "dishwasher_cancelled": "Vaatwasprogramma geannuleerd",
+              "fault_notification": "Apparaatstoring",
+              "feedback_notification": "Verzoek om feedback"
+            }
+          }
+        }
+      }
+    }
+  }
+}
