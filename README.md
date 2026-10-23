@@ -39,7 +39,7 @@ Use the button above, or add the repository yourself:
 2. Add `https://github.com/kedube/ha-subzero` with the type **Integration**.
 3. Download **Sub-Zero**, then restart Home Assistant.
 
-HACS offers each new release as an update. Releases are numbered 1.00, 1.01, and so on, up to 1.99 and then 2.00. [Release notes](https://github.com/kedube/ha-subzero/releases) list what each one changes, and [CHANGELOG.md](CHANGELOG.md) collects them.
+HACS offers each new release as an update. [Release notes](https://github.com/kedube/ha-subzero/releases) list what each one changes, and [CHANGELOG.md](CHANGELOG.md) collects them.
 
 ### Manual
 
@@ -361,6 +361,6 @@ Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then
 
 The workflow tags the release, attaches the `ha_subzero.zip` that HACS downloads, and writes the notes from the commits since the previous release. Pushing a version tag yourself also works if it matches manifest.json, and pushing a tag that already has a release replaces its zip.
 
-## License
+## License & Credit
 
 MIT; see [LICENSE](LICENSE). This integration began as a fork of [orienw/ha-subzero](https://github.com/orienw/ha-subzero).
