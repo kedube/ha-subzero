@@ -28,7 +28,11 @@ from custom_components.subzero.api import (
 )
 from custom_components.subzero.auth import InvalidAuth
 from custom_components.subzero.const import DOMAIN
-from custom_components.subzero.coordinator import SubZeroAccount, shared_connection_check_minutes
+from custom_components.subzero.coordinator import (
+    SubZeroAccount,
+    follow_up_check_minutes,
+    shared_connection_check_minutes,
+)
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
@@ -672,6 +676,58 @@ async def test_disabled_polling_still_checks_after_an_alert(hass, loaded):
     # No shorter checks follow it.
     await fire_time_changed(hass, start + timedelta(hours=2))
     client.open_channel.assert_awaited_once()
+
+
+async def reload_with_options(hass, entry, **options):
+    hass.config_entries.async_update_entry(entry, options={**entry.options, **options})
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    return entry.runtime_data.coordinators["test-fridge"]
+
+
+async def test_follow_up_checks_off_leave_only_the_alert_check(hass, freezer, loaded, monkeypatch):
+    entry, client, updates, _, _ = loaded
+    coordinator = await reload_with_options(hass, entry, follow_up_checks=False)
+    answer_reopens(client, updates, monkeypatch)
+    coordinator.async_receive_event(dt_util.utcnow() + timedelta(seconds=1), 7, 101)
+    freezer.tick(timedelta(seconds=3))
+    await fire_time_changed(hass)
+    client.open_channel.assert_awaited_once_with("test-fridge")
+    # Neither the event nor a door left open adds follow-up checks.
+    await updates.put(StateUpdate({"ref_door_ajar": True}, full=False))
+    await hass.async_block_till_done()
+    for _ in range(8):
+        freezer.tick(timedelta(minutes=2, seconds=1))
+        await fire_time_changed(hass)
+    client.open_channel.assert_awaited_once()
+    assert coordinator.push_stats["alert_checks"] == 1
+    assert coordinator.push_stats["watch_checks"] == 0
+
+
+async def test_follow_up_checks_use_the_chosen_interval(hass, freezer, loaded):
+    entry, client, updates, _, _ = loaded
+    coordinator = await reload_with_options(hass, entry, follow_up_check_interval=5)
+    client.state.return_value = {**client.state.return_value, "ref_door_ajar": True}
+    await updates.put(StateUpdate({"ref_door_ajar": True}, full=False))
+    await hass.async_block_till_done()
+    freezer.tick(timedelta(minutes=4, seconds=58))
+    await fire_time_changed(hass)
+    client.open_channel.assert_not_awaited()
+    freezer.tick(timedelta(seconds=3))
+    await fire_time_changed(hass)
+    client.open_channel.assert_awaited_once_with("test-fridge")
+    # The door stays open, so checks continue for 15 minutes at the chosen interval.
+    for _ in range(3):
+        freezer.tick(timedelta(minutes=5, seconds=1))
+        await fire_time_changed(hass)
+    assert client.open_channel.await_count == 3
+    assert coordinator.push_stats["watch_checks"] == 3
+
+
+@pytest.mark.parametrize("minutes", [0, 11, 2.5, "5", None])
+async def test_unusable_follow_up_check_interval_uses_the_default(minutes):
+    entry = MockConfigEntry(domain=DOMAIN, options={"follow_up_check_interval": minutes})
+    assert follow_up_check_minutes(entry) == 2
 
 
 async def test_alerts_start_at_most_one_check_a_minute(hass, freezer, loaded):

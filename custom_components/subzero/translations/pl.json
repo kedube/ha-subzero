@@ -77,8 +77,8 @@
     "step": {
       "init": {
         "title": "Wybierz urządzenia",
-        "description": "Lista jest odświeżana z Twojego konta Sub-Zero. Odznaczenie urządzenia usuwa odpowiadające mu urządzenie i encje z Home Assistant. Aktualizacje push są sprawdzane po każdym zdarzeniu urządzenia i gdy drzwi są otwarte. Włącz wspólne sprawdzanie połączenia, aby dodatkowo sprawdzać jedno urządzenie, gdy przez ustawiony interwał, domyślnie 3 minuty, nic nie nadchodzi, co pozwala wcześniej wykryć, że aktualizacje push ustały; krótsze interwały oznaczają więcej żądań do chmury. Wyłączenie alertów urządzeń Firebase przerywa połączenie z Google i usuwa subskrypcje alertów Sub-Zero tej integracji.",
-        "data": {"device_ids": "Urządzenia", "shared_connection_check": "Wspólne sprawdzanie połączenia", "shared_connection_check_interval": "Interwał wspólnego sprawdzania połączenia", "firebase_alerts": "Alerty urządzeń Firebase"}
+        "description": "Lista jest odświeżana z Twojego konta Sub-Zero. Odznaczenie urządzenia usuwa odpowiadające mu urządzenie i encje z Home Assistant. Aktualizacje push są sprawdzane po każdym zdarzeniu urządzenia. Gdy ponowne sprawdzanie jest włączone, są one sprawdzane ponownie za każdym razem, gdy przez jego interwał, domyślnie 2 minuty, nie nadejdzie żadna aktualizacja: przez 10 minut po zdarzeniu i do 15 minut, gdy drzwi są otwarte. Włącz wspólne sprawdzanie połączenia, aby dodatkowo sprawdzać jedno urządzenie, gdy przez ustawiony interwał, domyślnie 3 minuty, nic nie nadchodzi, co pozwala wcześniej wykryć, że aktualizacje push ustały; krótsze interwały oznaczają więcej żądań do chmury. Wyłączenie alertów urządzeń Firebase przerywa połączenie z Google i usuwa subskrypcje alertów Sub-Zero tej integracji.",
+        "data": {"device_ids": "Urządzenia", "follow_up_checks": "Ponowne sprawdzanie", "follow_up_check_interval": "Interwał ponownego sprawdzania", "shared_connection_check": "Wspólne sprawdzanie połączenia", "shared_connection_check_interval": "Interwał wspólnego sprawdzania połączenia", "firebase_alerts": "Alerty urządzeń Firebase"}
       }
     },
     "error": {

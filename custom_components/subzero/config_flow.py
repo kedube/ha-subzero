@@ -36,14 +36,20 @@ from .auth import (
 )
 from .const import (
     CONF_FIREBASE_ALERTS,
+    CONF_FOLLOW_UP_CHECK_INTERVAL,
+    CONF_FOLLOW_UP_CHECKS,
     CONF_SHARED_CONNECTION_CHECK,
     CONF_SHARED_CONNECTION_CHECK_INTERVAL,
+    DEFAULT_FOLLOW_UP_CHECK_MINUTES,
     DEFAULT_SHARED_CHECK_MINUTES,
     DOMAIN,
+    FOLLOW_UP_CHECK_MINUTES,
     SHARED_CHECK_MINUTES,
 )
 from .coordinator import (
     firebase_alerts_enabled,
+    follow_up_check_minutes,
+    follow_up_checks_enabled,
     selected_devices,
     shared_connection_check_enabled,
     shared_connection_check_minutes,
@@ -507,6 +513,14 @@ class SubZeroOptionsFlow(config_entries.OptionsFlowWithReload):
                 return self.async_abort(reason="all_configured")
             else:
                 options = {"devices": {key: self._devices[key] for key in selected}}
+                if user_input.get(CONF_FOLLOW_UP_CHECKS, follow_up_checks_enabled(entry)) is False:
+                    options[CONF_FOLLOW_UP_CHECKS] = False
+                # Kept while the checks are off, for when they are turned back on.
+                minutes = round(
+                    user_input.get(CONF_FOLLOW_UP_CHECK_INTERVAL, follow_up_check_minutes(entry))
+                )
+                if minutes != DEFAULT_FOLLOW_UP_CHECK_MINUTES:
+                    options[CONF_FOLLOW_UP_CHECK_INTERVAL] = minutes
                 if (
                     user_input.get(
                         CONF_SHARED_CONNECTION_CHECK, shared_connection_check_enabled(entry)
@@ -526,6 +540,7 @@ class SubZeroOptionsFlow(config_entries.OptionsFlowWithReload):
                 if user_input.get(CONF_FIREBASE_ALERTS, firebase_alerts_enabled(entry)) is True:
                     options[CONF_FIREBASE_ALERTS] = True
                 return self.async_create_entry(data=options)
+        follow_up_low, follow_up_high = FOLLOW_UP_CHECK_MINUTES
         low, high = SHARED_CHECK_MINUTES
         return self.async_show_form(
             step_id="init",
@@ -533,6 +548,21 @@ class SubZeroOptionsFlow(config_entries.OptionsFlowWithReload):
                 self._devices, [key for key in current if key in self._devices]
             ).extend(
                 {
+                    vol.Required(
+                        CONF_FOLLOW_UP_CHECKS, default=follow_up_checks_enabled(entry)
+                    ): BooleanSelector(),
+                    vol.Required(
+                        CONF_FOLLOW_UP_CHECK_INTERVAL,
+                        default=follow_up_check_minutes(entry),
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=follow_up_low,
+                            max=follow_up_high,
+                            step=1,
+                            mode=NumberSelectorMode.BOX,
+                            unit_of_measurement=UnitOfTime.MINUTES,
+                        )
+                    ),
                     vol.Required(
                         CONF_SHARED_CONNECTION_CHECK,
                         default=shared_connection_check_enabled(entry),

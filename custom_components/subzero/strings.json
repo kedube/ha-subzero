@@ -77,8 +77,8 @@
     "step": {
       "init": {
         "title": "Choose appliances",
-        "description": "The list is refreshed from your Sub-Zero account. Deselecting an appliance removes its Home Assistant device and entities. Push updates are checked after each appliance event and while a door is open. Turn on the shared connection check to also check one appliance whenever nothing arrives for its interval, 3 minutes by default, which finds stopped push updates sooner; shorter intervals make more cloud requests. Turning off Firebase appliance alerts disconnects from Google and removes this integration's Sub-Zero alert subscriptions.",
-        "data": {"device_ids": "Appliances", "shared_connection_check": "Shared connection check", "shared_connection_check_interval": "Shared connection check interval", "firebase_alerts": "Firebase appliance alerts"}
+        "description": "The list is refreshed from your Sub-Zero account. Deselecting an appliance removes its Home Assistant device and entities. Push updates are checked after each appliance event. With follow-up checks on, they're checked again whenever their interval, 2 minutes by default, passes without an update: for 10 minutes after an event, and for up to 15 minutes while a door is open. Turn on the shared connection check to also check one appliance whenever nothing arrives for its interval, 3 minutes by default, which finds stopped push updates sooner; shorter intervals make more cloud requests. Turning off Firebase appliance alerts disconnects from Google and removes this integration's Sub-Zero alert subscriptions.",
+        "data": {"device_ids": "Appliances", "follow_up_checks": "Follow-up checks", "follow_up_check_interval": "Follow-up check interval", "shared_connection_check": "Shared connection check", "shared_connection_check_interval": "Shared connection check interval", "firebase_alerts": "Firebase appliance alerts"}
       }
     },
     "error": {

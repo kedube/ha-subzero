@@ -1656,6 +1656,8 @@ async def test_diagnostics_omit_private_values(hass, appliances):
     assert result["notifications"]["received"] == 0
     encoded = json.dumps(result)
     assert result["push_connected"] is True
+    assert result["follow_up_checks"] is True
+    assert result["follow_up_check_minutes"] == 2
     assert result["shared_connection_check"] is False
     assert result["shared_connection_check_minutes"] == 3
     assert result["polling_disabled"] is False

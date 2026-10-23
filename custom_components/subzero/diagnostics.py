@@ -11,6 +11,8 @@ from .coordinator import (
     SubZeroCoordinator,
     SubZeroFaultsCoordinator,
     firebase_alerts_enabled,
+    follow_up_check_minutes,
+    follow_up_checks_enabled,
     shared_connection_check_enabled,
     shared_connection_check_minutes,
 )
@@ -52,6 +54,8 @@ async def async_get_config_entry_diagnostics(
     return {
         "connection": "cloud_push",
         "push_connected": account.client.push_connected,
+        "follow_up_checks": follow_up_checks_enabled(entry),
+        "follow_up_check_minutes": follow_up_check_minutes(entry),
         "shared_connection_check": shared_connection_check_enabled(entry),
         "shared_connection_check_minutes": shared_connection_check_minutes(entry),
         "polling_disabled": entry.pref_disable_polling,

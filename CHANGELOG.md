@@ -2,6 +2,12 @@
 
 Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then 2.00.
 
+## 1.01 (unreleased)
+
+### Added
+
+- **Follow-up checks** and **Follow-up check interval** in Configure. Follow-up checks are the checks that run for 10 minutes after an event, and for up to 15 minutes while a door is open, whenever the interval passes without an update. They stay on by default, and the interval can be set from 1 to 10 minutes, with 2 as the default. With them off, each event still gets its one check two seconds later. Diagnostics show both settings.
+
 ## 1.00 (unreleased)
 
 The first release as a standalone integration, at [kedube/ha-subzero](https://github.com/kedube/ha-subzero). It continues from releases 0.6.2 to 0.9.0, whose notes remain on the [releases page](https://github.com/kedube/ha-subzero/releases). This entry covers everything since 0.8.6, including what 0.8.7 and 0.9.0 shipped.

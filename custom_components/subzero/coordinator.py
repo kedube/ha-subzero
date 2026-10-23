@@ -36,14 +36,18 @@ from .api import (
 from .auth import InvalidAuth
 from .const import (
     CONF_FIREBASE_ALERTS,
+    CONF_FOLLOW_UP_CHECK_INTERVAL,
+    CONF_FOLLOW_UP_CHECKS,
     CONF_SHARED_CONNECTION_CHECK,
     CONF_SHARED_CONNECTION_CHECK_INTERVAL,
     CONTROL_CONFIRM_TIMEOUT,
     CONTROL_PUSH_TIMEOUT,
+    DEFAULT_FOLLOW_UP_CHECK_MINUTES,
     DEFAULT_SHARED_CHECK_MINUTES,
     DOMAIN,
     DOOR_KEYS,
     FAULT_METADATA_APPLIES_TO_BY_SERIES,
+    FOLLOW_UP_CHECK_MINUTES,
     ICE_DELAY_KEYS,
     KITCHEN_TIMERS,
     MAX_EVENT_HISTORY,
@@ -85,9 +89,8 @@ SNAPSHOT_TIMEOUT = 16
 ALERT_CHECK_DELAY = 2
 ALERT_CHECK_INTERVAL = timedelta(minutes=1)
 # Push alone keeps state otherwise. After an alert, and while a door reports open,
-# a check also runs this long after the last pushed update.
-WATCH_INTERVAL = timedelta(minutes=2)
-# How long that lasts after an alert, and for a door that stays open.
+# a follow-up check also runs its interval after the last pushed update, for this
+# long after an alert and for a door that stays open.
 ALERT_WATCH = timedelta(minutes=10)
 DOOR_WATCH = timedelta(minutes=15)
 # Sequence 0 does not tell events apart, so a live event with it copies an earlier
@@ -113,6 +116,20 @@ def selected_devices(entry: ConfigEntry) -> dict[str, dict]:
             }
         }
     return entry.options.get("devices", entry.data["devices"])
+
+
+def follow_up_checks_enabled(entry: ConfigEntry) -> bool:
+    """Follow-up checks run unless the owner turns them off."""
+    return entry.options.get(CONF_FOLLOW_UP_CHECKS) is not False
+
+
+def follow_up_check_minutes(entry: ConfigEntry) -> int:
+    """Return how many minutes without an update start each follow-up check."""
+    minutes = entry.options.get(CONF_FOLLOW_UP_CHECK_INTERVAL)
+    low, high = FOLLOW_UP_CHECK_MINUTES
+    if type(minutes) is int and low <= minutes <= high:
+        return minutes
+    return DEFAULT_FOLLOW_UP_CHECK_MINUTES
 
 
 def shared_connection_check_enabled(entry: ConfigEntry) -> bool:
@@ -167,6 +184,8 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         self._watch_until: datetime | None = None
         # Since when a door has reported open.
         self._door_opened: datetime | None = None
+        # Changing it in Configure reloads the entry.
+        self._watch_interval = timedelta(minutes=follow_up_check_minutes(entry))
         # A silent check's record, when it started, and the connection it used, until
         # a snapshot shows whether its answer was only late.
         self._late_snapshot: tuple[dict, float, object] | None = None
@@ -219,10 +238,10 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         """Return how long the next watch check waits after a state update, or None.
 
         Push alone keeps state, except for a while after an alert and while a door
-        reports open, when a silent channel would matter most. Turning off polling
-        in the entry's system options stops these checks too.
+        reports open, when a silent channel would matter most. Turning off follow-up
+        checks in Configure, or polling in the entry's system options, stops them.
         """
-        if self.entry.pref_disable_polling:
+        if self.entry.pref_disable_polling or not follow_up_checks_enabled(self.entry):
             return None
         now = dt_util.utcnow()
         if any(self.data.get(key) is True for key in DOOR_KEYS):
@@ -233,7 +252,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         if (self._watch_until is not None and now < self._watch_until) or (
             self._door_opened is not None and now < self._door_opened + DOOR_WATCH
         ):
-            return WATCH_INTERVAL
+            return self._watch_interval
         return None
 
     @callback

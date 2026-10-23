@@ -988,18 +988,18 @@ A full state that arrives on the same connection after a check stopped waiting i
 | Check | When |
 | --- | --- |
 | Alert | 2 s after a new event from Firebase or the live connection (`ALERT_CHECK_DELAY`), at most one per appliance per minute (`ALERT_CHECK_INTERVAL`). A check that started after the event covers it. An event found in a history starts none |
-| Watch | For 10 minutes after an event (`ALERT_WATCH`), and for up to 15 minutes while a door property (`*door_ajar`) is true (`DOOR_WATCH`): 2 minutes (`WATCH_INTERVAL`) after the last pushed change |
+| Watch | The **Follow-up checks** option, on by default. For 10 minutes after an event (`ALERT_WATCH`), and for up to 15 minutes while a door property (`*door_ajar`) is true (`DOOR_WATCH`): the follow-up check interval after the last pushed change, 2 minutes by default, 1–10 in the options |
 | Connection | Optional. Whenever the whole connection goes its interval without any `ConnectedApplianceMessage`: 3 minutes by default, 1–60 in the options. It checks the available appliance checked least recently, and skips a round while another check runs. It relies on silence hitting every appliance at once (§14) |
 | Manual | The `subzero.refresh` action, which joins a check already running |
 
 - There are no periodic checks; versions up to 0.8.7 also checked each appliance 10 minutes after its last pushed change.
 - A status read made for another reason, such as confirming a write, shows nothing about the live connection, so it doesn't delay a check.
-- Home Assistant's **Enable polling for changes** option, when off, stops the watch and connection checks, and the 30-minute fault refresh. Alert and manual checks still run.
+- Home Assistant's **Enable polling for changes** option, when off, stops the watch and connection checks, and the 30-minute fault refresh. Alert and manual checks still run. Turning off **Follow-up checks** stops only the watch checks.
 - Without the connection check, a silent spell with no events lasts until the next renewal, at most 50 minutes later.
 
 ### 13.4 Cost
 
-Each check is one `open_cloud_async`, plus a `get` when it goes unanswered; each renewal is one `negotiateUser` plus one `open_cloud_async` per appliance. With nothing happening, the integration makes no checks. An event or an open door adds at most one check every 2 minutes for 10 or 15 minutes, and none while the appliance keeps pushing changes. The connection check adds at most one per interval, and only while the connection is quiet. [I]
+Each check is one `open_cloud_async`, plus a `get` when it goes unanswered; each renewal is one `negotiateUser` plus one `open_cloud_async` per appliance. With nothing happening, the integration makes no checks. An event or an open door adds at most one check per follow-up check interval (2 minutes by default) for 10 or 15 minutes, and none while the appliance keeps pushing changes or with follow-up checks off. The connection check adds at most one per interval, and only while the connection is quiet. [I]
 
 ### 13.5 Diagnostics
 

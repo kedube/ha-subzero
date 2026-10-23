@@ -932,6 +932,72 @@ async def test_options_reject_a_shared_check_interval_out_of_range(hass, tokens)
     assert entry.options == {}
 
 
+async def test_options_can_turn_follow_up_checks_off_and_back_on(hass, tokens):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        data={"tokens": token_state(tokens), "devices": DEVICES},
+    )
+    entry.add_to_hass(hass)
+    with (
+        patch("custom_components.subzero.api.SubZeroClient.appliances", return_value=APPLIANCES),
+        # Each change reloads the entry.
+        patch("custom_components.subzero.async_setup_entry", return_value=True),
+        patch("custom_components.subzero.async_unload_entry", return_value=True),
+    ):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        defaults = result["data_schema"]({})
+        assert defaults["follow_up_checks"] is True
+        assert defaults["follow_up_check_interval"] == 2
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                "device_ids": ["test-fridge"],
+                "follow_up_checks": False,
+                "follow_up_check_interval": 5.0,
+            },
+        )
+        await hass.async_block_till_done()
+        assert entry.options == {
+            "devices": {"test-fridge": DEVICES["test-fridge"]},
+            "follow_up_checks": False,
+            "follow_up_check_interval": 5,
+        }
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        defaults = result["data_schema"]({})
+        assert defaults["follow_up_checks"] is False
+        assert defaults["follow_up_check_interval"] == 5
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {"device_ids": ["test-fridge"], "follow_up_checks": True},
+        )
+        await hass.async_block_till_done()
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    # On is the default, so only the interval is saved.
+    assert entry.options == {
+        "devices": {"test-fridge": DEVICES["test-fridge"]},
+        "follow_up_check_interval": 5,
+    }
+
+
+async def test_options_reject_a_follow_up_check_interval_out_of_range(hass, tokens):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        data={"tokens": token_state(tokens), "devices": DEVICES},
+    )
+    entry.add_to_hass(hass)
+    with patch("custom_components.subzero.api.SubZeroClient.appliances", return_value=APPLIANCES):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        for minutes in (0, 11):
+            with pytest.raises(InvalidData):
+                await hass.config_entries.options.async_configure(
+                    result["flow_id"],
+                    {"device_ids": ["test-fridge"], "follow_up_check_interval": minutes},
+                )
+    assert entry.options == {}
+
+
 async def test_options_can_turn_firebase_alerts_on_and_back_off(hass, tokens):
     entry = MockConfigEntry(
         domain=DOMAIN,
