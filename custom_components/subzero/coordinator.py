@@ -40,10 +40,12 @@ from .const import (
     CONF_FOLLOW_UP_CHECKS,
     CONF_SHARED_CONNECTION_CHECK,
     CONF_SHARED_CONNECTION_CHECK_INTERVAL,
+    CONF_SHOW_SIDEBAR_PANEL,
     CONTROL_CONFIRM_TIMEOUT,
     CONTROL_PUSH_TIMEOUT,
     DEFAULT_FOLLOW_UP_CHECK_MINUTES,
     DEFAULT_SHARED_CHECK_MINUTES,
+    DEFAULT_SHOW_SIDEBAR_PANEL,
     DOMAIN,
     DOOR_KEYS,
     FAULT_METADATA_APPLIES_TO_BY_SERIES,
@@ -60,6 +62,7 @@ from .const import (
 )
 from .controls import (
     SABBATH_LOCKED,
+    appliance_brand,
     appliance_datetime,
     appliance_type,
     clock_zone,
@@ -67,10 +70,7 @@ from .controls import (
     excluded_properties,
     ice_mode,
     ice_mode_properties,
-    is_dishwasher,
-    is_hood,
     is_ice_maker,
-    is_oven,
     sabbath_allows,
     sabbath_enabled,
     start_properties,
@@ -121,6 +121,11 @@ def selected_devices(entry: ConfigEntry) -> dict[str, dict]:
 def follow_up_checks_enabled(entry: ConfigEntry) -> bool:
     """Follow-up checks run unless the owner turns them off."""
     return entry.options.get(CONF_FOLLOW_UP_CHECKS) is not False
+
+
+def sidebar_panel_enabled(entry: ConfigEntry) -> bool:
+    """The sidebar panel shows the entry's appliances unless the owner turns it off."""
+    return entry.options.get(CONF_SHOW_SIDEBAR_PANEL, DEFAULT_SHOW_SIDEBAR_PANEL) is not False
 
 
 def follow_up_check_minutes(entry: ConfigEntry) -> int:
@@ -562,13 +567,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         version = self.data.get("version")
         serial = self.data.get("appliance_serial")
         info.update(
-            manufacturer=(
-                "Cove"
-                if is_dishwasher(self.data)
-                else "Wolf"
-                if is_oven(self.data) or is_hood(self.data)
-                else "Sub-Zero"
-            ),
+            manufacturer=appliance_brand(self.data),
             model=self.data["appliance_model"],
             serial_number=serial if isinstance(serial, str) else None,
             sw_version=version.get("fw") if isinstance(version, dict) else None,

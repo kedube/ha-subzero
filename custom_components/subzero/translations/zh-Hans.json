@@ -77,8 +77,8 @@
     "step": {
       "init": {
         "title": "选择电器",
-        "description": "列表已从你的 Sub-Zero 账户刷新。取消选择某台电器会从 Home Assistant 中删除其设备和实体。每次电器事件后都会检查推送更新。开启后续检查后，只要在其间隔（默认 2 分钟）内没有收到更新，就会再次检查：事件发生后持续 10 分钟，门打开期间最多持续 15 分钟。开启共享连接检查后，只要在设定的间隔（默认 3 分钟）内没有收到任何消息，就会再检查一台电器，从而更早发现推送更新已停止；间隔越短，云端请求越多。关闭 Firebase 电器提醒会断开与 Google 的连接，并删除此集成的 Sub-Zero 提醒订阅。",
-        "data": {"device_ids": "电器", "follow_up_checks": "后续检查", "follow_up_check_interval": "后续检查间隔", "shared_connection_check": "共享连接检查", "shared_connection_check_interval": "共享连接检查间隔", "firebase_alerts": "Firebase 电器提醒"}
+        "description": "列表已从你的 Sub-Zero 账户刷新。取消选择某台电器会从 Home Assistant 中删除其设备和实体。侧边栏中的 Sub-Zero 页面向所有用户显示这些电器及其控件。每次电器事件后都会检查推送更新。开启后续检查后，只要在其间隔（默认 2 分钟）内没有收到更新，就会再次检查：事件发生后持续 10 分钟，门打开期间最多持续 15 分钟。开启共享连接检查后，只要在设定的间隔（默认 3 分钟）内没有收到任何消息，就会再检查一台电器，从而更早发现推送更新已停止；间隔越短，云端请求越多。关闭 Firebase 电器提醒会断开与 Google 的连接，并删除此集成的 Sub-Zero 提醒订阅。",
+        "data": {"device_ids": "电器", "show_sidebar_panel": "在侧边栏中显示 Sub-Zero", "follow_up_checks": "后续检查", "follow_up_check_interval": "后续检查间隔", "shared_connection_check": "共享连接检查", "shared_connection_check_interval": "共享连接检查间隔", "firebase_alerts": "Firebase 电器提醒"}
       }
     },
     "error": {

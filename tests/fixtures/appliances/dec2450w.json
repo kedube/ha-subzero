@@ -1,0 +1,24 @@
+{
+  "model": "DEC2450W",
+  "appliance_type": "17.18.1.0",
+  "name": "24\" Wine",
+  "state": {
+    "accent_light_level": 120,
+    "ap_rssi": -54,
+    "appliance_model": "DEC2450W",
+    "appliance_type": "17.18.1.0",
+    "door_ajar_timeout": 5,
+    "sabbath_on": false,
+    "service_required": false,
+    "time": "2026-10-24T09:41:07-07:00",
+    "unit_on": true,
+    "uptime": "64:48:11",
+    "version": {
+      "fw": "3.08"
+    },
+    "wine2_set_temp": 50,
+    "wine_door_ajar": false,
+    "wine_set_temp": 58,
+    "wine_temp_alert_on": false
+  }
+}

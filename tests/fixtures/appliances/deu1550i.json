@@ -1,0 +1,29 @@
+{
+  "model": "DEU1550I",
+  "appliance_type": "17.21.1.0",
+  "name": "15\" Ice Maker",
+  "state": {
+    "ap_rssi": -56,
+    "appliance_model": "DEU1550I",
+    "appliance_type": "17.21.1.0",
+    "clean_now_on": false,
+    "clean_soon_on": false,
+    "door_ajar_timeout": 5,
+    "ice_door_ajar": false,
+    "ice_maker_clean_on": false,
+    "ice_maker_clean_stage": 50,
+    "ice_maker_on": true,
+    "next_clean_cycles": 140,
+    "next_clean_time": "2026-12-02T03:00:00-08:00",
+    "sabbath_on": false,
+    "service_required": false,
+    "time": "2026-10-24T09:41:07-07:00",
+    "unit_on": true,
+    "uptime": "68:27:39",
+    "version": {
+      "fw": "2.08"
+    },
+    "water_filter_inserted": true,
+    "water_filter_pct_remaining": 54
+  }
+}

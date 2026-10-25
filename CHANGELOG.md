@@ -2,6 +2,19 @@
 
 Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then 2.00.
 
+## 1.02 (unreleased)
+
+### Added
+
+- **Sidebar panel.** A **Sub-Zero** entry in the sidebar shows each appliance as a card with a drawing of it, modeled on its product photos, that follows its live state: doors swing open, ovens glow while they heat, a dishwasher counts down. Cards are grouped by area. An appliance's full view has every control, its recent events, and Refresh. Locked controls say why, and starting an oven or a dishwasher, or canceling a wash, asks first.
+- **Show Sub-Zero in the sidebar** in Configure. It's on by default, so the panel appears after upgrading; turn it off to remove the panel.
+- **Appearance**, in an appliance's full view, for admins: stainless or a custom panel color, knob color, handle, an oven's style, and the appliance's form when the drawing doesn't match. Everyone sees the same Appearance. The default is stainless with red knobs.
+- Diagnostics show whether the panel is in the sidebar, and how it draws each appliance.
+
+### Development
+
+- The panel's source is in `frontend/` (TypeScript and Lit). The built bundle is committed in `custom_components/subzero/frontend/`, and the Validate workflow checks that it matches the source.
+
 ## 1.01 (unreleased)
 
 ### Added

@@ -13,7 +13,13 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import SubZeroConfigEntry
 from .const import KITCHEN_TIMERS
-from .controls import is_finite_number, supports_control, temperature_range, timer_minutes
+from .controls import (
+    is_finite_number,
+    snap_to_range,
+    supports_control,
+    temperature_range,
+    timer_minutes,
+)
 from .entity import SubZeroEntity, async_setup_entities
 
 DESCRIPTIONS = (
@@ -153,6 +159,10 @@ class SubZeroNumber(SubZeroEntity, NumberEntity):
         if not is_finite_number(value):
             raise ServiceValidationError("Enter a valid number.")
         key = self.entity_description.key
-        await self.coordinator.async_set_properties(
-            {key: round(value) * 60000 if key == "delay_off_duration" else round(value)}
-        )
+        if key == "delay_off_duration":
+            native = round(value) * 60000
+        elif self.entity_description.device_class == NumberDeviceClass.TEMPERATURE:
+            native = snap_to_range(round(value), temperature_range(key, self.coordinator.data))
+        else:
+            native = round(value)
+        await self.coordinator.async_set_properties({key: native})

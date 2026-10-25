@@ -518,6 +518,30 @@ async def test_celsius_display_converts_to_a_whole_fahrenheit_setpoint(
     assert type(controls.client.set_property.call_args.args[2]) is int
 
 
+@pytest.mark.parametrize(
+    ("entity", "key", "celsius", "fahrenheit"),
+    [
+        # Home Assistant offers 6 °C (42.8 °F) as the 42 °F maximum, -21 °C (-5.8 °F) as the
+        # -5 °F minimum: they mean the range's ends.
+        ("refrigerator", "ref_set_temp", 6, 42),
+        ("freezer", "frz_set_temp", -21, -5),
+    ],
+)
+async def test_celsius_range_ends_snap_to_the_fahrenheit_range(
+    hass, controls, entity, key, celsius, fahrenheit
+):
+    hass.config.units = METRIC_SYSTEM
+    # Home Assistant checks the value against the range in Celsius first, so this also shows
+    # it offers these ends.
+    await hass.services.async_call(
+        "number",
+        "set_value",
+        {"entity_id": f"number.kitchen_{entity}_setpoint", "value": celsius},
+        blocking=True,
+    )
+    controls.client.set_property.assert_awaited_once_with("test-fridge", key, fahrenheit)
+
+
 @pytest.mark.parametrize("controls", ["K", None], indirect=True)
 async def test_unknown_temperature_units_keep_other_controls(hass, controls):
     assert hass.states.get("number.kitchen_refrigerator_setpoint") is None

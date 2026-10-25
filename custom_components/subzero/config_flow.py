@@ -40,6 +40,7 @@ from .const import (
     CONF_FOLLOW_UP_CHECKS,
     CONF_SHARED_CONNECTION_CHECK,
     CONF_SHARED_CONNECTION_CHECK_INTERVAL,
+    CONF_SHOW_SIDEBAR_PANEL,
     DEFAULT_FOLLOW_UP_CHECK_MINUTES,
     DEFAULT_SHARED_CHECK_MINUTES,
     DOMAIN,
@@ -53,6 +54,7 @@ from .coordinator import (
     selected_devices,
     shared_connection_check_enabled,
     shared_connection_check_minutes,
+    sidebar_panel_enabled,
 )
 
 
@@ -513,6 +515,8 @@ class SubZeroOptionsFlow(config_entries.OptionsFlowWithReload):
                 return self.async_abort(reason="all_configured")
             else:
                 options = {"devices": {key: self._devices[key] for key in selected}}
+                if user_input.get(CONF_SHOW_SIDEBAR_PANEL, sidebar_panel_enabled(entry)) is False:
+                    options[CONF_SHOW_SIDEBAR_PANEL] = False
                 if user_input.get(CONF_FOLLOW_UP_CHECKS, follow_up_checks_enabled(entry)) is False:
                     options[CONF_FOLLOW_UP_CHECKS] = False
                 # Kept while the checks are off, for when they are turned back on.
@@ -548,6 +552,9 @@ class SubZeroOptionsFlow(config_entries.OptionsFlowWithReload):
                 self._devices, [key for key in current if key in self._devices]
             ).extend(
                 {
+                    vol.Required(
+                        CONF_SHOW_SIDEBAR_PANEL, default=sidebar_panel_enabled(entry)
+                    ): BooleanSelector(),
                     vol.Required(
                         CONF_FOLLOW_UP_CHECKS, default=follow_up_checks_enabled(entry)
                     ): BooleanSelector(),

@@ -1024,3 +1024,58 @@ async def test_options_can_turn_firebase_alerts_on_and_back_off(hass, tokens):
         )
         await hass.async_block_till_done()
     assert "firebase_alerts" not in entry.options
+
+
+async def test_options_can_turn_the_sidebar_panel_off_and_back_on(hass, tokens):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        data={"tokens": token_state(tokens), "devices": DEVICES},
+    )
+    entry.add_to_hass(hass)
+    with (
+        patch("custom_components.subzero.api.SubZeroClient.appliances", return_value=APPLIANCES),
+        # Each change reloads the entry.
+        patch("custom_components.subzero.async_setup_entry", return_value=True),
+        patch("custom_components.subzero.async_unload_entry", return_value=True),
+    ):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        # On by default, with no migration: a missing option means on.
+        assert result["data_schema"]({})["show_sidebar_panel"] is True
+        fields = [field.schema for field in result["data_schema"].schema]
+        assert fields[:2] == ["device_ids", "show_sidebar_panel"]
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {"device_ids": list(DEVICES), "show_sidebar_panel": True}
+        )
+        await hass.async_block_till_done()
+        # On is the default, so it isn't saved.
+        assert entry.options == {"devices": DEVICES}
+
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {"device_ids": list(DEVICES), "show_sidebar_panel": False}
+        )
+        await hass.async_block_till_done()
+        assert entry.options == {"devices": DEVICES, "show_sidebar_panel": False}
+
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        assert result["data_schema"]({})["show_sidebar_panel"] is False
+        # Changing another setting keeps it off.
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {"device_ids": list(DEVICES), "firebase_alerts": True}
+        )
+        await hass.async_block_till_done()
+        assert entry.options == {
+            "devices": DEVICES,
+            "show_sidebar_panel": False,
+            "firebase_alerts": True,
+        }
+
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {"device_ids": list(DEVICES), "show_sidebar_panel": True}
+        )
+        await hass.async_block_till_done()
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    # Turned back on, it's removed again.
+    assert entry.options == {"devices": DEVICES, "firebase_alerts": True}

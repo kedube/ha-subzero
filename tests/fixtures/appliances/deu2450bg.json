@@ -1,0 +1,27 @@
+{
+  "model": "DEU2450BG",
+  "appliance_type": "17.13.3.1",
+  "name": "24\" UC Beverage Center",
+  "state": {
+    "accent_light_level": 120,
+    "ap_rssi": -49,
+    "appliance_model": "DEU2450BG",
+    "appliance_type": "17.13.3.1",
+    "door_ajar_timeout": 5,
+    "high_use_end_time": "2026-10-21T19:00:00-07:00",
+    "high_use_on": false,
+    "high_use_start_time": "2026-10-21T07:00:00-07:00",
+    "long_vacation_on": false,
+    "ref_door_ajar": false,
+    "ref_set_temp": 40,
+    "sabbath_on": false,
+    "service_required": false,
+    "short_vacation_on": false,
+    "time": "2026-10-24T09:41:07-07:00",
+    "unit_on": true,
+    "uptime": "96:33:18",
+    "version": {
+      "fw": "4.06"
+    }
+  }
+}

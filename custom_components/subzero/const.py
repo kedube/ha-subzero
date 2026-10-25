@@ -8,6 +8,8 @@ CONF_FOLLOW_UP_CHECKS = "follow_up_checks"
 CONF_FOLLOW_UP_CHECK_INTERVAL = "follow_up_check_interval"
 CONF_SHARED_CONNECTION_CHECK = "shared_connection_check"
 CONF_SHARED_CONNECTION_CHECK_INTERVAL = "shared_connection_check_interval"
+CONF_SHOW_SIDEBAR_PANEL = "show_sidebar_panel"
+DEFAULT_SHOW_SIDEBAR_PANEL = True
 # Minutes without an update before each follow-up check, and the range the options
 # allow. The longest is as long as follow-up checks last after an event.
 DEFAULT_FOLLOW_UP_CHECK_MINUTES = 2

@@ -19,7 +19,7 @@ This is an unofficial integration. It is not affiliated with or endorsed by Sub-
   <img src="docs/images/dashboard-light.png" alt="A Home Assistant dashboard with a Wolf range, a Sub-Zero refrigerator, wine storage, and beverage center, a Cove dishwasher, and their recent appliance alerts">
 </picture>
 
-**Contents:** [Requirements](#requirements) · [Installation](#installation) · [Setup](#setup) · [Options](#options) · [Appliances](#appliances) · [Events and automations](#events-and-automations) · [Actions](#actions) · [How live updates work](#how-live-updates-work) · [Diagnostics](#diagnostics) · [Compatibility](#compatibility) · [Privacy and security](#privacy-and-security) · [Getting help](#getting-help) · [Development](#development)
+**Contents:** [Requirements](#requirements) · [Installation](#installation) · [Setup](#setup) · [Options](#options) · [Sidebar panel](#sidebar-panel) · [Appliances](#appliances) · [Events and automations](#events-and-automations) · [Actions](#actions) · [How live updates work](#how-live-updates-work) · [Diagnostics](#diagnostics) · [Compatibility](#compatibility) · [Privacy and security](#privacy-and-security) · [Getting help](#getting-help) · [Development](#development)
 
 ## Requirements
 
@@ -68,10 +68,31 @@ Open **Settings → Devices & services → Sub-Zero → Configure** to change:
 | **Shared connection check** | Off by default. Checks that live updates are still arriving whenever none have arrived for the interval below. See [How live updates work](#how-live-updates-work). |
 | **Shared connection check interval** | Minutes without any update before that check runs, from 1 to 60. The default is 3. |
 | **Firebase appliance alerts** | Off by default. Receives the alerts the phone app gets, such as a door left open. See [Events and automations](#events-and-automations). |
+| **Show Sub-Zero in the sidebar** | On by default. Adds the Sub-Zero panel to the sidebar for every user. See [Sidebar panel](#sidebar-panel). |
 
-<img src="docs/images/configure.png" alt="The Configure dialog with the appliance list, follow-up checks and the shared connection check with their intervals, and Firebase appliance alerts" width="420">
+<img src="docs/images/configure.png" alt="The Configure dialog with the appliance list, Show Sub-Zero in the sidebar, follow-up checks and the shared connection check with their intervals, and Firebase appliance alerts" width="420">
 
 Home Assistant's own **Enable polling for changes** switch, under the entry's **⋮ → System options**, also applies: turning it off stops every scheduled check, described in [How live updates work](#how-live-updates-work).
+
+## Sidebar panel
+
+The **Sub-Zero** entry in the sidebar shows each appliance as a card with a drawing of it, modeled on the appliance's product photos. The drawing follows the appliance's live state: an open door swings open, a heating oven glows, a running dishwasher counts down. Cards are grouped by area and show the appliance's status, its display, and two or three key readings.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/panel-overview-dark.png">
+  <img src="docs/images/panel-overview-light.png" alt="The Sub-Zero panel with cards for a refrigerator, beverage center, wine storage, a range with its right oven preheated, and a running dishwasher">
+</picture>
+
+Select a card for the full view: every control the appliance has, its recent events, and a **Refresh** button. Controls follow the same rules as the entities, and a locked control says why, for example while Sabbath mode is on, during self-clean, or while a wash runs. Starting an oven or a dishwasher, and canceling a wash, ask first.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/panel-range-dark.png">
+  <img src="docs/images/panel-range-light.png" alt="A Wolf range's full view in the panel: its drawing with the right oven preheated to 375 degrees, then its ovens' power, temperature, cooking mode, light, and probe, and its kitchen timers">
+</picture>
+
+**Appearance.** The model number gives the layout, so the drawing shows a Classic side-by-side or French door, a Designer column, a range's burners and griddle, charbroiler, or French top, or a wall oven's style. What the model doesn't say, an admin sets under **Appearance** in the full view: stainless or a custom panel color, knob color, handle, and an oven's style. If a drawing doesn't match the appliance, choose its form there too. Everyone who opens the panel sees the same Appearance. The default is stainless with red knobs.
+
+The drawings are original illustrations without Sub-Zero, Wolf, or Cove logos. The panel needs no dashboard setup and works in the Home Assistant app on phones. To remove it, turn off **Show Sub-Zero in the sidebar** in Configure.
 
 ## Appliances
 
@@ -292,9 +313,10 @@ The integration download shows:
 - the follow-up check and shared connection check settings and intervals, and whether **Enable polling for changes** is off;
 - how many live messages arrived, and how many were ignored or couldn't be read;
 - the Firebase listener's status, its last subscription sync, and how many alerts arrived;
-- the last 10 connections: when each started and ended, and why it ended (`lifetime`, `renewal`, `closed`, or an error).
+- the last 10 connections: when each started and ended, and why it ended (`lifetime`, `renewal`, `closed`, or an error);
+- whether the sidebar panel is on and in the sidebar.
 
-Each appliance's download shows its state and these counters:
+Each appliance's download shows its state, how the panel draws it (the layout read from its model number, and its Appearance), and these counters:
 
 | Field | Meaning |
 | --- | --- |
@@ -322,7 +344,7 @@ These appliances have been used with the integration:
 
 Wolf wall ovens, ventilation hoods, and dedicated ice makers are supported from the app's behavior and tested with simulated appliances, but not yet with real ones. Other models work when the cloud reports their state; their entities depend on what they report.
 
-Setup, Configure, the actions, and event names are translated into German, French, Dutch, Spanish, Simplified Chinese, Italian, Polish, and Swedish. Entity names are in English. The translations were machine-assisted, and corrections from native speakers are welcome.
+Setup, Configure, the actions, event names, and the sidebar panel are translated into German, French, Dutch, Spanish, Simplified Chinese, Italian, Polish, and Swedish. Entity names are in English. The translations were machine-assisted, and corrections from native speakers are welcome.
 
 Not supported: local network control, multi-factor methods other than text message or phone call, and accounts that sign in through another provider.
 
@@ -350,7 +372,18 @@ python -m venv .venv
 .venv/bin/ruff format --check .
 ```
 
-The **Validate** workflow runs the tests and lint against each supported Home Assistant version, plus hassfest and the HACS check, on every push and pull request.
+The sidebar panel is in [frontend/](frontend/), written in TypeScript with Lit. With Node 22 or newer:
+
+```sh
+cd frontend
+npm ci
+npm run check   # type check, tests, and the bundle
+node scripts/render.mjs --out /tmp/drawings --module range   # drawings to PNGs, with Chrome
+```
+
+The build writes `custom_components/subzero/frontend/subzero-panel.js`. It's committed, because the integration serves it as is, so commit it with every change to the panel's source.
+
+The **Validate** workflow runs the tests and lint against each supported Home Assistant version, plus hassfest, the HACS check, and the panel's checks, including that the committed bundle matches its source, on every push and pull request.
 
 ### Releases
 

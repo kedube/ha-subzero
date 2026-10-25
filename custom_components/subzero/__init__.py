@@ -26,6 +26,14 @@ from .coordinator import (
     selected_devices,
 )
 from .fcm import FcmAlerts, async_remove_alert_subscriptions
+from .frontend import async_add_entry_panel, async_forget_entry_panel, async_remove_entry_panel
+from .panel_api import (
+    async_panel_entry_removed,
+    async_panel_entry_set_up,
+    async_panel_entry_unloaded,
+    async_remove_unused_appearance,
+    async_setup_panel_api,
+)
 from .services import async_setup_services
 
 PLATFORMS = [
@@ -49,6 +57,7 @@ REMOVE_ALERTS_TIMEOUT = 30
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     async_setup_services(hass)
+    async_setup_panel_api(hass)
     return True
 
 
@@ -101,6 +110,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: SubZeroConfigEntry) -> b
             account.alerts.start()
         elif entry.data.get("fcm_registration_ids"):
             account.alerts.start_cleanup()
+    # The sidebar panel, best effort: every entity works without it.
+    await async_add_entry_panel(hass, entry)
+    await async_remove_unused_appearance(hass)
+    async_panel_entry_set_up(hass, entry)
     return True
 
 
@@ -108,11 +121,22 @@ async def async_unload_entry(hass: HomeAssistant, entry: SubZeroConfigEntry) -> 
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded and (alerts := getattr(entry.runtime_data, "alerts", None)) is not None:
         await alerts.stop()
+    if unloaded:
+        # Usually to reload: the panel keeps the appliances, unavailable, until they're back.
+        async_panel_entry_unloaded(hass, entry)
+        await async_remove_entry_panel(hass, entry)
     return unloaded
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Stop Sub-Zero sending Firebase alerts to an integration that was removed."""
+    """Clean up after an integration entry that was removed.
+
+    The panel lets the removed appliances go, with their Appearance settings, and Sub-Zero
+    stops sending Firebase alerts to the entry.
+    """
+    async_panel_entry_removed(hass, entry.entry_id)
+    await async_forget_entry_panel(hass, entry.entry_id)
+    await async_remove_unused_appearance(hass)
     psid = entry.data.get("fcm_psid")
     device_ids = entry.data.get("fcm_registration_ids") or {}
     if not isinstance(psid, str) or not psid or not device_ids:

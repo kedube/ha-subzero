@@ -134,6 +134,15 @@ def is_dishwasher(data: dict) -> bool:
     return bool({"wash_cycle", "wash_status", "wash_cycle_on"}.intersection(data))
 
 
+def appliance_brand(data: dict) -> str:
+    """The brand on the appliance: Cove dishwashers, Wolf cooking and ventilation, else Sub-Zero."""
+    if is_dishwasher(data):
+        return "Cove"
+    if is_oven(data) or is_hood(data):
+        return "Wolf"
+    return "Sub-Zero"
+
+
 def has_left_and_right_ovens(data: dict) -> bool:
     """Whether the app calls the cavities right and left ovens: a range with two."""
     parts = appliance_type(data)
@@ -188,38 +197,53 @@ def sabbath_allows(key: str, value: bool | int | None = None) -> bool:
     return key == "mode" and (value is None or type(value) is int and value == 0)
 
 
-def control_lock(data: dict, key: str, value: bool | int | None = None) -> str | None:
-    """Why the app would not change a setting now, or None when it would.
+def control_lock_reason(
+    data: dict, key: str, value: bool | int | None = None
+) -> tuple[str, str] | None:
+    """Why the app would not change a setting now, as a code and a message, or None.
 
+    The code is stable, for the sidebar panel to translate; the message is for errors.
     Without a value, the setting is locked only when no change is allowed.
     """
     if sabbath_enabled(data) and not sabbath_allows(key, value):
-        return SABBATH_LOCKED
+        return "sabbath", SABBATH_LOCKED
     if key.startswith(("cav_", "cav2_")):
         if any(data.get(f"{prefix}_cook_mode") == SELF_CLEAN for prefix in OVEN_PREFIXES) and not (
             key.endswith("_unit_on") and value is not True
         ):
-            return "The oven is self-cleaning. It can only be turned off."
+            return "self_clean", "The oven is self-cleaning. It can only be turned off."
         prefix = key.split("_", 1)[0]
         if (
             key == f"{prefix}_light_on"
             and data.get(f"{prefix}_unit_on") is True
             and data.get(f"{prefix}_cook_mode") == PROOF
         ):
-            return "The oven light stays off during Proof."
+            return "proof_light", "The oven light stays off during Proof."
     cycle = data.get("wash_cycle") if type(data.get("wash_cycle")) is int else None
     if key in DISHWASHER_SWITCHES:
         if not wash_settings_enabled(data):
-            return "Wash options can change only while the dishwasher is idle."
+            return "wash_not_idle", "Wash options can change only while the dishwasher is idle."
         if cycle == RINSE_AND_HOLD or cycle in DISHWASHER_OPTION_EXCLUDED_CYCLES[key]:
-            return "The selected wash cycle does not offer this option."
+            return "cycle_no_option", "The selected wash cycle does not offer this option."
     if key == "delay_start_timer_duration":
         status = data.get("wash_status")
         if type(status) is not int or status not in DELAY_START_STATUSES:
-            return "Delay start can change only while the dishwasher is idle or delayed."
+            return (
+                "delay_not_idle",
+                "Delay start can change only while the dishwasher is idle or delayed.",
+            )
         if cycle in DELAY_START_EXCLUDED_CYCLES:
-            return "The selected wash cycle does not offer delay start."
+            return "cycle_no_delay", "The selected wash cycle does not offer delay start."
     return None
+
+
+def control_lock(data: dict, key: str, value: bool | int | None = None) -> str | None:
+    """Why the app would not change a setting now, or None when it would.
+
+    Without a value, the setting is locked only when no change is allowed.
+    """
+    reason = control_lock_reason(data, key, value)
+    return reason[1] if reason is not None else None
 
 
 def broil_level(data: dict, prefix: str) -> str | None:
@@ -507,6 +531,27 @@ def temperature_range(key: str, data: dict) -> tuple[int, int] | None:
     if key in WINE_SETPOINT_KEYS:
         return 40, 65
     return None
+
+
+# Home Assistant shows Celsius users a °F setpoint range widened to whole degrees (the minimum
+# floored, the maximum ceiled), so its end values come back as much as a Celsius degree, 1.8 °F,
+# past the range's ends once converted and rounded.
+CELSIUS_SLACK = 2
+
+
+def snap_to_range(value: int, bounds: tuple[float, float] | None) -> int:
+    """A rounded °F setpoint moved onto the range's end when it misses it by a converted degree.
+
+    Fahrenheit users can't send these: Home Assistant checks the range in their unit first.
+    """
+    if bounds is None:
+        return value
+    lower, upper = bounds
+    if lower - CELSIUS_SLACK <= value < lower:
+        return round(lower)
+    if upper < value <= upper + CELSIUS_SLACK:
+        return round(upper)
+    return value
 
 
 def validate_control_properties(data: dict, temperature_unit: str | None, properties: dict) -> None:

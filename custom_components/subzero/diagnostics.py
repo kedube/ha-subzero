@@ -1,5 +1,7 @@
 """Download appliance capabilities without account or network identifiers."""
 
+import logging
+
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceEntry
@@ -15,11 +17,28 @@ from .coordinator import (
     follow_up_checks_enabled,
     shared_connection_check_enabled,
     shared_connection_check_minutes,
+    sidebar_panel_enabled,
 )
+from .frontend import panel_module_url
+from .panel_api import async_appliance_panel
+
+_LOGGER = logging.getLogger(__name__)
+
+
+async def appliance_panel(hass: HomeAssistant, coordinator: SubZeroCoordinator) -> dict | None:
+    """How the sidebar panel draws the appliance; None if that can't be worked out."""
+    try:
+        return await async_appliance_panel(hass, coordinator)
+    except Exception:
+        # The panel's details must never keep diagnostics from downloading.
+        _LOGGER.exception("Could not add the sidebar panel's details to diagnostics")
+        return None
 
 
 def appliance_diagnostics(
-    coordinator: SubZeroCoordinator, faults: SubZeroFaultsCoordinator
+    coordinator: SubZeroCoordinator,
+    faults: SubZeroFaultsCoordinator,
+    panel: dict | None = None,
 ) -> dict:
     records = []
     for fault in faults.data or []:
@@ -43,6 +62,7 @@ def appliance_diagnostics(
         "unrecognized_state_keys": sorted(coordinator.unrecognized_keys),
         "state": async_redact_data(coordinator.data, PRIVATE_KEYS),
         "faults": records,
+        "panel": panel,
     }
 
 
@@ -51,6 +71,7 @@ async def async_get_config_entry_diagnostics(
 ) -> dict:
     account = entry.runtime_data
     alerts = getattr(account, "alerts", None)
+    module_url = panel_module_url(hass)
     return {
         "connection": "cloud_push",
         "push_connected": account.client.push_connected,
@@ -70,8 +91,17 @@ async def async_get_config_entry_diagnostics(
             "last_received": alerts.last_received if alerts else None,
             "last_error": alerts.last_error if alerts else None,
         },
+        "panel": {
+            "enabled": sidebar_panel_enabled(entry),
+            "registered": module_url is not None,
+            "module_url": module_url,
+        },
         "appliances": [
-            appliance_diagnostics(coordinator, account.fault_coordinators[coordinator.device_id])
+            appliance_diagnostics(
+                coordinator,
+                account.fault_coordinators[coordinator.device_id],
+                await appliance_panel(hass, coordinator),
+            )
             for coordinator in account.coordinators.values()
         ],
     }
@@ -81,11 +111,11 @@ async def async_get_device_diagnostics(
     hass: HomeAssistant, entry: SubZeroConfigEntry, device: DeviceEntry
 ) -> dict:
     account = entry.runtime_data
-    return next(
-        (
-            appliance_diagnostics(coordinator, account.fault_coordinators[device_id])
-            for device_id, coordinator in account.coordinators.items()
-            if (DOMAIN, device_id) in device.identifiers
-        ),
-        {},
-    )
+    for device_id, coordinator in account.coordinators.items():
+        if (DOMAIN, device_id) in device.identifiers:
+            return appliance_diagnostics(
+                coordinator,
+                account.fault_coordinators[device_id],
+                await appliance_panel(hass, coordinator),
+            )
+    return {}

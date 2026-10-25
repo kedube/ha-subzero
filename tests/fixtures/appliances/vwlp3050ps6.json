@@ -1,0 +1,28 @@
+{
+  "model": "VWLP3050PS6",
+  "appliance_type": "33.23.255.255",
+  "name": "30\" Wall Hood",
+  "state": {
+    "ap_rssi": -55,
+    "appliance_model": "VWLP3050PS6",
+    "appliance_type": "33.23.255.255",
+    "auto_sensivity": 1,
+    "color_level": 50,
+    "delay_enabled": false,
+    "delay_off_duration": 300000,
+    "fan_on": false,
+    "fan_speed": 0,
+    "filter_count": 151200,
+    "filter_max_count": 360000,
+    "halo_max_percent": 0,
+    "key_tone_on": true,
+    "light_on": false,
+    "light_percent": 80,
+    "time": "2026-10-24T09:41:07-07:00",
+    "uptime": "44:06:27",
+    "user_lock_on": false,
+    "version": {
+      "fw": "2.2.0"
+    }
+  }
+}

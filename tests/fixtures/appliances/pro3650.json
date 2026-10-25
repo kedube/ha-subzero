@@ -1,0 +1,38 @@
+{
+  "model": "PRO3650",
+  "appliance_type": "17.7.1.0",
+  "name": "36\" Refrigerator/Freezer",
+  "state": {
+    "air_filter_on": true,
+    "air_filter_pct_remaining": 68,
+    "ap_rssi": -62,
+    "appliance_model": "PRO3650",
+    "appliance_type": "17.7.1.0",
+    "door_ajar_timeout": 5,
+    "frz_door_ajar": false,
+    "frz_set_temp": 0,
+    "high_use_end_time": "2026-10-21T19:00:00-07:00",
+    "high_use_on": false,
+    "high_use_start_time": "2026-10-21T07:00:00-07:00",
+    "ice_maker_on": true,
+    "long_vacation_on": false,
+    "max_ice_end_time": "2026-10-21T19:00:00-07:00",
+    "max_ice_on": false,
+    "max_ice_start_time": "2026-10-21T07:00:00-07:00",
+    "night_ice_on": false,
+    "ref2_set_temp": 34,
+    "ref_door_ajar": false,
+    "ref_set_temp": 37,
+    "sabbath_on": false,
+    "service_required": false,
+    "short_vacation_on": false,
+    "time": "2026-10-24T09:41:07-07:00",
+    "unit_on": true,
+    "uptime": "12:58:50",
+    "version": {
+      "fw": "1.96"
+    },
+    "water_filter_gal_remaining": 180,
+    "water_filter_pct_remaining": 54
+  }
+}
