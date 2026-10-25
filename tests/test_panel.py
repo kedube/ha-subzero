@@ -94,7 +94,7 @@ async def test_the_panel_is_in_the_sidebar_by_default(hass):
     assert list(sidebar) == [PANEL_URL_PATH] == ["sub-zero"]
     panel = sidebar[PANEL_URL_PATH]
     assert panel.sidebar_title == PANEL_TITLE == "Sub-Zero"
-    assert panel.sidebar_icon == PANEL_ICON == "mdi:fridge-outline"
+    assert panel.sidebar_icon == PANEL_ICON == "mdi:snowflake"
     assert panel.component_name == "custom"
     # Every user sees it; only Appearance changes need an admin.
     assert panel.require_admin is False

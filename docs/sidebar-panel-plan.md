@@ -7,7 +7,7 @@ Final, 2026-10-24. Not committed.
 From the 2026-10-24 questions:
 
 - **Panel only.** It's a sidebar panel. No Lovelace cards and no dashboard resource.
-- **Sidebar entry:** "Sub-Zero", `mdi:fridge-outline`, visible to every user. The name is a brand, so it isn't translated.
+- **Sidebar entry:** "Sub-Zero", `mdi:snowflake`, visible to every user. The name is a brand, so it isn't translated.
 - **On by default.** A Configure option turns it off.
 - **Layout:** an overview with one card per appliance in the GE appliance card's style, grouped by area. Tapping a card opens a full view with every control.
 - **Coverage:** every appliance the integration supports gets a detailed drawing, including forms and older generations outside the original list. Anything the panel can't recognize gets a generic drawing for its type.

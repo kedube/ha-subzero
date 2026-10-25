@@ -38,7 +38,7 @@ PANEL_URL_PATH = "sub-zero"
 PANEL_ELEMENT = "subzero-panel"
 # A brand name, so it isn't translated.
 PANEL_TITLE = "Sub-Zero"
-PANEL_ICON = "mdi:fridge-outline"
+PANEL_ICON = "mdi:snowflake"
 # Sent when an entry the panel shows changes state, so open panels follow it too.
 SIGNAL_ENTRY_STATE = f"{DOMAIN}_panel_entry_state"
 
