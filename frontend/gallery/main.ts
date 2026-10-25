@@ -1,5 +1,6 @@
 import { html, render } from "lit";
 import { renderDrawing } from "../src/drawings/index";
+import { makeTranslate } from "../src/i18n";
 import type { GalleryVariant } from "./types";
 import { variants as dishwasher } from "./variants/dishwasher";
 import { variants as generic } from "./variants/generic";
@@ -9,8 +10,9 @@ import { variants as refrigeration } from "./variants/refrigeration";
 import { variants as wallOven } from "./variants/wall-oven";
 
 // Query: module (a variants file name, or "all"), filter (substring of ids, comma-separated
-// for several), theme (light or dark), width (default stage width), height (a fixed stage
-// height the drawing fits into, as on an overview card), refs (folder URL of reference photos).
+// for several), theme (light or dark), lang (the panel language the drawings speak, default
+// English), width (default stage width), height (a fixed stage height the drawing fits into, as
+// on an overview card), refs (folder URL of reference photos).
 const MODULES: Record<string, GalleryVariant[]> = {
   refrigeration,
   range,
@@ -24,6 +26,7 @@ const params = new URLSearchParams(location.search);
 const moduleName = params.get("module") ?? "all";
 const filters = (params.get("filter") ?? "").split(",").filter(Boolean);
 const theme = params.get("theme") === "dark" ? "dark" : "light";
+const t = makeTranslate(params.get("lang") ?? "en");
 const width = Number(params.get("width") ?? 480);
 const height = Number(params.get("height") ?? 0);
 const refs = params.get("refs");
@@ -51,6 +54,7 @@ function draw(shown: ReadonlyArray<number | undefined> = []): void {
                 ...variant.input,
                 uid: `g${index}`,
                 theme,
+                t,
                 reducedMotion,
                 pixelHeight: variant.input.pixelHeight ?? shown[index],
               })}

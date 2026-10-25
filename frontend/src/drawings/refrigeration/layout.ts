@@ -37,6 +37,15 @@ export type Line = "classic" | "designer" | "pro";
 /** What a front holds, which sets the interior drawn behind glass or when it's open. */
 export type Contents = "fridge" | "freezer" | "wine" | "beverage" | "food" | "ice";
 
+export type FrontName =
+  | "door"
+  | "refrigerator_door"
+  | "freezer_door"
+  | "wine_door"
+  | "ice_maker_door"
+  | "refrigerator_drawer"
+  | "freezer_drawer";
+
 /**
  * A zone readout over a front. Doors place it at a fraction of their height (`at`); a zone
  * whose area starts partway down (a wine zone under the divider) gives that area's top, and
@@ -74,8 +83,8 @@ export interface Front {
   ice: boolean;
   /** Wine racks, and the rack where the second zone starts. */
   racks: { count: number; split: number | null } | null;
-  /** Spoken name for the aria-label, e.g. "freezer door". */
-  name: string;
+  /** What it's called when it's open, a key under drawing.open in the drawings tables. */
+  name: FrontName;
 }
 
 export interface Layout {
@@ -96,7 +105,8 @@ export interface Layout {
   /** Interior depth behind a front. */
   depth: number;
   internalDispenser: boolean;
-  name: string;
+  /** The drawing's name, a key under drawing.refrigeration in the drawings tables. */
+  name: RefrigerationForm | "freezer_drawers" | "combination_drawers";
 }
 
 const UNDERCOUNTER = new Set<RefrigerationForm>([
@@ -123,24 +133,6 @@ const DEFAULT_WIDTH: Record<RefrigerationForm, number> = {
   undercounter_wine: 24,
   undercounter_drawers: 30,
   ice_maker: 15,
-};
-
-const NAMES: Record<RefrigerationForm, string> = {
-  side_by_side: "Side-by-side refrigerator",
-  french_door: "French door refrigerator",
-  over_under: "Over-and-under refrigerator",
-  column_refrigerator: "Column refrigerator",
-  column_freezer: "Column freezer",
-  column_wine: "Wine column",
-  tall_refrigerator: "Refrigerator",
-  tall_freezer: "Freezer",
-  tall_over_under: "Over-and-under refrigerator",
-  wine_over_drawers: "Wine storage with drawers",
-  undercounter_refrigerator: "Undercounter refrigerator",
-  undercounter_beverage: "Beverage center",
-  undercounter_wine: "Wine storage",
-  undercounter_drawers: "Refrigerator drawers",
-  ice_maker: "Ice maker",
 };
 
 /** Gap between neighboring fronts, and the wider split between side-by-side doors. */
@@ -305,7 +297,7 @@ export function buildLayout(spec: RefrigerationSpec): Layout {
         keys,
         zones: zone ? [{ zone }] : [],
         ice: spec.ice && contents === "freezer" && index === kinds.findIndex(([c]) => c === "freezer"),
-        name: contents === "freezer" ? "freezer drawer" : "refrigerator drawer",
+        name: contents === "freezer" ? "freezer_drawer" : "refrigerator_drawer",
       });
     });
   };
@@ -325,7 +317,7 @@ export function buildLayout(spec: RefrigerationSpec): Layout {
         zones: [{ zone: "frz", at: line === "pro" ? 0.2 : 0.15 }],
         dispenser: spec.dispenser === "external",
         ice: spec.ice,
-        name: "freezer door",
+        name: "freezer_door",
       });
       const fridgeRect = rect(split + SPLIT / 2, f.x1, f.y0, doorsBottom);
       const fridgeWindow = spec.glass ? windowIn(fridgeRect, glassKind) : null;
@@ -341,7 +333,7 @@ export function buildLayout(spec: RefrigerationSpec): Layout {
           { zone: "ref", at: line === "pro" ? 0.2 : 0.15, x: fridgeWindow ? fridgeWindow.x + fridgeWindow.w / 2 : undefined },
           ...(spec.glass ? [] : [{ zone: "crisp", openOnly: true }]),
         ],
-        name: "refrigerator door",
+        name: "refrigerator_door",
       });
       if (line === "pro") {
         const rows = stack(doorsBottom + GAP + 0.5, f.y1, [143]);
@@ -377,7 +369,7 @@ export function buildLayout(spec: RefrigerationSpec): Layout {
                 ]
               : [],
           dispenser: hinge === "left" && spec.dispenser === "external",
-          name: "refrigerator door",
+          name: "refrigerator_door",
         });
         front.cavityId = shared;
       }
@@ -391,7 +383,7 @@ export function buildLayout(spec: RefrigerationSpec): Layout {
         keys: ["frz_door_ajar"],
         zones: [{ zone: "frz" }],
         ice: spec.ice,
-        name: "freezer drawer",
+        name: "freezer_drawer",
       });
       break;
     }
@@ -408,7 +400,7 @@ export function buildLayout(spec: RefrigerationSpec): Layout {
           contents: spec.glass ? "food" : "fridge",
           keys: ["ref_door_ajar"],
           zones: [{ zone: "ref", at: 0.18 }],
-          name: "refrigerator door",
+          name: "refrigerator_door",
         });
         drawerPair(rows, f.x0, f.x1, [
           ["freezer", ["frz_door_ajar"], "frz"],
@@ -427,7 +419,7 @@ export function buildLayout(spec: RefrigerationSpec): Layout {
         contents: spec.glass ? "food" : "fridge",
         keys: ["ref_door_ajar"],
         zones: [{ zone: "ref", at: 0.16 }, ...(spec.glass ? [] : [{ zone: "crisp", openOnly: true }])],
-        name: "refrigerator door",
+        name: "refrigerator_door",
       });
       add({
         kind: "drawer",
@@ -438,7 +430,7 @@ export function buildLayout(spec: RefrigerationSpec): Layout {
         keys: ["frz_door_ajar"],
         zones: [{ zone: "frz" }],
         ice: spec.ice,
-        name: "freezer drawer",
+        name: "freezer_drawer",
       });
       break;
     }
@@ -466,7 +458,7 @@ export function buildLayout(spec: RefrigerationSpec): Layout {
         zones: [...zones, ...(!wine && !freezer && !glass ? [{ zone: "crisp", openOnly: true }] : [])],
         ice: freezer && spec.ice,
         racks: wine ? { count: racks, split } : null,
-        name: wine ? "wine door" : freezer ? "freezer door" : "refrigerator door",
+        name: wine ? "wine_door" : freezer ? "freezer_door" : "refrigerator_door",
       });
       break;
     }
@@ -493,7 +485,7 @@ export function buildLayout(spec: RefrigerationSpec): Layout {
         zones: wine ? wineZones(win!, { count: racks, split }) : [{ zone: doorZone, at: 0.2, x: win ? win.x + win.w / 2 : undefined }],
         ice: form === "tall_freezer" && spec.ice,
         racks: wine ? { count: racks, split } : null,
-        name: wine ? "wine door" : form === "tall_freezer" ? "freezer door" : "refrigerator door",
+        name: wine ? "wine_door" : form === "tall_freezer" ? "freezer_door" : "refrigerator_door",
       });
       const kinds: Array<[Contents, string[], string | null]> =
         form === "tall_refrigerator"
@@ -558,7 +550,7 @@ export function buildLayout(spec: RefrigerationSpec): Layout {
             ? []
             : [win ? { zone: "ref", top: win.y + 4, x: center } : { zone: "ref", at: 0.2 }],
         racks: wine ? { count: 6, split } : null,
-        name: form === "ice_maker" ? "ice maker door" : wine ? "wine door" : "door",
+        name: form === "ice_maker" ? "ice_maker_door" : wine ? "wine_door" : "door",
       });
       break;
     }
@@ -586,10 +578,10 @@ export function buildLayout(spec: RefrigerationSpec): Layout {
 
   const name =
     form === "undercounter_drawers" && spec.drawers === "freezer"
-      ? "Freezer drawers"
+      ? "freezer_drawers"
       : form === "undercounter_drawers" && spec.drawers === "combination"
-        ? "Refrigerator and freezer drawers"
-        : NAMES[form];
+        ? "combination_drawers"
+        : form;
   return {
     w,
     h,

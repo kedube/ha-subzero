@@ -2,6 +2,7 @@ import { nothing, type TemplateResult } from "lit";
 import { renderGeneric } from "../drawings/generic";
 import { renderDrawing } from "../drawings/index";
 import type { DrawingInput, DrawingState } from "../drawings/types";
+import { translatorFor } from "../data/locale";
 import { familyModel, makeContext, type ContextHelpers } from "../families/index";
 import type { DisplayText, InfoRow, StatusPill } from "../families/types";
 import type { HomeAssistant } from "../hass";
@@ -102,7 +103,7 @@ export function prefersReducedMotion(): boolean {
 export function drawingInput(
   appliance: PanelAppliance,
   state: DrawingState,
-  hass: Pick<HomeAssistant, "themes"> | undefined,
+  hass: Pick<HomeAssistant, "themes" | "language" | "locale"> | undefined,
   uid: string,
   look: { appearance?: Appearance; spec?: ApplianceSpec; pixelHeight?: number } = {},
 ): DrawingInput {
@@ -112,6 +113,7 @@ export function drawingInput(
     appearance: look.appearance ?? appliance.appearance,
     state: appliance.available ? state : { ...state, available: false },
     theme: hass?.themes?.darkMode ? "dark" : "light",
+    t: translatorFor(hass),
     reducedMotion: prefersReducedMotion(),
     ...(look.pixelHeight ? { pixelHeight: look.pixelHeight } : {}),
   };

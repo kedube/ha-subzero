@@ -7,7 +7,9 @@ import { rangeLayout, type RangeLayout } from "./range/layout";
 import { makeIds, rangeDefs, type Ids } from "./range/materials";
 import { closedDoor, openDoor, openingBox, windowBox } from "./range/oven";
 import { ovenReadout, readout, uiScale } from "./range/readouts";
+import type { Translate } from "../i18n";
 import type { DrawingRenderer, DrawingState } from "./types";
+import { ovenPhrases, spoken, withTemperature } from "./words";
 
 /**
  * Wolf dual fuel, gas and induction ranges, modeled on the DF48850/S/P and IR36550/S/T:
@@ -26,7 +28,7 @@ export const renderRange: DrawingRenderer = (input) => {
   return html`<svg
     viewBox="${box.x} ${box.y} ${box.w} ${box.h}"
     role="img"
-    aria-label=${ariaLabel(layout, input.state)}
+    aria-label=${ariaLabel(input.t, layout, input.state)}
   >
     ${rangeDefs(ids, layout.width, input.appearance.knobs)}
     <g filter=${input.state.available ? nothing : ids.url("offline")}>
@@ -40,7 +42,7 @@ export const renderRange: DrawingRenderer = (input) => {
           ? nothing
           : closedDoor(layout, ids, door, ovens[door.slot.prefix] ?? null, reducedMotion),
       )}
-      ${controlPanel(layout, ids, input.appearance.knobs, ovens, display, reducedMotion)}
+      ${controlPanel(layout, ids, input.appearance.knobs, ovens, display, reducedMotion, input.t)}
       ${layout.doors.map((door) =>
         ovens[door.slot.prefix]?.door_open
           ? openDoor(layout, ids, door, ovens[door.slot.prefix] ?? null, reducedMotion)
@@ -69,23 +71,24 @@ function readouts(layout: RangeLayout, ids: Ids, ovens: Ovens, scale: number, re
   });
 }
 
-/** An English description, e.g. "Range, right oven heating, left oven off". */
-function ariaLabel(layout: RangeLayout, state: DrawingState): string {
-  const parts = [layout.induction ? "Induction range" : "Range"];
-  if (!state.available) parts.push("offline");
+/** What the drawing shows, for screen readers, e.g. "Range, right oven: heating 350°, left oven: off". */
+function ariaLabel(t: Translate, layout: RangeLayout, state: DrawingState): string {
+  const phrases = [t(layout.induction ? "drawing.range_induction" : "drawing.range")];
+  if (!state.available) phrases.push(t("drawing.offline"));
   for (const door of layout.doors) {
     const oven = state.ovens?.[door.slot.prefix];
-    const name =
-      door.slot.position === "left" ? "left oven" : door.slot.position === "right" ? "right oven" : "oven";
     if (!oven) continue;
-    if (oven.door_open) parts.push(`${name} door open`);
-    if (oven.self_clean) parts.push(`${name} self-cleaning`);
-    else if (oven.on) parts.push(`${name} ${oven.preheated ? "preheated" : "heating"}${oven.temp ? ` ${oven.temp}` : ""}`);
-    else if (!oven.door_open) parts.push(`${name} off`);
-    if (oven.light && !oven.door_open && !oven.self_clean) parts.push(`${name} light on`);
-    if (oven.probe) parts.push(`${name} probe in`);
-    if (oven.remote_ready) parts.push(`${name} Remote Ready`);
+    const states: string[] = [];
+    if (oven.door_open) states.push(t("drawing.state.door_open"));
+    if (oven.self_clean) states.push(t("drawing.state.self_cleaning"));
+    else if (oven.on) {
+      states.push(withTemperature(t(oven.preheated ? "drawing.state.preheated" : "drawing.state.heating"), oven.temp));
+    } else if (!oven.door_open) states.push(t("drawing.state.off"));
+    if (oven.light && !oven.door_open && !oven.self_clean) states.push(t("drawing.state.light_on"));
+    if (oven.probe) states.push(t("drawing.state.probe_in"));
+    if (oven.remote_ready) states.push(t("drawing.state.remote_ready"));
+    phrases.push(...ovenPhrases(t, door.slot.position, states));
   }
-  if (state.display) parts.push(`timer ${state.display}`);
-  return parts.join(", ");
+  if (state.display) phrases.push(t("drawing.timer", { time: state.display }));
+  return spoken(t, phrases);
 }

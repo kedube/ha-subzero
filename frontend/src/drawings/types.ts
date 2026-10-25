@@ -1,4 +1,5 @@
 import type { TemplateResult } from "lit";
+import type { Translate } from "../i18n";
 import type { Appearance, ApplianceSpec } from "../types";
 
 /**
@@ -17,6 +18,11 @@ export interface DrawingInput {
   state: DrawingState;
   /** The page theme. The appliance looks the same in both; only the floor shadow adapts. */
   theme: "light" | "dark";
+  /**
+   * The panel's translator, for everything a drawing says: its screen-reader description and
+   * the words on a range's touchscreen. Legends printed on the appliance stay as Wolf prints them.
+   */
+  t: Translate;
   /** Skip transitions and animations. */
   reducedMotion?: boolean;
   /**

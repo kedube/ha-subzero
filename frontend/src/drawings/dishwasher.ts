@@ -6,6 +6,7 @@ import { dishwasherOverlay, dishwasherWords, doorOpen, FLOOR_LIGHT } from "./dis
 import { Defs, floorShadow, materialDefs, paintDefs, parseColor } from "./generic/materials";
 import { LABEL_H, labelScale, statusRow } from "./generic/overlay";
 import type { DrawingInput, DrawingRenderer } from "./types";
+import { spoken } from "./words";
 
 /**
  * The Cove dishwasher (DW2450, DW2450WS): a 24″ door taking Cove's stainless panel kit or a
@@ -105,11 +106,13 @@ export const renderDishwasher: DrawingRenderer = (input: DrawingInput) => {
   const scale = labelScale(DW_VIEW_HEIGHT, input.pixelHeight);
   const { body, statusY } = dishwasherBody(d, width, front, open, true, LABEL_H * scale);
   const { label, chips } = dishwasherOverlay(state);
+  const { t } = input;
+  const description = spoken(t, [t("drawing.dishwasher"), ...dishwasherWords(t, state), state.available ? null : t("drawing.offline")]);
   const margin = 14;
   return html`<svg
     viewBox=${`${-margin} -4 ${width + 2 * margin} ${DW_VIEW_HEIGHT}`}
     role="img"
-    aria-label=${["Dishwasher", ...dishwasherWords(state)].join(", ")}
+    aria-label=${description}
   >
     <defs>
       ${materialDefs(d)}

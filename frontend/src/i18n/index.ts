@@ -1,10 +1,20 @@
 /**
- * Panel text in the integration's nine languages. Each language has two flat tables of
- * dotted keys: shell/<lang>.json (panel, overview, card, appearance editor) and
- * families/<lang>.json (family models, controls, full view). Placeholders look like {name}.
- * English fills any key a language lacks; test/i18n.test.ts checks every language has
- * exactly the English keys.
+ * Panel text in the integration's nine languages. Each language has three flat tables of
+ * dotted keys: shell/<lang>.json (panel, overview, card, appearance editor),
+ * families/<lang>.json (family models, controls, full view) and drawings/<lang>.json (what the
+ * drawings say: their screen-reader descriptions and a range's touchscreen). Placeholders look
+ * like {name}. English fills any key a language lacks; test/i18n.test.ts checks every language
+ * has exactly the English keys.
  */
+import drawingsDe from "./drawings/de.json";
+import drawingsEn from "./drawings/en.json";
+import drawingsEs from "./drawings/es.json";
+import drawingsFr from "./drawings/fr.json";
+import drawingsIt from "./drawings/it.json";
+import drawingsNl from "./drawings/nl.json";
+import drawingsPl from "./drawings/pl.json";
+import drawingsSv from "./drawings/sv.json";
+import drawingsZhHans from "./drawings/zh-Hans.json";
 import familiesDe from "./families/de.json";
 import familiesEn from "./families/en.json";
 import familiesEs from "./families/es.json";
@@ -29,16 +39,16 @@ export type Language = (typeof LANGUAGES)[number];
 
 type Table = Record<string, string>;
 
-export const TABLES: Record<Language, { shell: Table; families: Table }> = {
-  en: { shell: shellEn, families: familiesEn },
-  de: { shell: shellDe, families: familiesDe },
-  es: { shell: shellEs, families: familiesEs },
-  fr: { shell: shellFr, families: familiesFr },
-  it: { shell: shellIt, families: familiesIt },
-  nl: { shell: shellNl, families: familiesNl },
-  pl: { shell: shellPl, families: familiesPl },
-  sv: { shell: shellSv, families: familiesSv },
-  "zh-Hans": { shell: shellZhHans, families: familiesZhHans },
+export const TABLES: Record<Language, { shell: Table; families: Table; drawings: Table }> = {
+  en: { shell: shellEn, families: familiesEn, drawings: drawingsEn },
+  de: { shell: shellDe, families: familiesDe, drawings: drawingsDe },
+  es: { shell: shellEs, families: familiesEs, drawings: drawingsEs },
+  fr: { shell: shellFr, families: familiesFr, drawings: drawingsFr },
+  it: { shell: shellIt, families: familiesIt, drawings: drawingsIt },
+  nl: { shell: shellNl, families: familiesNl, drawings: drawingsNl },
+  pl: { shell: shellPl, families: familiesPl, drawings: drawingsPl },
+  sv: { shell: shellSv, families: familiesSv, drawings: drawingsSv },
+  "zh-Hans": { shell: shellZhHans, families: familiesZhHans, drawings: drawingsZhHans },
 };
 
 export type Translate = (key: string, vars?: Record<string, string | number>) => string;
@@ -61,8 +71,10 @@ export function makeTranslate(language: string | undefined): Translate {
   const table: Table = {
     ...TABLES.en.shell,
     ...TABLES.en.families,
+    ...TABLES.en.drawings,
     ...TABLES[lang].shell,
     ...TABLES[lang].families,
+    ...TABLES[lang].drawings,
   };
   return (key, vars) => {
     const text = table[key] ?? key;

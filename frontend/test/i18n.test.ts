@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { LANGUAGES, TABLES, makeTranslate, resolveLanguage } from "../src/i18n";
 
-// Every language must say everything English says, with the same {placeholders}, in both
-// tables: the shell's and the family models'. A missing key would quietly show English.
-const KINDS = ["shell", "families"] as const;
+// Every language must say everything English says, with the same {placeholders}, in all three
+// tables: the shell's, the family models' and the drawings'. A missing key would quietly show
+// English.
+const KINDS = ["shell", "families", "drawings"] as const;
 const OTHERS = LANGUAGES.filter((language) => language !== "en");
 
 function placeholders(text: string): string[] {
@@ -39,12 +40,41 @@ describe.each(KINDS)("the %s tables", (kind) => {
   });
 });
 
-describe("the two tables", () => {
+describe("the three tables", () => {
   it.each(LANGUAGES)("in %s don't define the same key twice", (language) => {
-    const shell = TABLES[language].shell;
-    const shared = Object.keys(TABLES[language].families).filter((key) => key in shell);
-    // The families table would silently win (makeTranslate merges it last).
-    expect(shared).toEqual([]);
+    const tables = TABLES[language];
+    const keys = KINDS.flatMap((kind) => Object.keys(tables[kind]));
+    // The table makeTranslate merges last would silently win.
+    expect(keys.filter((key, index) => keys.indexOf(key) !== index)).toEqual([]);
+  });
+});
+
+describe("the drawings table", () => {
+  const english = TABLES.en.drawings;
+
+  it("names every form, front, oven and wash status the drawings say", () => {
+    const wanted = [
+      ...[
+        ...["side_by_side", "french_door", "over_under", "column_refrigerator", "column_freezer", "column_wine"],
+        ...["tall_refrigerator", "tall_freezer", "tall_over_under", "wine_over_drawers", "undercounter_refrigerator"],
+        ...["undercounter_beverage", "undercounter_wine", "undercounter_drawers", "ice_maker"],
+        ...["freezer_drawers", "combination_drawers"],
+      ].map((name) => `drawing.refrigeration.${name}`),
+      ...["door", "refrigerator_door", "freezer_door", "wine_door", "ice_maker_door", "refrigerator_drawer", "freezer_drawer"].map(
+        (front) => `drawing.open.${front}`,
+      ),
+      ...["left", "right", "upper", "lower"].map((position) => `drawing.oven.${position}`),
+      ...["wall", "island", "insert", "hood"].map((form) => `drawing.hood.${form}`),
+      ...["running", "paused", "canceling", "drying", "done", "delayed", "error"].map((status) => `drawing.wash.${status}`),
+    ];
+    expect(wanted.filter((key) => !(key in english))).toEqual([]);
+  });
+
+  it.each(OTHERS)("in %s is translated", (language) => {
+    const table = TABLES[language].drawings;
+    // A few read the same: the list punctuation, Wolf's "Remote Ready", and words like "Timer".
+    const same = Object.keys(table).filter((key) => table[key] === english[key]);
+    expect(same.length, same.join(", ")).toBeLessThan(Object.keys(table).length / 10);
   });
 });
 

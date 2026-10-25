@@ -252,6 +252,8 @@ describe("sz-appliance-card", () => {
     expect(card.hasAttribute("dark")).toBe(true);
     expect(last(fake.inputs)!.theme).toBe("dark");
     expect(text(shadow(card).querySelector(".pill"))).toBe("Hors ligne");
+    // The drawing speaks French too.
+    expect(last(fake.inputs)!.t("drawing.offline")).toBe("hors ligne");
   });
 
   it("still shows a card when the family model fails", async () => {

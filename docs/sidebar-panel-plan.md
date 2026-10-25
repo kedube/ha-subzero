@@ -210,6 +210,9 @@ frontend/test/            unit tests
 - **Empty state:** with no appliances, the panel links to Configure.
 - **Theme:** Home Assistant's CSS variables, so light and dark both work. The drawings keep their own material palettes.
 - **Languages:** panel text is bundled for the integration's 9 languages and picked from `hass.language`, with regional fallback as in ha-norman's `panel_title`. Entity states use `hass.formatEntityState`, and numbers and times use `hass.locale`. A test checks every language has the same keys.
+  - The drawings speak the panel's language too: each drawing's screen-reader description, and the words on a dual fuel range's touchscreen.
+  - Legends printed on the appliance itself, such as a wall oven's knob legends and touch-key labels, stay in English as Wolf prints them.
+  - Fault titles and resolution steps come from Sub-Zero's cloud, which serves them only in English.
 
 ### 4.3 Overview card (GE style)
 
@@ -281,6 +284,7 @@ frontend/test/            unit tests
 
 - Per-family view models against the fixtures (§7): status pill, info rows, display, preheat and probe progress, countdowns, lock text.
 - Languages have the same keys.
+- Every word a drawing draws or says comes from the translator, apart from the printed legends.
 - Route parsing.
 
 ## 5. Drawing catalog

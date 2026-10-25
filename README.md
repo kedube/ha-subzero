@@ -15,8 +15,8 @@ The integration signs in with your Sub-Zero Group Owner's App account and talks 
 This is an unofficial integration. It is not affiliated with or endorsed by Sub-Zero Group.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-dark.png">
-  <img src="docs/images/dashboard-light.png" alt="A Home Assistant dashboard with a Wolf range, a Sub-Zero refrigerator, wine storage, and beverage center, a Cove dishwasher, and their recent appliance alerts">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/panel-hero-dark.png">
+  <img src="docs/images/panel-hero-light.png" alt="The Sub-Zero panel opened from Home Assistant's sidebar, with Kitchen cards for a Sub-Zero refrigerator with its door open, a Wolf range with its right oven preheated to 375 degrees, and a Cove dishwasher running with 46 minutes left">
 </picture>
 
 **Contents:** [Requirements](#requirements) · [Installation](#installation) · [Setup](#setup) · [Options](#options) · [Sidebar panel](#sidebar-panel) · [Appliances](#appliances) · [Events and automations](#events-and-automations) · [Actions](#actions) · [How live updates work](#how-live-updates-work) · [Diagnostics](#diagnostics) · [Compatibility](#compatibility) · [Privacy and security](#privacy-and-security) · [Getting help](#getting-help) · [Development](#development)
@@ -97,6 +97,13 @@ The drawings are original illustrations without Sub-Zero, Wolf, or Cove logos. T
 ## Appliances
 
 The integration creates entities only for the properties an appliance reports, so the entities you get depend on the model. There is no list of supported models. When the Sub-Zero app ignores a property for an appliance type, such as the accent light on some refrigerators, the integration ignores it too and leaves out the entities that depend on it.
+
+The entities work like any others in Home Assistant, for example on a dashboard:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-dark.png">
+  <img src="docs/images/dashboard-light.png" alt="A Home Assistant dashboard with a Wolf range, a Sub-Zero refrigerator, wine storage, and beverage center, a Cove dishwasher, and their recent appliance alerts">
+</picture>
 
 Things that apply to every appliance:
 

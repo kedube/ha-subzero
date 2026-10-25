@@ -3,6 +3,7 @@ import type { ApplianceSpec, GenericSpec, RefrigerationSpec } from "../types";
 import * as forms from "./generic/forms";
 import { Defs, floorShadow, materialDefs } from "./generic/materials";
 import type { DrawingInput } from "./types";
+import { spoken } from "./words";
 
 /**
  * The drawing for an appliance no detailed module can draw: a plain but realistic drawing of
@@ -89,12 +90,13 @@ export function renderGeneric(input: DrawingInput): TemplateResult {
   const drawn = draw(input.spec, {
     d,
     state,
+    t: input.t,
     knobs: input.appearance?.knobs ?? "red",
     reducedMotion: !!input.reducedMotion,
     pixelHeight: input.pixelHeight,
   });
   const margin = 14;
-  const label = state.available ? drawn.label.join(", ") : `${drawn.label[0]}, offline`;
+  const label = spoken(input.t, state.available ? drawn.label : [drawn.label[0], input.t("drawing.offline")]);
   return html`<svg
     viewBox=${`${-margin} ${-forms.HEADROOM} ${drawn.width + 2 * margin} ${forms.viewHeight(drawn)}`}
     role="img"

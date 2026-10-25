@@ -8,7 +8,7 @@ export function languageOf(hass: LocaleSource): string {
   return hass?.locale?.language || hass?.language || "en";
 }
 
-// makeTranslate merges four tables, and every card asks for a translator on every render.
+// makeTranslate merges six tables, and every card asks for a translator on every render.
 const translators = new Map<string, Translate>();
 
 export function translatorFor(hass: LocaleSource): Translate {

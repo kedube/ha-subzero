@@ -2,6 +2,12 @@
 
 Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then 2.00.
 
+## 1.04 (unreleased)
+
+### Fixed
+
+- The sidebar panel's drawings are now in your language too. Each drawing's description for screen readers, and the words on a dual fuel range's touchscreen, such as Preheated, Timer and Lock, were always in English. Legends printed on the appliance itself, such as a wall oven's knob legends, stay in English, as Wolf prints them.
+
 ## 1.02 (unreleased)
 
 ### Added

@@ -1,4 +1,5 @@
 import { nothing, svg, type SVGTemplateResult } from "lit";
+import type { Translate } from "../../i18n";
 import type { KnobColor } from "../../types";
 import type { OvenState } from "../types";
 import { KNOB_ROW, type DoorSlot, type RangeLayout } from "./layout";
@@ -100,30 +101,58 @@ const UPPER = (text: string, max: number) => {
   return value.length > max ? `${value.slice(0, max - 1)}…` : value;
 };
 
+/**
+ * A word on the touchscreen, in capitals as the screen sets them, in the panel's language. A
+ * translation too long for `max` is set smaller (a rough measure of Helvetica's capitals; Chinese
+ * characters are square).
+ */
+function screenWord(
+  x: number,
+  y: number,
+  word: string,
+  o: { size: number; spacing: number; max: number; fill: string; anchor?: "start" | "middle" | "end"; weight?: number },
+): SVGTemplateResult {
+  const text = word.toUpperCase();
+  const width = [...text].reduce(
+    (sum, char) => sum + o.size * ((char.codePointAt(0) ?? 0) >= 0x2e80 ? 1 : 0.68) + o.spacing,
+    0,
+  );
+  const scale = width > o.max ? o.max / width : 1;
+  return svg`<text x=${x} y=${y} text-anchor=${o.anchor ?? "middle"} font-family=${FONT} font-size=${round(o.size * scale)}
+    font-weight=${o.weight ?? nothing} letter-spacing=${round(o.spacing * scale)} fill=${o.fill}>${text}</text>`;
+}
+
 interface Block {
   slot: DoorSlot;
   state: OvenState | null;
 }
 
 /** One cavity's status on the touchscreen: mode, temperature, preheat, probe, Remote Ready. */
-function statusBlock(ids: Ids, block: Block, bx: number, bw: number, y0: number, h: number): SVGTemplateResult {
+function statusBlock(
+  ids: Ids,
+  block: Block,
+  bx: number,
+  bw: number,
+  y0: number,
+  h: number,
+  t: Translate,
+): SVGTemplateResult {
   const state = block.state;
   const active = !!state && (state.on || state.self_clean);
   if (!active) {
     return svg`
-      <text x=${bx} y=${y0 + h * 0.56} text-anchor="middle" font-family=${FONT} font-size="3" fill="#6f777f"
-        letter-spacing="0.3">OFF</text>
+      ${screenWord(bx, y0 + h * 0.56, t("drawing.screen.off"), { size: 3, spacing: 0.3, max: bw * 0.9, fill: "#6f777f" })}
       ${state?.remote_ready ? remoteIcon(bx, y0 + h * 0.3, "#9fb3c8") : nothing}
     `;
   }
   const preheating = !state.self_clean && !state.preheated && state.progress !== null;
   const status = state.self_clean
-    ? "SELF CLEAN"
+    ? t("drawing.screen.self_clean")
     : state.preheated
-      ? "PREHEATED"
+      ? t("drawing.screen.preheated")
       : preheating
-        ? `PREHEATING ${Math.round((state.progress ?? 0) * 100)}%`
-        : "HEATING";
+        ? t("drawing.screen.preheating", { percent: Math.round((state.progress ?? 0) * 100) })
+        : t("drawing.screen.heating");
   const icons: SVGTemplateResult[] = [];
   if (state.probe) icons.push(probeIcon(0, 0));
   if (state.remote_ready) icons.push(remoteIcon(0, 0, "#ffffff"));
@@ -137,11 +166,15 @@ function statusBlock(ids: Ids, block: Block, bx: number, bw: number, y0: number,
       (icon, index) => svg`<g transform=${`translate(${round(iconsX + index * spacing)} ${round(y0 + h * 0.24)})`}>${icon}</g>`,
     )}
     <text x=${bx} y=${y0 + h * 0.43} text-anchor="middle" font-family=${FONT} font-size="2.9" font-weight="600"
-      letter-spacing="0.25" fill="#ffffff">${UPPER(state.self_clean ? "Clean" : (state.mode ?? ""), 12)}</text>
+      letter-spacing="0.25" fill="#ffffff">${UPPER(state.self_clean ? t("drawing.screen.clean") : (state.mode ?? ""), 12)}</text>
     <text x=${bx} y=${y0 + h * 0.63} text-anchor="middle" font-family=${FONT} font-size="5.4" font-weight="300"
       fill="#ffffff">${state.temp ?? ""}</text>
-    <text x=${bx} y=${y0 + h * 0.75} text-anchor="middle" font-family=${FONT} font-size="1.85" letter-spacing="0.2"
-      fill=${state.preheated ? "#ff6b6b" : "#c9ced3"}>${status}</text>
+    ${screenWord(bx, y0 + h * 0.75, status, {
+      size: 1.85,
+      spacing: 0.2,
+      max: bw * 0.9,
+      fill: state.preheated ? "#ff6b6b" : "#c9ced3",
+    })}
     ${
       preheating
         ? svg`<rect x=${bx - track / 2} y=${y0 + h * 0.79} width=${track} height="0.7" rx="0.35" fill="#30353b" />
@@ -184,18 +217,23 @@ function screenUi(
   y0: number,
   w: number,
   h: number,
+  t: Translate,
 ): SVGTemplateResult {
   const blocks: Block[] = doors.map((slot) => ({ slot, state: ovens[slot.slot.prefix] ?? null }));
   const bw = w / blocks.length;
-  const keys = blocks.length > 1 ? ["TIMER 1", "LIGHT", "LIGHT", "TIMER 2"] : ["TIMER 1", "LIGHT", "TIMER 2"];
+  const keys: Array<"timer1" | "light" | "timer2"> =
+    blocks.length > 1 ? ["timer1", "light", "light", "timer2"] : ["timer1", "light", "timer2"];
+  const keyWord = (key: (typeof keys)[number]) =>
+    key === "light" ? t("drawing.screen.light") : t("drawing.screen.timer", { n: key === "timer1" ? 1 : 2 });
   const lightOn = (index: number) => {
     const block = blocks.length > 1 ? blocks[index - 1] : blocks[0];
     return !!block?.state?.light;
   };
+  // Lock and Settings share the top row with the timer in its middle.
+  const corner = { size: 1.9, spacing: 0.2, max: w * 0.3, fill: "#8c949c" };
   return svg`
-    <text x=${x0 + w * 0.07} y=${y0 + h * 0.15} font-family=${FONT} font-size="1.9" letter-spacing="0.2" fill="#8c949c">LOCK</text>
-    <text x=${x0 + w * 0.93} y=${y0 + h * 0.15} text-anchor="end" font-family=${FONT} font-size="1.9" letter-spacing="0.2"
-      fill="#8c949c">SETTINGS</text>
+    ${screenWord(x0 + w * 0.07, y0 + h * 0.15, t("drawing.screen.lock"), { ...corner, anchor: "start" })}
+    ${screenWord(x0 + w * 0.93, y0 + h * 0.15, t("drawing.screen.settings"), { ...corner, anchor: "end" })}
     ${
       display
         ? svg`<circle cx=${x0 + w / 2 - 5.2} cy=${y0 + h * 0.13 - 0.55} r="1.05" fill="none" stroke="#ffffff" stroke-width="0.32" />
@@ -205,14 +243,18 @@ function screenUi(
               font-weight="600" fill="#ffffff">${display}</text>`
         : nothing
     }
-    ${blocks.map((block, index) => statusBlock(ids, block, x0 + bw * (index + 0.5), bw * 0.92, y0, h))}
+    ${blocks.map((block, index) => statusBlock(ids, block, x0 + bw * (index + 0.5), bw * 0.92, y0, h, t))}
     ${keys.map((key, index) => {
       const kx = x0 + (w * (index + 0.5)) / keys.length;
       const timer = index === 0 && !!display;
-      const bright = timer || (key === "LIGHT" && lightOn(index));
+      const bright = timer || (key === "light" && lightOn(index));
       return svg`
-        <text x=${kx} y=${y0 + h * 0.93} text-anchor="middle" font-family=${FONT} font-size="1.8" letter-spacing="0.15"
-          fill=${bright ? "#ffffff" : "#8c949c"}>${timer ? display : key}</text>
+        ${screenWord(kx, y0 + h * 0.93, timer ? (display ?? "") : keyWord(key), {
+          size: 1.8,
+          spacing: 0.15,
+          max: (w / keys.length) * 0.9,
+          fill: bright ? "#ffffff" : "#8c949c",
+        })}
         ${timer ? svg`<rect x=${kx - 3.2} y=${y0 + h * 0.95} width="6.4" height="0.45" fill="#e3343d" />` : nothing}
       `;
     })}
@@ -235,6 +277,7 @@ function touchscreen(
   open: boolean,
   ovens: Ovens,
   display: string | null,
+  t: Translate,
 ): SVGTemplateResult {
   const ow = 59;
   const oh = 38.5;
@@ -283,7 +326,7 @@ function touchscreen(
     <clipPath id=${clip}><path d=${screen} /></clipPath>
     <path d=${screen} fill=${ids.url("screen")} />
     <g clip-path=${`url(#${clip})`}>
-      ${screenUi(ids, layout.doors, ovens, display, sx0, sy0, sx1 - sx0, sy1 - sy0)}
+      ${screenUi(ids, layout.doors, ovens, display, sx0, sy0, sx1 - sx0, sy1 - sy0, t)}
       <path d=${screen} fill=${ids.url("sheen")} />
     </g>
     <path d=${screen} fill="none" stroke="#3a3d41" stroke-width="0.35" />
@@ -298,13 +341,14 @@ export function controlPanel(
   ovens: Ovens,
   display: string | null,
   reducedMotion: boolean,
+  t: Translate,
 ): SVGTemplateResult {
   const y = layout.floorY - KNOB_ROW;
   return svg`
     ${
       layout.panelX === null
         ? nothing
-        : touchscreen(layout, ids, layout.panelX, y, screenActive(ovens, display), ovens, display)
+        : touchscreen(layout, ids, layout.panelX, y, screenActive(ovens, display), ovens, display, t)
     }
     ${layout.knobs.map((slot) =>
       knob(ids, slot.x, y, color, slot.kind, slot.oven ? (ovens[slot.oven] ?? null) : null, reducedMotion),

@@ -2,10 +2,12 @@
 // Shoots gallery drawings to PNGs with the installed Google Chrome, for reviewing them.
 //
 //   node scripts/render.mjs --out <dir> [--module refrigeration] [--filter id-part[,id-part]]
-//        [--theme light|dark|both] [--width 480] [--height px] [--scale 2] [--refs <dir>] [--motion]
+//        [--theme light|dark|both] [--lang en] [--width 480] [--height px] [--scale 2] [--refs <dir>]
+//        [--motion]
 //
 // --module   a gallery/variants/<name>.ts file, or "all" (default)
 // --filter   keep variants whose id contains any of the comma-separated parts
+// --lang     the panel language the drawings speak (their touchscreen words), e.g. de or zh-Hans
 // --height   fit each drawing into a stage this tall, as an overview card does (default: its
 //            natural height at --width)
 // --refs     a folder of reference photos: a variant naming `reference` is shot beside it, at the
@@ -23,7 +25,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const root = fileURLToPath(new URL("..", import.meta.url));
 
 function parseArgs(argv) {
-  const options = { module: "all", filter: "", theme: "both", width: 480, height: 0, scale: 2, motion: false };
+  const options = { module: "all", filter: "", theme: "both", lang: "en", width: 480, height: 0, scale: 2, motion: false };
   for (let index = 0; index < argv.length; index++) {
     const name = argv[index].replace(/^--/, "");
     if (name === "motion") options.motion = true;
@@ -67,6 +69,7 @@ try {
       module: options.module,
       filter: options.filter,
       theme,
+      lang: options.lang,
       width: String(options.width),
       height: String(options.height),
       motion: options.motion ? "on" : "off",

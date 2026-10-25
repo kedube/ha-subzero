@@ -20,8 +20,10 @@ import {
   whiteLight,
   type HoodLook,
 } from "./hood/parts";
+import type { Translate } from "../i18n";
 import type { DrawingRenderer } from "./types";
 import { HOOD_LIGHT, clamp, materialDefs, materialIds, round, url } from "./wall-oven/materials";
+import { spoken } from "./words";
 
 /** The island hood's chimney shows this much above the canopy, fading out over its upper part. */
 const CHIMNEY = 90;
@@ -69,7 +71,7 @@ export const renderHood: DrawingRenderer = (input) => {
   // A soft shadow on the wall below; the task light, when on, washes most of it out.
   const shadow = (input.theme === "dark" ? 0.5 : 0.18) * (1 - 0.8 * look.light);
 
-  const label = ariaLabel(form, look, input.state.available);
+  const label = ariaLabel(input.t, form, look, input.state.available);
   return html`<svg viewBox=${viewBox} role="img" aria-label=${label}>
     ${svg`
       <defs>
@@ -112,11 +114,12 @@ export const renderHood: DrawingRenderer = (input) => {
   </svg>`;
 };
 
-function ariaLabel(form: "wall" | "island" | "insert", look: HoodLook, available: boolean): string {
-  const parts = [form === "island" ? "Island hood" : form === "insert" ? "Hood liner" : "Wall hood"];
-  if (look.fan > 0) parts.push(`fan speed ${look.fan}`);
-  if (look.light > 0) parts.push(`light ${Math.round(look.light * 100)}%`);
-  if (look.halo) parts.push("halo on");
-  if (!available) parts.push("offline");
-  return parts.join(", ");
+/** What the drawing shows, for screen readers, e.g. "Wall hood, fan speed 2, light 80%". */
+function ariaLabel(t: Translate, form: "wall" | "island" | "insert", look: HoodLook, available: boolean): string {
+  const phrases = [t(`drawing.hood.${form}`)];
+  if (look.fan > 0) phrases.push(t("drawing.fan_speed", { speed: look.fan }));
+  if (look.light > 0) phrases.push(t("drawing.light_level", { percent: Math.round(look.light * 100) }));
+  if (look.halo) phrases.push(t("drawing.halo_on"));
+  if (!available) phrases.push(t("drawing.offline"));
+  return spoken(t, phrases);
 }

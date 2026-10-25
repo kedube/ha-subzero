@@ -18,7 +18,9 @@ import {
   top,
   type IceMark,
 } from "./refrigeration/parts";
+import type { Translate } from "../i18n";
 import type { DrawingInput, DrawingRenderer, DrawingState } from "./types";
+import { spoken } from "./words";
 
 /** Room above the cabinet and beside a closed one, and beyond the farthest point of an open door. */
 const HEADROOM = 10;
@@ -84,7 +86,7 @@ export const renderRefrigeration: DrawingRenderer = (input) => {
     );
 
   const offline = !state.available;
-  const label = ariaLabel(layout, open, state);
+  const label = ariaLabel(input.t, layout, open, state);
   return html`<svg
     viewBox=${[box.x, box.y, box.w, box.h].map(n).join(" ")}
     preserveAspectRatio="xMidYMax meet"
@@ -277,12 +279,11 @@ function onCrisper(s: Scene, front: Front, pill: number): Spot {
   return { x: bin.x + bin.w / 6, y: bin.y + 0.8 * pill };
 }
 
-function ariaLabel(layout: Layout, open: boolean[], state: DrawingState): string {
-  const names = new Set<string>();
+/** What the drawing shows, for screen readers, e.g. "French door refrigerator, freezer drawer open". */
+function ariaLabel(t: Translate, layout: Layout, open: boolean[], state: DrawingState): string {
+  const opened = new Set<string>();
   layout.fronts.forEach((front, index) => {
-    if (open[index]) names.add(`${front.name} open`);
+    if (open[index]) opened.add(t(`drawing.open.${front.name}`));
   });
-  const parts = [layout.name, ...names];
-  if (!state.available) parts.push("offline");
-  return parts.join(", ");
+  return spoken(t, [t(`drawing.refrigeration.${layout.name}`), ...opened, state.available ? null : t("drawing.offline")]);
 }

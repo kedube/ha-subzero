@@ -1,3 +1,4 @@
+import type { Translate } from "../../i18n";
 import type { ChipIcon, LabelSpec } from "../generic/overlay";
 import type { DrawingState } from "../types";
 
@@ -16,17 +17,6 @@ export const FLOOR_LIGHT: Partial<Record<Status, string>> = {
   canceling: "#ff3b30",
   delayed: "#3d8bff",
   done: "#2fe06f",
-};
-
-const STATUS_WORDS: Record<Status, string | null> = {
-  idle: null,
-  running: "running",
-  paused: "paused",
-  canceling: "canceling",
-  drying: "drying",
-  done: "done",
-  delayed: "delayed start",
-  error: "error",
 };
 
 export function doorOpen(state: DrawingState): boolean {
@@ -69,19 +59,18 @@ export function dishwasherOverlay(state: DrawingState): { label: LabelSpec | nul
   return { label, chips };
 }
 
-/** English words for the aria-label, after the appliance's name. */
-export function dishwasherWords(state: DrawingState): string[] {
-  if (!state.available) return ["offline"];
+/** What the dishwasher is doing, for the aria-label after its name; nothing while it's offline. */
+export function dishwasherWords(t: Translate, state: DrawingState): string[] {
+  if (!state.available) return [];
   const words: string[] = [];
-  if (doorOpen(state)) words.push("door open");
+  if (doorOpen(state)) words.push(t("drawing.state.door_open"));
   const dw = state.dishwasher;
   if (!dw) return words;
-  const status = STATUS_WORDS[dw.status];
-  if (status) words.push(status);
-  if (dw.display && (dw.status === "running" || dw.status === "drying")) words.push(`${dw.display} left`);
-  if (dw.display && dw.status === "delayed") words.push(`starts in ${dw.display}`);
-  if (dw.remote_ready) words.push("Remote Ready");
-  if (dw.rinse_aid_low) words.push("rinse aid low");
-  if (dw.softener_low) words.push("softener salt low");
+  if (dw.status !== "idle") words.push(t(`drawing.wash.${dw.status}`));
+  if (dw.display && (dw.status === "running" || dw.status === "drying")) words.push(t("drawing.time_left", { time: dw.display }));
+  if (dw.display && dw.status === "delayed") words.push(t("drawing.starts_in", { time: dw.display }));
+  if (dw.remote_ready) words.push(t("drawing.state.remote_ready"));
+  if (dw.rinse_aid_low) words.push(t("drawing.rinse_aid_low"));
+  if (dw.softener_low) words.push(t("drawing.softener_low"));
   return words;
 }

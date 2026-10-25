@@ -1,6 +1,8 @@
 import { html, nothing, svg, type SVGTemplateResult } from "lit";
+import type { Translate } from "../i18n";
 import type { OvenSlot, WallOvenSpec } from "../types";
 import type { DrawingInput, DrawingRenderer, OvenState } from "./types";
+import { ovenPhrases, spoken } from "./words";
 import {
   doorBase,
   doorDetails,
@@ -89,7 +91,7 @@ export const renderWallOven: DrawingRenderer = (input) => {
   const viewHeight = round(bottom + MARGIN.top + MARGIN.bottom);
   const viewBox = [-MARGIN.x, -MARGIN.top, round(WIDTH + MARGIN.x * 2), viewHeight].join(" ");
   const available = input.state.available;
-  const label = ariaLabel(double, cavities, available);
+  const label = ariaLabel(input.t, double, cavities, available);
   const knobs = style === "professional" && (series === "m" || spec.knob);
   const scale = labelScale(viewHeight, input.pixelHeight);
   const readouts = available
@@ -279,17 +281,19 @@ function vent(m: Materials, layout: OvenLayout): SVGTemplateResult {
   `;
 }
 
-function ariaLabel(double: boolean, cavities: ScreenCavity[], available: boolean): string {
-  const parts = [double ? "Double wall oven" : "Wall oven"];
+/** What the drawing shows, for screen readers, e.g. "Double wall oven, upper oven: preheated". */
+function ariaLabel(t: Translate, double: boolean, cavities: ScreenCavity[], available: boolean): string {
+  const phrases = [t(double ? "drawing.wall_oven_double" : "drawing.wall_oven")];
   for (const { position, oven } of cavities) {
-    const name = position === "single" ? "" : `${position} oven `;
-    if (oven.on && oven.self_clean) parts.push(`${name}self-cleaning`);
-    else if (oven.on && oven.preheated) parts.push(`${name}preheated`);
-    else if (oven.on && oven.progress !== null && oven.progress < 1) parts.push(`${name}preheating`);
-    else if (oven.on) parts.push(`${name}on`);
-    if (oven.door_open) parts.push(`${name}door open`);
-    else if (oven.light) parts.push(`${name}light on`);
+    const states: string[] = [];
+    if (oven.on && oven.self_clean) states.push(t("drawing.state.self_cleaning"));
+    else if (oven.on && oven.preheated) states.push(t("drawing.state.preheated"));
+    else if (oven.on && oven.progress !== null && oven.progress < 1) states.push(t("drawing.state.preheating"));
+    else if (oven.on) states.push(t("drawing.state.on"));
+    if (oven.door_open) states.push(t("drawing.state.door_open"));
+    else if (oven.light) states.push(t("drawing.state.light_on"));
+    phrases.push(...ovenPhrases(t, position, states));
   }
-  if (!available) parts.push("offline");
-  return parts.join(", ");
+  if (!available) phrases.push(t("drawing.offline"));
+  return spoken(t, phrases);
 }

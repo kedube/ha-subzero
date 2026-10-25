@@ -1,10 +1,12 @@
 import { nothing, svg, type SVGTemplateResult } from "lit";
+import type { Translate } from "../../i18n";
 import type { KnobColor, OvenSlot } from "../../types";
 import { dishwasherBody, floorLight } from "../dishwasher";
 import { DW_HEIGHT } from "../dishwasher/door";
 import { dishwasherOverlay, dishwasherWords, doorOpen, FLOOR_LIGHT } from "../dishwasher/status";
 import { KNOB_PALETTE } from "../range/materials";
 import type { DrawingState, OvenState } from "../types";
+import { ovenPhrases, withTemperature } from "../words";
 import {
   barHandle,
   bevel,
@@ -29,6 +31,7 @@ import { LABEL_H, labelScale, statusRow } from "./overlay";
 export interface FormContext {
   d: Defs;
   state: DrawingState;
+  t: Translate;
   knobs: KnobColor;
   reducedMotion: boolean;
   /** The drawing's height on screen in CSS pixels, when the caller knows it: labels use it. */
@@ -46,7 +49,7 @@ export interface Drawn {
   body: SVGTemplateResult;
   /** Drawn over the body, outside the offline filter: lights and UI labels. */
   over?: SVGTemplateResult | typeof nothing;
-  /** English description for the aria-label. */
+  /** What the drawing shows, for the aria-label: its name, then what's going on, translated. */
   label: string[];
 }
 
@@ -502,8 +505,8 @@ export function refrigerator(c: FormContext, widthIn: number, layout: FridgeLayo
     anchors.push({ zone: "ref", cx: W / 2, cy: 150 }, { zone: "frz", cx: W / 2, cy: frzCy });
   }
 
-  const label = [short ? "Undercounter refrigerator" : "Refrigerator"];
-  if (anyOpen) label.push("door open");
+  const label = [c.t(short ? "drawing.refrigeration.undercounter_refrigerator" : "drawing.refrigeration.tall_refrigerator")];
+  if (anyOpen) label.push(c.t("drawing.open.door"));
   return {
     width: W,
     height: H,
@@ -569,8 +572,8 @@ export function wine(c: FormContext, widthIn: number, tall: boolean): Drawn {
           <rect x=${gx} y=${divider - 1} width=${gw} height="0.6" fill="#fff" opacity="0.3" />`
       : nothing}
     <rect x=${gx} y=${gy} width=${gw} height=${gh} fill=${d.url("wine-light")} />`;
-  const label = ["Wine storage"];
-  if (anyOpen) label.push("door open");
+  const label = [c.t("drawing.refrigeration.undercounter_wine")];
+  if (anyOpen) label.push(c.t("drawing.open.door"));
   const defs = svg`
     <defs>
       <clipPath id=${d.id("wine-glass")}><path d=${glass} /></clipPath>
@@ -653,9 +656,9 @@ export function iceMaker(c: FormContext, widthIn: number): Drawn {
   const { d, state } = c;
   const W = widthIn * 10;
   const anyOpen = state.available && Object.values(state.doors).some(Boolean);
-  const label = ["Ice maker"];
-  if (anyOpen) label.push("door open");
-  if (state.available && state.ice_maker?.cleaning) label.push("cleaning");
+  const label = [c.t("drawing.refrigeration.ice_maker")];
+  if (anyOpen) label.push(c.t("drawing.open.door"));
+  if (state.available && state.ice_maker?.cleaning) label.push(c.t("drawing.ice_maker.cleaning"));
   // Open, the door shows the bin heaped with ice, in the part of the opening the door leaves.
   const cubes: string[] = [];
   const heapX = W * 0.42;
@@ -764,10 +767,10 @@ function windowLabelY(top: number, winH: number, scale: number): number {
   return top + Math.max(winH * 0.28, (LABEL_H * scale) / 2 + 8);
 }
 
-function ovenWords(name: string, oven: OvenState | undefined): string[] {
+function ovenWords(t: Translate, position: OvenSlot["position"], oven: OvenState | undefined): string[] {
   if (!oven) return [];
-  if (oven.on) return [`${name} on${oven.temp ? ` ${oven.temp}` : ""}`];
-  return oven.light ? [`${name} light on`] : [];
+  if (oven.on) return ovenPhrases(t, position, [withTemperature(t("drawing.state.on"), oven.temp)]);
+  return oven.light ? ovenPhrases(t, position, [t("drawing.state.light_on")]) : [];
 }
 
 /** A wall oven: a black-glass control strip over one or two stainless doors with windows. */
@@ -780,7 +783,7 @@ export function wallOven(c: FormContext, widthIn: number, double: boolean, slots
   const doorH = (H - strip - 2 * doors) / doors;
   const parts: SVGTemplateResult[] = [];
   const labels: Array<SVGTemplateResult | typeof nothing> = [];
-  const words = [double ? "Double wall oven" : "Wall oven"];
+  const words = [c.t(double ? "drawing.wall_oven_double" : "drawing.wall_oven")];
   const keys = [0, 1].slice(0, doors);
   const scale = uiScale(c, H, 0, false);
   const touch: string[] = [];
@@ -799,7 +802,7 @@ export function wallOven(c: FormContext, widthIn: number, double: boolean, slots
     const y = strip + 2 + index * (doorH + 2);
     const slot = slots[index] ?? { prefix: index === 0 ? "cav" : "cav2", position: "single", width: null };
     const oven = state.ovens?.[slot.prefix];
-    const name = double ? (index === 0 ? "upper oven" : "lower oven") : "oven";
+    const position = double ? (index === 0 ? "upper" : "lower") : "single";
     const winH = doorH - 66;
     parts.push(svg`
       ${slab(d, 0, y, W, doorH, { brush: "h" })}
@@ -810,7 +813,7 @@ export function wallOven(c: FormContext, widthIn: number, double: boolean, slots
       const cy = windowLabelY(y + 44, winH, scale);
       labels.push(statusRow(d, W / 2, cy, { text: oven.temp }, [], c.reducedMotion, scale));
     }
-    if (state.available) words.push(...ovenWords(name, oven));
+    if (state.available) words.push(...ovenWords(c.t, position, oven));
   }
   return {
     width: W,
@@ -851,7 +854,7 @@ export function range(c: FormContext, widthIn: number, burners: number, slots: O
   const ovens = slots.length ? slots : [{ prefix: "cav" as const, position: "single" as const, width: null }];
   const totalNominal = ovens.reduce((sum, slot) => sum + (slot.width ?? widthIn / ovens.length), 0);
   const knobCount = Math.max(4, burners) + ovens.length;
-  const words = ["Range"];
+  const words = [c.t("drawing.range")];
   const caps: string[] = [];
   const count = Math.max(4, burners);
   const scale = uiScale(c, H, 0, true);
@@ -888,7 +891,7 @@ export function range(c: FormContext, widthIn: number, burners: number, slots: O
         statusRow(d, x + w / 2, windowLabelY(doorY + 52, winH, scale), { text: oven.temp }, [], c.reducedMotion, scale),
       );
     }
-    if (state.available) words.push(...ovenWords(ovens.length > 1 ? `${slot.position} oven` : "oven", oven));
+    if (state.available) words.push(...ovenWords(c.t, ovens.length > 1 ? slot.position : "single", oven));
     x += w + 2;
   });
   parts.unshift(svg`
@@ -935,9 +938,9 @@ export function hood(c: FormContext, widthIn: number, form: "wall" | "island" | 
     [W, bandY],
     [0, bandY],
   ];
-  const words = ["Ventilation hood"];
-  if (light) words.push("light on");
-  if (hoodState && hoodState.fan > 0) words.push(`fan speed ${hoodState.fan}`);
+  const words = [c.t("drawing.hood.hood")];
+  if (light) words.push(c.t("drawing.state.light_on"));
+  if (hoodState && hoodState.fan > 0) words.push(c.t("drawing.fan_speed", { speed: hoodState.fan }));
   return {
     width: W,
     height: H,
@@ -1019,7 +1022,7 @@ export function dishwasher(c: FormContext, widthIn: number): Drawn {
       ${lightColor ? floorLight(d, W, lightColor) : nothing}
       ${statusRow(d, W / 2, statusY, label, chips, c.reducedMotion, scale)}
     `,
-    label: ["Dishwasher", ...dishwasherWords(state).filter((word) => word !== "offline")],
+    label: [c.t("drawing.dishwasher"), ...dishwasherWords(c.t, state)],
   };
 }
 
@@ -1043,6 +1046,6 @@ export function appliance(c: FormContext, widthIn: number): Drawn {
       ${slab(d, 0, 40, W, 265)}
       ${barHandle(d, 20, W - 20, 60, "tubular")}
     `,
-    label: ["Appliance"],
+    label: [c.t("drawing.appliance")],
   };
 }
