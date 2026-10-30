@@ -2,6 +2,16 @@
 
 Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then 2.00.
 
+## 1.05 (unreleased)
+
+### Fixed
+
+- The integration loads on Home Assistant 2026.11. It failed to set up its devices there, because 2026.11 changed how device details are passed.
+
+### Changed
+
+- From Home Assistant 2026.11, Sub-Zero is listed under **Appliances & cleaning** when you browse for an integration to add.
+
 ## 1.04 (unreleased)
 
 ### Fixed

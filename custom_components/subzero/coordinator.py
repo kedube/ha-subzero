@@ -566,11 +566,14 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             return info
         version = self.data.get("version")
         serial = self.data.get("appliance_serial")
+        # From Home Assistant 2026.11, DeviceInfo.update takes only a mapping.
         info.update(
-            manufacturer=appliance_brand(self.data),
-            model=self.data["appliance_model"],
-            serial_number=serial if isinstance(serial, str) else None,
-            sw_version=version.get("fw") if isinstance(version, dict) else None,
+            {
+                "manufacturer": appliance_brand(self.data),
+                "model": self.data["appliance_model"],
+                "serial_number": serial if isinstance(serial, str) else None,
+                "sw_version": version.get("fw") if isinstance(version, dict) else None,
+            }
         )
         return info
 
