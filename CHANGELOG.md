@@ -2,6 +2,16 @@
 
 Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then 2.00.
 
+## 1.06 (unreleased)
+
+### Fixed
+
+- Home Assistant 2026.11 no longer logs three warnings at startup asking you to report Sub-Zero's temperature controls to the integration's author. 2026.11 renamed how climate entities report their temperatures, and the old names stop working in 2027.11.
+
+### Changed
+
+- From Home Assistant 2026.11, Sub-Zero is marked as reaching its appliances through the cloud when you browse for an integration to add.
+
 ## 1.05 (unreleased)
 
 ### Fixed

@@ -5,6 +5,7 @@
   "categories": ["appliances_cleaning"],
   "codeowners": ["@kedube"],
   "config_flow": true,
+  "connectivity": ["cloud"],
   "documentation": "https://github.com/kedube/ha-subzero",
   "integration_type": "hub",
   "iot_class": "cloud_push",
