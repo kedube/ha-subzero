@@ -163,7 +163,7 @@ export class ApplianceView extends LitElement {
     const marker = `${appliance.device_id}|${entityId}|${hass.states[entityId]?.state ?? ""}`;
     if (marker === this.eventsFor) return;
     this.eventsFor = marker;
-    fetchEvents(hass, entityId, Date.now()).then(
+    fetchEvents(hass, entityId, this.now ?? this.clock).then(
       (events) => {
         if (this.eventsFor !== marker) return;
         this.events = events;
