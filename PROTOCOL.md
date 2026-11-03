@@ -576,6 +576,7 @@ Oven temperatures while off:
 - A time without an offset is local wall time. The app parses it with `DateTime.parse` and only converts it with `toUtc` or `toLocal`, and it sets the appliance clock from the phone's local time over Bluetooth (`set_time`). [A]
 - **Only a pushed `time` carries the appliance's offset.** Pushes reported `"2026-10-05T15:29:24-04:00"` while `get` answers reported `"2026-10-08T02:53:29+00:00"`, and both were correct instants: the push arrived 8 s after its `time`, and the `get` value was 14 s before the download. So the appliance clock was within about 15 s. [O]
 - The app never reads `time` except to set the clock over Bluetooth. [A]
+- **Kitchen timer start times are unreliable.** Ovens have reported a start about 27 years in the past (a Wolf range) and a 30-minute timer's start 63 minutes in the future, after its end (an SO3050PMSP), while the end times were right. [O] The app never reads `kitchen_timer*_start_time`: its timer tile and overlay count down from the end (`kitchen_timer.dart: KitchenTimer.timerDuration`, end minus now). [A] The integration does the same and has no start-time entities (`controls.py: timer_minutes`, `const.py: RETIRED_ENTITY_KEYS`). [I]
 - The integration reads a time without an offset in the zone of the appliance's last pushed `time`, or Home Assistant's zone until one arrives. When the pushed offset matches Home Assistant's zone, it uses that zone, which follows daylight saving time. Explicit offsets are kept (`controls.py: clock_zone`, `appliance_datetime`). `time` is left out of change detection (`UNCOMPARED_READ_KEYS`). [I]
 - The time zone itself is set through the time settings endpoint (§3.4), and live messages may carry `timezone_id_name`. [A]
 
@@ -906,7 +907,7 @@ Each step is a separate `set`, awaited and confirmed before the next.
 
 **Kitchen timers** [I]:
 - `kitchen_timer_duration` from 1 to 719 minutes starts or restarts the timer; `0` cancels a running timer or clears a finished one (the app's Tap to Dismiss).
-- A start is confirmed once `kitchen_timer_active` is true with a duration of N minutes (end minus start) and an end time within 65 s of the request time plus N minutes. Times without an offset are read in the appliance clock's zone (§7.5), which has been within about 15 s of real time. [O] A cancel is confirmed once `*_active` is false (`controls.py: control_matches`).
+- A start is confirmed once `kitchen_timer_active` is true with an end time within 65 s of the request time plus N minutes. The start time isn't used (§7.5). Times without an offset are read in the appliance clock's zone (§7.5), which has been within about 15 s of real time. [O] A cancel is confirmed once `*_active` is false (`controls.py: control_matches`).
 
 **Hood** [I]:
 - Fan on: `fan_speed` (`ceil(percent / 25)`), then `fan_on: true`.
@@ -1038,6 +1039,7 @@ Measurements from real appliances, oldest first. [O]
 | 2026-10-09 | About 5 hours of 10-minute checks: each appliance had 4–6 unanswered opens while `get` still worked, and every renewal restored updates. The counts were nearly equal across appliances. During one dishwasher cycle, reads found two `wash_cycle_on` changes and one `wash_status` change before updates reported them, among 41 updates. No door change was missed. |
 | 2026-10-10 | Overnight, about 10 hours of checks: one silent spell. The range and the wine unit, whose checks were in step, both went unanswered within a second, while the other appliances' checks at other times were answered. A renewal fixed it at once. |
 | 2026-10-22 | With the app's appliance list open while the integration was connected, one door change reached both (§5.8). |
+| 2026-11-02 | Reported to the upstream project (orienw/ha-subzero#10 and its fix): a Wolf range's kitchen timer start was about 27 years in the past, and an SO3050PMSP's 30-minute timer started 63 minutes after its end. End times were right (§7.5). |
 | 2026-10-22 | About 5 hours of 10-minute checks on five appliances: 142 checks, 6 unanswered. The dishwasher went silent alone at 22:02:34Z. The beverage center, range, and wine unit, whose checks ran together, all went silent within 6 s at 23:33:14–20Z. The refrigerator went silent at 23:36:13Z, about 2.5 minutes after the renewal that caused, and the dishwasher again at 23:53:31Z. Nothing went silent for about 3 hours before 22:02, or in the 90 minutes between 22:02 and 23:33. All 778 live messages were readable (759 with state, 19 without), every one of the 11 Firebase alerts matched an event in the appliances' histories, and no door change was missed. |
 
 Together:

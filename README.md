@@ -158,7 +158,7 @@ Dedicated ice makers have an On and Off ice control and a door open delay settin
 
 ### Wolf ovens and ranges
 
-Each oven cavity has its own entities. A second cavity's entities start with **Lower oven**. On ranges with two ovens, the cavities are the **Right oven** and **Left oven**, as in the app.
+Each oven cavity has its own entities. A second cavity's entities start with **Lower oven**. On ranges with two ovens, the cavities are the **Right oven** and **Left oven**, as in the app. On ovens with two kitchen timers, the first timer's entities start with **Kitchen timer 1**.
 
 <img src="docs/images/device-range.png" alt="A Wolf dual-fuel range's device page, with kitchen timers and the left and right ovens' climate, cooking mode, light, probe, and start controls">
 
@@ -166,7 +166,7 @@ Each oven cavity has its own entities. A second cavity's entities start with **L
 | --- | --- |
 | Temperatures | Oven and probe temperatures, oven and probe setpoints, broil level (Low, Medium, High) while broiling |
 | Status | Door, cooking, preheated, Remote Ready, probe in use, probe within 10° of target, probe target reached, Gourmet mode |
-| Timers | Cooking timer and both kitchen timers: active, under one minute, complete, and start and end times |
+| Timers | Cooking timer: active, under one minute, complete, and start and end times. Kitchen timers: active, under one minute, complete, and end time |
 | Cooking | Cooking mode, whether the oven allows mode changes, and the Gourmet program, such as Baked potato |
 | Appliance | Sabbath mode, service required, Wi-Fi signal strength |
 
@@ -177,8 +177,8 @@ Each oven cavity has its own entities. A second cavity's entities start with **L
 | Start oven | Starts the cavity with the selected mode and temperature. Available only in Remote Ready. |
 | Interior light | Turns the cavity light on or off. |
 | Probe target | 120–210 °F, with the probe connected and the cavity on or in Remote Ready. |
-| Kitchen timers | Two durations from 0 to 719 minutes. Setting one starts or restarts that timer; 0 cancels it. |
-| Dismiss kitchen timer | Clears a finished timer, like the app's Tap to Dismiss. |
+| Kitchen timers | Two durations from 0 to 719 minutes. Setting one starts or restarts that timer; 0 cancels it. While a timer runs, its number shows the minutes left, as the app does. |
+| Dismiss kitchen timer | Stops a running timer or clears a finished one, like the app's Cancel and Tap to Dismiss. |
 
 - Turn on **Remote Ready** at the oven before each remote start; opening the door cancels it. See [Wolf's Remote Ready guide](https://www.subzero-wolf.com/assistance/answers/wolf/m-series-oven/sub-zero-group-owners-app---set-up-remote-access).
 - Broil, Convection broil, Proof, Self clean, and Gourmet programs must be started at the oven, including from automations.
@@ -350,6 +350,8 @@ These appliances have been used with the integration:
 - Cove DW2450 dishwasher
 
 Wolf wall ovens, ventilation hoods, and dedicated ice makers are supported from the app's behavior and tested with simulated appliances, but not yet with real ones. Other models work when the cloud reports their state; their entities depend on what they report.
+
+Some appliances [can't connect to Sub-Zero's cloud](https://www.subzero-wolf.com/assistance/answers/multi-brand/sub-zero-group-owners-app-cannot-find-appliance), including Wolf convection steam ovens, speed ovens, microwaves, and cooktops. The Owner's App can list them for guides and recipes, but they don't appear in Home Assistant.
 
 Setup, Configure, the actions, event names, and the sidebar panel are translated into German, French, Dutch, Spanish, Simplified Chinese, Italian, Polish, and Swedish. Entity names are in English. The translations were machine-assisted, and corrections from native speakers are welcome.
 

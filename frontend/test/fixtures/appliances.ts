@@ -189,7 +189,6 @@ function kitchenTimer(prefix: "kitchen_timer" | "kitchen_timer2"): EntityTable {
     [`${prefix}_complete`]: { binary_sensor: "off" },
     [`${prefix}_duration`]: { number: ["0", { min: 0, max: 719, step: 1 }] },
     [`${prefix}_end_time`]: { sensor: "unknown" },
-    [`${prefix}_start_time`]: { sensor: "unknown" },
     [`dismiss_${prefix}`]: { button: "unavailable" },
   };
 }

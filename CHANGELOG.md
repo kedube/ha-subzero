@@ -7,10 +7,21 @@ Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then
 ### Fixed
 
 - Home Assistant 2026.11 no longer logs three warnings at startup asking you to report Sub-Zero's temperature controls to the integration's author. 2026.11 renamed how climate entities report their temperatures, and the old names stop working in 2027.11.
+- Kitchen timer numbers no longer read millions of minutes or unknown while a timer runs, and a timer set from Home Assistant on a range is now confirmed instead of failing. Ovens report a timer start time that can be decades early or after the timer's end, and the number was the end minus that start. It now shows the minutes left, counting down each minute, as the app does.
 
 ### Changed
 
 - From Home Assistant 2026.11, Sub-Zero is marked as reaching its appliances through the cloud when you browse for an integration to add.
+- **Dismiss kitchen timer** also stops a running timer, like the app's Cancel. Before, it only cleared a finished one.
+- On ovens with two kitchen timers, the first timer's entities are named **Kitchen timer 1**, so Home Assistant lists them before **Kitchen timer 2**. Existing entities keep their entity IDs.
+
+### Removed
+
+- The **Kitchen timer start** and **Kitchen timer 2 start** sensors. Ovens report wrong start times, and the app never shows them. The end time sensors stay.
+
+### Documentation
+
+- The README notes which appliances can't connect to Sub-Zero's cloud, such as Wolf steam and speed ovens, microwaves, and cooktops, so they never appear in Home Assistant.
 
 ## 1.05 (unreleased)
 

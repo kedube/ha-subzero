@@ -18,7 +18,8 @@ from .coordinator import SubZeroCoordinator
 def zone_name(data: dict, key: str, names: dict[str, str | None]) -> str | None:
     """The app's name for a cavity or zone entity, when the appliance's layout changes it.
 
-    Ranges call two cavities right and left ovens, and two wine zones are upper and lower.
+    Ranges call two cavities right and left ovens, two wine zones are upper and lower, and
+    a second kitchen timer numbers the first.
     """
     cavity = key.removeprefix("remote_start_")
     if cavity.startswith(("cav_", "cav2_")) and has_left_and_right_ovens(data):
@@ -37,6 +38,13 @@ def zone_name(data: dict, key: str, names: dict[str, str | None]) -> str | None:
         base = (names.get(key) or "").removesuffix(" 2")
         zone = "Lower" if cavity.startswith("wine2_") else "Upper"
         return f"{zone} {base[0].lower()}{base[1:]}" if base else None
+    if key == "dismiss_kitchen_timer" or key.startswith("kitchen_timer_"):
+        if "kitchen_timer2_active" not in data or "kitchen_timer2_active" in excluded_entity_keys(
+            data
+        ):
+            return None
+        name = names.get(key)
+        return name.replace("itchen timer", "itchen timer 1", 1) if name else None
     return None
 
 

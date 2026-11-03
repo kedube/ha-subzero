@@ -11,6 +11,7 @@ from custom_components.subzero.const import (
     DOMAIN,
     WASH_CYCLES,
 )
+from custom_components.subzero.entity import zone_name
 
 RANGE = {
     "appliance_model": "DF48850SP",
@@ -345,3 +346,16 @@ async def test_wash_status_uses_the_app_wording(hass, cloud_appliance):
         "Delayed",
         "Error",
     ]
+
+
+def test_first_kitchen_timer_is_numbered_only_beside_a_second():
+    names = {
+        "kitchen_timer_duration": "Kitchen timer duration",
+        "dismiss_kitchen_timer": "Dismiss kitchen timer",
+    }
+    two = {"appliance_type": "17.15.1.3", "kitchen_timer2_active": False}
+    assert zone_name(two, "kitchen_timer_duration", names) == "Kitchen timer 1 duration"
+    assert zone_name(two, "dismiss_kitchen_timer", names) == "Dismiss kitchen timer 1"
+    # The app discards the second timer on some series 3 ovens.
+    for one in ({"appliance_type": "17.15.1.3"}, {**two, "appliance_type": "17.3.1.1"}):
+        assert zone_name(one, "kitchen_timer_duration", names) is None

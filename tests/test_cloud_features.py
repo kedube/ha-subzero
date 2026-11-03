@@ -15,7 +15,11 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_system import METRIC_SYSTEM, US_CUSTOMARY_SYSTEM
-from pytest_homeassistant_custom_component.common import MockConfigEntry, async_capture_events
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_capture_events,
+    async_fire_time_changed,
+)
 
 from custom_components.subzero import async_remove_entry
 from custom_components.subzero.api import (
@@ -237,7 +241,7 @@ async def test_cloud_feature_discovery_does_not_send_controls(hass, appliances):
     assert hass.states.get("binary_sensor.dishwasher_softener_salt_low").state == "on"
     assert hass.states.get("sensor.dishwasher_wash_cycle_end").state == "unknown"
     assert hass.states.get("button.dishwasher_start_wash_cycle").state == "unavailable"
-    assert hass.states.get("number.oven_kitchen_timer_duration").state == "0"
+    assert hass.states.get("number.oven_kitchen_timer_1_duration").state == "0"
     assert hass.states.get("select.fridge_accent_light").state == "Off"
     registry = er.async_get(hass)
     for entity_id in (
@@ -925,7 +929,7 @@ async def test_off_ack_without_canceling_remote_ready_is_not_success(hass, appli
 @pytest.mark.parametrize(
     ("key", "entity_id"),
     [
-        ("kitchen_timer_duration", "number.oven_kitchen_timer_duration"),
+        ("kitchen_timer_duration", "number.oven_kitchen_timer_1_duration"),
         ("kitchen_timer2_duration", "number.oven_kitchen_timer_2_duration"),
     ],
 )
@@ -952,7 +956,7 @@ async def test_timer_duration_is_confirmed_from_timer_state(hass, appliances, ke
 @pytest.mark.parametrize(
     ("prefix", "entity_id"),
     [
-        ("kitchen_timer", "number.oven_kitchen_timer_duration"),
+        ("kitchen_timer", "number.oven_kitchen_timer_1_duration"),
         ("kitchen_timer2", "number.oven_kitchen_timer_2_duration"),
     ],
 )
@@ -965,7 +969,7 @@ async def test_zero_clears_a_finished_timer(hass, appliances, prefix, entity_id)
     appliances.client.set_property.assert_awaited_once_with("oven", f"{prefix}_duration", 0)
 
 
-@pytest.mark.parametrize(("prefix", "suffix"), [("kitchen_timer", ""), ("kitchen_timer2", "_2")])
+@pytest.mark.parametrize(("prefix", "suffix"), [("kitchen_timer", "_1"), ("kitchen_timer2", "_2")])
 async def test_dismiss_button_clears_a_finished_timer(hass, appliances, prefix, suffix):
     entity_id = f"button.oven_dismiss_kitchen_timer{suffix}"
     complete = f"binary_sensor.oven_kitchen_timer{suffix}_complete"
@@ -978,6 +982,49 @@ async def test_dismiss_button_clears_a_finished_timer(hass, appliances, prefix, 
     assert hass.states.get(entity_id).state == "unavailable"
 
 
+@pytest.mark.parametrize(
+    ("now", "end", "minutes", "next_tick"),
+    [
+        # Clocks fall back at 2:00 PDT.
+        ("2026-11-01T07:30:00+00:00", "2026-11-01T02:10:00", "160", "2026-11-01T07:31:00+00:00"),
+        # Clocks spring forward at 2:00 PST.
+        ("2026-03-08T09:30:00+00:00", "2026-03-08T03:10:00", "40", "2026-03-08T09:31:00+00:00"),
+    ],
+)
+async def test_countdown_follows_elapsed_time_across_daylight_saving(
+    hass, freezer, appliances, now, end, minutes, next_tick
+):
+    await hass.config.async_set_time_zone("America/Los_Angeles")
+    freezer.move_to(now)
+    with patch("custom_components.subzero.number.async_track_point_in_utc_time") as track:
+        await appliances.update(
+            "oven", {"kitchen_timer_active": True, "kitchen_timer_end_time": end}
+        )
+    assert hass.states.get("number.oven_kitchen_timer_1_duration").state == minutes
+    assert track.call_args.args[2] == datetime.fromisoformat(next_tick)
+
+
+@pytest.mark.parametrize(("prefix", "suffix"), [("kitchen_timer", "_1"), ("kitchen_timer2", "_2")])
+async def test_dismiss_button_stops_a_running_timer(hass, appliances, prefix, suffix):
+    await hass.services.async_call(
+        "number",
+        "set_value",
+        {"entity_id": f"number.oven_kitchen_timer{suffix}_duration", "value": 5},
+        blocking=True,
+    )
+    await hass.services.async_call(
+        "button",
+        "press",
+        {"entity_id": f"button.oven_dismiss_kitchen_timer{suffix}"},
+        blocking=True,
+    )
+    assert appliances.client.set_property.await_args_list[-1] == call(
+        "oven", f"{prefix}_duration", 0
+    )
+    assert hass.states.get(f"binary_sensor.oven_kitchen_timer{suffix}_active").state == "off"
+    assert hass.states.get(f"button.oven_dismiss_kitchen_timer{suffix}").state == "unavailable"
+
+
 async def test_queued_timer_dismiss_spares_a_restarted_timer(hass, appliances):
     await appliances.update("oven", {"kitchen_timer_active": False, "kitchen_timer_complete": True})
     coordinator = appliances.entry.runtime_data.coordinators["oven"]
@@ -988,9 +1035,9 @@ async def test_queued_timer_dismiss_spares_a_restarted_timer(hass, appliances):
                 (
                     "number",
                     "set_value",
-                    {"entity_id": "number.oven_kitchen_timer_duration", "value": 5},
+                    {"entity_id": "number.oven_kitchen_timer_1_duration", "value": 5},
                 ),
-                ("button", "press", {"entity_id": "button.oven_dismiss_kitchen_timer"}),
+                ("button", "press", {"entity_id": "button.oven_dismiss_kitchen_timer_1"}),
             )
         ]
         await asyncio.sleep(0)
@@ -1004,8 +1051,8 @@ async def test_queued_timer_dismiss_spares_a_restarted_timer(hass, appliances):
 @pytest.mark.parametrize(
     ("domain", "service", "data"),
     [
-        ("button", "press", {"entity_id": "button.oven_dismiss_kitchen_timer"}),
-        ("number", "set_value", {"entity_id": "number.oven_kitchen_timer_duration", "value": 0}),
+        ("button", "press", {"entity_id": "button.oven_dismiss_kitchen_timer_1"}),
+        ("number", "set_value", {"entity_id": "number.oven_kitchen_timer_1_duration", "value": 0}),
     ],
 )
 async def test_failed_timer_dismiss_is_not_success(hass, appliances, domain, service, data):
@@ -1013,7 +1060,7 @@ async def test_failed_timer_dismiss_is_not_success(hass, appliances, domain, ser
     appliances.client.set_property.side_effect = ApiError("Sub-Zero returned HTTP 503.")
     with pytest.raises(HomeAssistantError, match="HTTP 503"):
         await hass.services.async_call(domain, service, data, blocking=True)
-    assert hass.states.get("binary_sensor.oven_kitchen_timer_complete").state == "on"
+    assert hass.states.get("binary_sensor.oven_kitchen_timer_1_complete").state == "on"
     assert appliances.client.set_property.await_count == 3
 
 
@@ -1027,7 +1074,7 @@ async def hang(device_id, key, value):
         (
             "oven",
             {"kitchen_timer_active": False, "kitchen_timer_complete": True},
-            "button.oven_dismiss_kitchen_timer",
+            "button.oven_dismiss_kitchen_timer_1",
         ),
         (
             "dishwasher",
@@ -1056,10 +1103,10 @@ async def test_resend_answered_on_retry_succeeds(hass, appliances):
 
     appliances.client.set_property.side_effect = write
     await hass.services.async_call(
-        "button", "press", {"entity_id": "button.oven_dismiss_kitchen_timer"}, blocking=True
+        "button", "press", {"entity_id": "button.oven_dismiss_kitchen_timer_1"}, blocking=True
     )
     assert appliances.client.set_property.await_count == 2
-    assert hass.states.get("binary_sensor.oven_kitchen_timer_complete").state == "off"
+    assert hass.states.get("binary_sensor.oven_kitchen_timer_1_complete").state == "off"
 
 
 async def test_answered_resend_confirms_after_the_push_wait(hass, appliances, monkeypatch):
@@ -1074,10 +1121,10 @@ async def test_answered_resend_confirms_after_the_push_wait(hass, appliances, mo
 
     appliances.client.set_property.side_effect = write
     await hass.services.async_call(
-        "button", "press", {"entity_id": "button.oven_dismiss_kitchen_timer"}, blocking=True
+        "button", "press", {"entity_id": "button.oven_dismiss_kitchen_timer_1"}, blocking=True
     )
     assert appliances.client.set_property.await_count == 1
-    assert hass.states.get("binary_sensor.oven_kitchen_timer_complete").state == "off"
+    assert hass.states.get("binary_sensor.oven_kitchen_timer_1_complete").state == "off"
 
 
 async def test_unanswered_start_resend_stops_the_start(hass, appliances):
@@ -1100,7 +1147,9 @@ async def test_unanswered_start_resend_stops_the_start(hass, appliances):
     assert appliances.client.set_property.await_args_list == [call("oven", "cav_cook_mode", 1)] * 3
 
 
-@pytest.mark.parametrize("previous_minutes", [16, 45])
+# Without a usable start time, a running timer that ends within about a minute of the
+# requested end looks like the requested one.
+@pytest.mark.parametrize("previous_minutes", [17, 45])
 async def test_timer_ack_without_correct_end_time_is_not_success(
     hass, appliances, previous_minutes
 ):
@@ -1119,17 +1168,17 @@ async def test_timer_ack_without_correct_end_time_is_not_success(
         await hass.services.async_call(
             "number",
             "set_value",
-            {"entity_id": "number.oven_kitchen_timer_duration", "value": 15},
+            {"entity_id": "number.oven_kitchen_timer_1_duration", "value": 15},
             blocking=True,
         )
-    assert hass.states.get("number.oven_kitchen_timer_duration").state == str(previous_minutes)
+    assert hass.states.get("number.oven_kitchen_timer_1_duration").state == str(previous_minutes)
     assert appliances.client.set_property.await_count == 3
 
 
 @pytest.mark.parametrize("push", [True, False])
 async def test_timer_restarts_are_confirmed(hass, appliances, push):
     appliances.behavior["push"] = push
-    entity_id = "number.oven_kitchen_timer_duration"
+    entity_id = "number.oven_kitchen_timer_1_duration"
     for minutes in (15, 15, 30):
         await hass.services.async_call(
             "number", "set_value", {"entity_id": entity_id, "value": minutes}, blocking=True
@@ -1139,7 +1188,7 @@ async def test_timer_restarts_are_confirmed(hass, appliances, push):
 
 
 async def test_rejected_timer_write_is_not_confirmed_by_a_late_restart(hass, appliances):
-    entity_id = "number.oven_kitchen_timer_duration"
+    entity_id = "number.oven_kitchen_timer_1_duration"
     started = dt_util.utcnow() - timedelta(minutes=3)
     earlier = {
         "kitchen_timer_active": True,
@@ -1164,7 +1213,7 @@ async def test_timer_times_without_an_offset_follow_the_pushed_clock(hass, appli
     # The appliance keeps local time three hours ahead of Home Assistant's time zone.
     zone = timezone(dt_util.now().utcoffset() + timedelta(hours=3))
     appliances.behavior["zone"] = zone
-    entity_id = "number.oven_kitchen_timer_duration"
+    entity_id = "number.oven_kitchen_timer_1_duration"
     # Until a push reports the appliance clock, they read as Home Assistant's local time.
     with pytest.raises(HomeAssistantError, match="did not confirm"):
         await hass.services.async_call(
@@ -1179,6 +1228,39 @@ async def test_timer_times_without_an_offset_follow_the_pushed_clock(hass, appli
     )
     assert hass.states.get(entity_id).state == "20"
     assert appliances.client.set_property.await_count == 4
+
+
+@pytest.mark.parametrize(("prefix", "suffix"), [("kitchen_timer", "_1"), ("kitchen_timer2", "_2")])
+async def test_running_timer_counts_down_from_its_end(hass, freezer, appliances, prefix, suffix):
+    duration = f"number.oven_kitchen_timer{suffix}_duration"
+
+    async def write(device_id, key, value):
+        # Ovens report a start decades early or after the end, and a correct end.
+        end = dt_util.utcnow() + timedelta(minutes=value)
+        await appliances.update(
+            "oven",
+            {
+                f"{prefix}_active": True,
+                f"{prefix}_start_time": "2000-01-01T00:00:00",
+                f"{prefix}_end_time": end.isoformat(),
+            },
+        )
+
+    appliances.client.set_property.side_effect = write
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": duration, "value": 2}, blocking=True
+    )
+    assert appliances.client.set_property.await_count == 1
+    assert hass.states.get(duration).state == "2"
+    for minutes_left in ("1", "0"):
+        freezer.tick(timedelta(minutes=1))
+        async_fire_time_changed(hass, dt_util.utcnow())
+        await hass.async_block_till_done()
+        assert hass.states.get(duration).state == minutes_left
+    assert (
+        er.async_get(hass).async_get_entity_id("sensor", DOMAIN, f"oven_{prefix}_start_time")
+        is None
+    )
 
 
 def test_clock_zone_prefers_home_time_zone_when_offsets_match(hass):
@@ -1507,7 +1589,7 @@ async def test_oven_probe_and_timer_warnings_become_binary_sensors(hass, applian
             "binary_sensor.oven_lower_oven_cooking_timer_under_one_minute",
             True,
         ),
-        "kitchen_timer_within_1min": ("binary_sensor.oven_kitchen_timer_under_one_minute", True),
+        "kitchen_timer_within_1min": ("binary_sensor.oven_kitchen_timer_1_under_one_minute", True),
         "kitchen_timer2_within_1min": (
             "binary_sensor.oven_kitchen_timer_2_under_one_minute",
             False,
@@ -1582,7 +1664,7 @@ async def test_full_snapshot_marks_missing_controls_unavailable(hass, appliances
         "select.oven_lower_oven_cooking_mode",
         "switch.oven_lower_oven_light",
         "button.oven_start_lower_oven",
-        "number.oven_kitchen_timer_duration",
+        "number.oven_kitchen_timer_1_duration",
     ):
         assert hass.states.get(entity_id).state == "unavailable"
     assert hass.states.get("switch.oven_oven_light").state == "off"
@@ -1595,7 +1677,7 @@ async def test_unknown_units_omit_temperature_entities(hass, appliances):
     assert hass.states.get("climate.fridge_refrigerator") is None
     assert hass.states.get("number.oven_probe_target_temperature") is None
     assert hass.states.get("select.oven_cooking_mode").state == "Bake"
-    assert hass.states.get("number.oven_kitchen_timer_duration").state == "0"
+    assert hass.states.get("number.oven_kitchen_timer_1_duration").state == "0"
     assert hass.states.get("switch.dishwasher_extra_dry").state == "off"
 
 
@@ -1780,6 +1862,24 @@ async def test_nested_json_notifications_update_the_door_entity(hass, appliances
         )
     assert appliances.client.state.await_count == 3
     appliances.client.set_property.assert_not_called()
+
+
+async def test_every_setup_removes_kitchen_timer_start_sensors(hass, appliances):
+    entry = appliances.entry
+    minor_version = entry.minor_version
+    registry = er.async_get(hass)
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    # Earlier versions created them, and so does a downgrade after this one ran.
+    retired = [
+        registry.async_get_or_create("sensor", DOMAIN, f"oven_{key}", config_entry=entry)
+        for key in ("kitchen_timer_start_time", "kitchen_timer2_start_time")
+    ]
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    for entity in retired:
+        assert registry.async_get(entity.entity_id) is None
+    assert entry.minor_version == minor_version
 
 
 async def test_minor_upgrade_removes_only_retired_entities(hass, appliances):
