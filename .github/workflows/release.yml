@@ -1,11 +1,16 @@
 name: Release
 
-# Publishes a version such as 1.00 with the HACS zip and generated notes after
-# the checks pass. Versions have two decimal places and count up by 0.01, from
-# 1.00 to 1.99 and then 2.00, and tags carry no "v". It runs when a push to
-# main changes the version in manifest.json, when a version tag is pushed, or
-# from "Run workflow" with a version, which it commits to manifest.json first.
-# A version that already has a release only gets its zip replaced.
+# Publishes a version such as 1.00 with the HACS zip after the checks pass.
+# Versions have two decimal places and count up by 0.01, from 1.00 to 1.99 and
+# then 2.00, and tags carry no "v". It runs from "Run workflow", which picks
+# the version after the newest release, when a push to main changes the version
+# in manifest.json, or when a version tag is pushed.
+#
+# The notes are CHANGELOG.md's newest section, headed "## Unreleased" (or
+# "## 1.08 (unreleased)"). Except for a pushed tag, whose commit is fixed, the
+# release commits the version to manifest.json and heads that section with it,
+# such as "## 1.08". A version that already has a release only gets its zip
+# replaced.
 on:
   push:
     branches: [main]
@@ -13,10 +18,12 @@ on:
     paths: [custom_components/subzero/manifest.json]
   workflow_dispatch:
     inputs:
-      version:
-        description: Version to release, such as 1.01
+      bump:
+        description: "Version to release: minor adds 0.01, such as 1.07 to 1.08; major moves to the next whole number, such as 1.07 to 2.00"
         required: true
-        type: string
+        default: minor
+        type: choice
+        options: [minor, major]
 
 permissions:
   contents: read
@@ -35,16 +42,18 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
-      - run: pip install packaging
       - id: version
         env:
+          BUMP: ${{ inputs.bump }}
+          GH_TOKEN: ${{ github.token }}
           MANIFEST: custom_components/subzero/manifest.json
-          REQUESTED: ${{ inputs.version }}
         run: |
           fail() { echo "::error::$1"; exit 1; }
+          release() { python .github/scripts/release.py "$@"; }
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
             [ "$GITHUB_REF" = refs/heads/main ] || fail "Run the release from main."
-            version=$REQUESTED
+            version=$(release next "$BUMP") || exit 1
+            echo "::notice::Releasing $version."
           else
             version=$(jq -r .version "$MANIFEST")
           fi
@@ -57,8 +66,6 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             [ "$version" = "$GITHUB_REF_NAME" ] \
               || fail "manifest.json has version $version, but the tag is $GITHUB_REF_NAME."
-          elif [ -n "$tagged" ] && [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
-            fail "$version already exists. To publish it, re-run its failed Release run."
           elif [ -n "$tagged" ] && [ "$tagged" != "$GITHUB_SHA" ]; then
             # manifest.json changed without a new version.
             echo "::notice::$version is already tagged on an earlier commit, so there is nothing to release."
@@ -66,25 +73,12 @@ jobs:
             exit 0
           fi
 
-          # HACS offers the newest release, so a new tag must be the highest.
-          # Tags from before 1.00 have the form v0.9.0.
           if [ -z "$tagged" ]; then
-            python - "$version" <<'EOF'
-          import subprocess
-          import sys
-
-          from packaging.version import InvalidVersion, Version
-
-          version = Version(sys.argv[1])
-          for tag in subprocess.check_output(["git", "tag", "--list"], text=True).split():
-              try:
-                  released = Version(tag.removeprefix("v"))
-              except InvalidVersion:
-                  continue
-              if released >= version:
-                  print(f"::error::{version} is not newer than {tag}.")
-                  sys.exit(1)
-          EOF
+            release newer "$version"
+          fi
+          # Fails before the checks run if the changes aren't listed.
+          if ! gh release view "$version" > /dev/null 2>&1; then
+            release changelog "$version"
           fi
 
           {
@@ -115,17 +109,22 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
 
-      # Pushes made with the workflow token start no other workflows, so
-      # this commit, which changes only the version, is not checked again.
+      # Pushes made with the workflow token start no other workflows, so this
+      # commit, which changes only the version and the changelog's heading, is
+      # not checked again. A pushed tag's commit can't change.
       - name: Commit the version
-        if: github.event_name == 'workflow_dispatch'
+        if: github.ref_type == 'branch'
         run: |
           sed -i -E "s/(\"version\": *\")[^\"]*\"/\1$VERSION\"/" "$MANIFEST"
           if [ "$(jq -r .version "$MANIFEST")" != "$VERSION" ]; then
             echo "::error::Could not set the version in manifest.json."
             exit 1
           fi
+          python .github/scripts/release.py changelog "$VERSION" --finish
           if git diff --quiet; then
             exit 0
           fi
@@ -142,34 +141,20 @@ jobs:
           unzip -p ha_subzero.zip manifest.json \
             | jq -e --arg version "$VERSION" '.version == $version' > /dev/null
 
-      # Lists the commits since the previous release, leaving out merges and
-      # version bumps. The previous release may be an older v0.x.y tag, but
-      # not one of its betas.
-      - name: Write the release notes
-        id: notes
-        run: |
-          previous=$(git describe --tags --abbrev=0 --match '[0-9]*' --match 'v[0-9]*' \
-            --exclude 'v*[!0-9.]*' HEAD^ 2> /dev/null || true)
-          echo "previous=$previous" >> "$GITHUB_OUTPUT"
-          changes=$(git log --reverse --no-merges --format='- %s (%h)' \
-            "${previous:+$previous..}HEAD" -- . ":(exclude)$MANIFEST")
-          if [ -n "$changes" ]; then
-            printf '## Changes\n\n%s\n' "$changes" > notes.md
-          else
-            : > notes.md
-          fi
-          cat notes.md
-
-      # GitHub appends its own notes: pull requests, new contributors, and
-      # the full changelog link.
+      # The notes are the release's section of CHANGELOG.md. GitHub appends
+      # any pull requests and new contributors, and a link comparing it with
+      # the previous release, which may be an older v0.x.y tag but not one of
+      # its betas.
       - name: Publish the release
-        env:
-          PREVIOUS: ${{ steps.notes.outputs.previous }}
         run: |
           if gh release view "$VERSION" > /dev/null 2>&1; then
             gh release upload "$VERSION" ha_subzero.zip --clobber
             exit 0
           fi
+          python .github/scripts/release.py changelog "$VERSION" --notes notes.md
+          cat notes.md
+          PREVIOUS=$(git describe --tags --abbrev=0 --match '[0-9]*' --match 'v[0-9]*' \
+            --exclude 'v*[!0-9.]*' HEAD^ 2> /dev/null || true)
           flags=(--target "$(git rev-parse HEAD)" --title "$VERSION" --notes-file notes.md --generate-notes)
           if [ -n "$PREVIOUS" ]; then
             flags+=(--notes-start-tag "$PREVIOUS")

@@ -2,7 +2,7 @@
 
 Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then 2.00.
 
-## 1.07 (unreleased)
+## 1.07
 
 ### Changed
 
@@ -15,7 +15,7 @@ Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then
 - Each connection that was closed or lost records how: a close from Sub-Zero with its code and reason, or a dropped network connection.
 - Connection attempts that failed are listed with when and why, such as a network error.
 
-## 1.06 (unreleased)
+## 1.06
 
 ### Fixed
 
@@ -36,7 +36,7 @@ Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then
 
 - The README notes which appliances can't connect to Sub-Zero's cloud, such as Wolf steam and speed ovens, microwaves, and cooktops, so they never appear in Home Assistant.
 
-## 1.05 (unreleased)
+## 1.05
 
 ### Fixed
 
@@ -46,13 +46,13 @@ Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then
 
 - From Home Assistant 2026.11, Sub-Zero is listed under **Appliances & cleaning** when you browse for an integration to add.
 
-## 1.04 (unreleased)
+## 1.04
 
 ### Fixed
 
 - The sidebar panel's drawings are now in your language too. Each drawing's description for screen readers, and the words on a dual fuel range's touchscreen, such as Preheated, Timer and Lock, were always in English. Legends printed on the appliance itself, such as a wall oven's knob legends, stay in English, as Wolf prints them.
 
-## 1.02 (unreleased)
+## 1.02
 
 ### Added
 
@@ -65,13 +65,13 @@ Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then
 
 - The panel's source is in `frontend/` (TypeScript and Lit). The built bundle is committed in `custom_components/subzero/frontend/`, and the Validate workflow checks that it matches the source.
 
-## 1.01 (unreleased)
+## 1.01
 
 ### Added
 
 - **Follow-up checks** and **Follow-up check interval** in Configure. Follow-up checks are the checks that run for 10 minutes after an event, and for up to 15 minutes while a door is open, whenever the interval passes without an update. They stay on by default, and the interval can be set from 1 to 10 minutes, with 2 as the default. With them off, each event still gets its one check two seconds later. Diagnostics show both settings.
 
-## 1.00 (unreleased)
+## 1.00
 
 The first release as a standalone integration, at [kedube/ha-subzero](https://github.com/kedube/ha-subzero). It continues from releases 0.6.2 to 0.9.0, whose notes remain on the [releases page](https://github.com/kedube/ha-subzero/releases). This entry covers everything since 0.8.6, including what 0.8.7 and 0.9.0 shipped.
 

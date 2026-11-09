@@ -399,14 +399,16 @@ The **Validate** workflow runs the tests and lint against each supported Home As
 
 ### Releases
 
-The **Release** workflow publishes a release once those checks pass. Start one in either of two ways:
+The **Release** workflow publishes a release once those checks pass. Its notes come from [CHANGELOG.md](CHANGELOG.md), so first list the changes under `## Unreleased` at the top. The workflow stops before releasing if that section is missing or empty. Then start a release in either of two ways:
 
+- Run the **Release** workflow from the Actions tab and choose **minor** to add 0.01 to the newest release, such as 1.07 to 1.08, or **major** to move to the next whole number, such as 1.07 to 2.00.
 - Push a commit to `main` that changes `version` in [manifest.json](custom_components/subzero/manifest.json).
-- Run the **Release** workflow from the Actions tab and enter the version. It commits the version to `main` for you.
+
+Either way, the workflow commits the version to manifest.json on `main` and renames `## Unreleased` to the version, such as `## 1.08`. A heading such as `## 1.08 (unreleased)` also works, as long as it names the version being released.
 
 Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then 2.00. Tags use the bare version, such as `1.01`, with no `v`. A new version must be higher than every existing tag, including the earlier `v0.x.y` tags. There are no pre-releases, because Home Assistant doesn't accept a version such as `1.01b1`.
 
-The workflow tags the release, attaches the `ha_subzero.zip` that HACS downloads, and writes the notes from the commits since the previous release. Pushing a version tag yourself also works if it matches manifest.json, and pushing a tag that already has a release replaces its zip.
+The workflow tags the release, attaches the `ha_subzero.zip` that HACS downloads, and uses the changelog section as the notes, with a link comparing it with the previous release. Pushing a version tag yourself also works if it matches manifest.json, but the workflow can't change a tagged commit, so head its changelog section with the version first. Pushing a tag that already has a release replaces its zip.
 
 ## License & Credit
 
