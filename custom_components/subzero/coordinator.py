@@ -30,6 +30,7 @@ from .api import (
     RateLimited,
     StateUpdate,
     SubZeroClient,
+    error_summary,
     notification_records,
     validate_ice_delay,
 )
@@ -55,8 +56,10 @@ from .const import (
     MAX_EVENT_HISTORY,
     MAX_RECONNECT_DELAY,
     PRIVATE_KEYS,
+    PUSH_LOSS_GRACE,
     RECONNECT_DELAY,
     SHARED_CHECK_MINUTES,
+    STABLE_CONNECTION,
     STATE_KEYS,
     UNCOMPARED_READ_KEYS,
 )
@@ -430,6 +433,11 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             self._late_snapshot = None
             self._last_check = dt_util.utcnow()
             record["time"] = self._last_check.isoformat()
+            if not self.client.push_connected:
+                # No snapshot can arrive until push reconnects, which reopens every
+                # channel anyway. The status read that follows answers instead.
+                record["result"] = "disconnected"
+                return None
             self.push_stats["channel_reopens"] += 1
             connection = self.client.connections
             started = time.monotonic()
@@ -1110,6 +1118,12 @@ class SubZeroAccount:
         }
         self._initial_states = {device_id: asyncio.Event() for device_id in self.coordinators}
         self._recoveries: dict[str, asyncio.Task] = {}
+        # While push reconnects after a drop, appliances stay available until this
+        # timer reports the latest error.
+        self._unsub_push_grace: CALLBACK_TYPE | None = None
+        self._push_error: Exception | None = None
+        # When a working connection dropped, until a new one delivers.
+        self._push_lost_at: float | None = None
         # With the shared connection check on, one appliance's channel is checked after
         # the connection goes this long without a message.
         self.connection_check_interval = timedelta(minutes=shared_connection_check_minutes(entry))
@@ -1150,6 +1164,9 @@ class SubZeroAccount:
             self._schedule_connection_check(last + self.connection_check_interval - now)
             return
         self._schedule_connection_check()
+        if not self.client.push_connected:
+            # Reconnecting reopens every channel.
+            return
         coordinators = list(self.coordinators.values())
         if any(
             coordinator._check_task is not None and not coordinator._check_task.done()
@@ -1248,6 +1265,63 @@ class SubZeroAccount:
             ready.set()
 
     @callback
+    def _push_failed(self, error: Exception, *, dropped: bool) -> None:
+        """Report a push failure, or keep appliances available while push reconnects.
+
+        `dropped` means a connection that delivered messages ended. A new connection
+        reopens every channel, and each pushes a snapshot of current state, so a
+        reconnect within the grace period leaves nothing to report. Until then, only
+        the live reporting sensor shows the connection is down.
+        """
+        self._push_error = error
+        if (
+            dropped
+            and not self._initial_states
+            and self.entry.state is ConfigEntryState.LOADED
+            and not self.hass.is_stopping
+        ):
+            self._cancel_push_grace()
+            self._push_lost_at = time.monotonic()
+            self._unsub_push_grace = async_call_later(
+                self.hass, PUSH_LOSS_GRACE, self._push_grace_ended
+            )
+            _LOGGER.warning(
+                "Lost Sub-Zero's notification connection, reconnecting "
+                "(appliances stay available for up to %d seconds): %s",
+                PUSH_LOSS_GRACE,
+                error_summary(error),
+            )
+            for coordinator in self.coordinators.values():
+                coordinator.async_update_listeners()
+        elif self._unsub_push_grace is None:
+            self.set_error(error)
+
+    @callback
+    def _push_grace_ended(self, _now: datetime) -> None:
+        self._unsub_push_grace = None
+        if self.client.push_connected:
+            # Connected again. An appliance whose channel fails reports it itself.
+            return
+        self.set_error(self._push_error or ApiError("Sub-Zero's notification stream ended."))
+
+    @callback
+    def _push_restored(self) -> None:
+        """Note the first message on a connection after one dropped."""
+        if self._push_lost_at is not None:
+            _LOGGER.info(
+                "Sub-Zero's notification connection is back after %d seconds",
+                time.monotonic() - self._push_lost_at,
+            )
+            self._push_lost_at = None
+        self._cancel_push_grace()
+
+    @callback
+    def _cancel_push_grace(self) -> None:
+        if self._unsub_push_grace is not None:
+            self._unsub_push_grace()
+            self._unsub_push_grace = None
+
+    @callback
     def _start_recovery(self, coordinator: SubZeroCoordinator) -> None:
         recovery = self._recoveries.get(coordinator.device_id)
         if recovery is None or recovery.done():
@@ -1267,13 +1341,24 @@ class SubZeroAccount:
             self._start_recovery(coordinator)
 
     async def listen(self) -> None:
+        try:
+            await self._listen()
+        finally:
+            self._cancel_push_grace()
+
+    async def _listen(self) -> None:
         backoff = RECONNECT_DELAY
         while True:
             started = time.monotonic()
             recoveries = self._recoveries
             canceled: set[asyncio.Task] = set()
+            # Anything the connection delivers shows that it worked.
+            delivered = False
             try:
                 async for device_id, update in self.client.watch(list(self.coordinators)):
+                    if not delivered:
+                        delivered = True
+                        self._push_restored()
                     coordinator = self.coordinators[device_id]
                     if isinstance(update, ApiError) or (
                         isinstance(update, StateUpdate) and update.full
@@ -1306,15 +1391,17 @@ class SubZeroAccount:
                         self._start_recovery(coordinator)
                 raise ApiError("Sub-Zero's notification stream ended.")
             except InvalidAuth as error:
+                self._cancel_push_grace()
+                self._push_lost_at = None
                 self.set_error(error)
                 self.entry.async_start_reauth(self.hass)
                 return
             except ApiError as error:
-                self.set_error(error)
+                self._push_failed(error, dropped=delivered)
                 retry_after = error.retry_after if isinstance(error, RateLimited) else 0
             except Exception as error:
                 _LOGGER.exception("Sub-Zero's notification stream failed unexpectedly")
-                self.set_error(error)
+                self._push_failed(error, dropped=delivered)
                 retry_after = 0
             finally:
                 pending = {*recoveries.values(), *canceled}
@@ -1323,7 +1410,11 @@ class SubZeroAccount:
                 if pending:
                     await asyncio.gather(*pending, return_exceptions=True)
                 recoveries.clear()
-            if time.monotonic() - started >= 120:
+            if time.monotonic() - started >= STABLE_CONNECTION:
                 backoff = RECONNECT_DELAY
+                if delivered:
+                    # Like the app, try again at once when a working connection drops.
+                    await asyncio.sleep(retry_after + random.uniform(0, 1))
+                    continue
             await asyncio.sleep(max(backoff, retry_after) + random.uniform(0, 5))
             backoff = min(backoff * 2, MAX_RECONNECT_DELAY)

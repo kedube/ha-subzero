@@ -22,6 +22,12 @@ CONTROL_CONFIRM_TIMEOUT = 8
 CONTROL_PUSH_TIMEOUT = 5
 RECONNECT_DELAY = 30
 MAX_RECONNECT_DELAY = 900
+# Seconds appliances stay available after the live connection drops, while it
+# reconnects. Every channel reopens with a snapshot of current state, so a quick
+# reconnect loses nothing.
+PUSH_LOSS_GRACE = 120
+# Seconds a connection must last before its loss is retried at once, like the app.
+STABLE_CONNECTION = 120
 MAX_EVENT_HISTORY = 256
 NOTIFICATION_TYPES = {
     0: "unknown",

@@ -27,7 +27,7 @@ from custom_components.subzero.api import (
     token_state,
 )
 from custom_components.subzero.auth import InvalidAuth
-from custom_components.subzero.const import DOMAIN
+from custom_components.subzero.const import DOMAIN, PUSH_LOSS_GRACE
 from custom_components.subzero.coordinator import (
     SubZeroAccount,
     follow_up_check_minutes,
@@ -58,6 +58,7 @@ async def loaded(hass, tokens, request):
     async def watch(device_ids):
         assert isinstance(device_ids, list)
         client.watched.append(device_ids)
+        client.push_connected = True
         connected.set()
         try:
             while True:
@@ -66,6 +67,7 @@ async def loaded(hass, tokens, request):
                     raise event
                 yield event if isinstance(event, tuple) else ("test-fridge", event)
         finally:
+            client.push_connected = False
             disconnected.set()
 
     with patch("custom_components.subzero.SubZeroClient") as factory:
@@ -1608,6 +1610,157 @@ async def test_reconnect_backoff_uses_lifetime_without_events(
     with pytest.raises(asyncio.CancelledError):
         await account.listen()
     assert delays == [max(delay, 75) if rate_limited else delay for delay in expected]
+
+
+@pytest.mark.parametrize("rate_limited", [False, True])
+@pytest.mark.parametrize(
+    ("connections", "expected"),
+    [
+        # How long each connection lasted, and whether it delivered anything.
+        ([(181, True)] * 3, [0, 0, 0]),
+        ([(181, True), (1, False), (1, False), (181, True)], [0, 30, 60, 0]),
+        ([(1, True), (1, True)], [30, 60]),
+    ],
+)
+async def test_losing_a_working_connection_reconnects_at_once(
+    hass, tokens, monkeypatch, rate_limited, connections, expected
+):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        data={
+            "tokens": token_state(tokens),
+            "devices": {"test-fridge": {"name": "Kitchen", "temperature_unit": "F"}},
+        },
+    )
+    entry.add_to_hass(hass)
+    now = 0
+    delays = []
+
+    async def watch(device_ids):
+        nonlocal now
+        lifetime, delivers = connections[len(delays)]
+        if delivers:
+            yield "test-fridge", ChannelOpened()
+        now += lifetime
+        raise RateLimited(75) if rate_limited else ApiError("Disconnected")
+
+    async def sleep(delay):
+        delays.append(delay)
+        if len(delays) == len(connections):
+            raise asyncio.CancelledError
+
+    account = SubZeroAccount(hass, entry, SimpleNamespace(watch=watch))
+    monkeypatch.setattr(
+        "custom_components.subzero.coordinator.time", SimpleNamespace(monotonic=lambda: now)
+    )
+    monkeypatch.setattr(
+        "custom_components.subzero.coordinator.random", SimpleNamespace(uniform=lambda *_: 0)
+    )
+    monkeypatch.setattr(
+        "custom_components.subzero.coordinator.asyncio", SimpleNamespace(sleep=sleep)
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await account.listen()
+    assert delays == [max(delay, 75) if rate_limited else delay for delay in expected]
+
+
+async def test_dropped_connection_keeps_appliances_available_while_reconnecting(
+    hass, loaded, monkeypatch, caplog
+):
+    entry, client, updates, _, _ = loaded
+    caplog.set_level(logging.INFO, logger="custom_components.subzero")
+    monkeypatch.setattr("custom_components.subzero.coordinator.random.uniform", lambda *_: 0)
+    coordinator = entry.runtime_data.coordinators["test-fridge"]
+    # The live reporting sensor reads push_connected when listeners are told.
+    notified = []
+    coordinator.async_add_listener(lambda: notified.append(client.push_connected))
+    await updates.put(StateUpdate({"ref_set_temp": 39}, full=False))
+    await updates.put(ApiError("Sub-Zero's notification connection disconnected."))
+    await hass.async_block_till_done()
+    assert coordinator.last_update_success
+    assert hass.states.get("sensor.kitchen_refrigerator_setpoint").state == "39"
+    assert notified[-1] is False
+    assert caplog.text.count("Lost Sub-Zero's notification connection") == 1
+    assert "Error requesting" not in caplog.text
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=31))
+    await hass.async_block_till_done()
+    assert len(client.watched) == 2
+    await updates.put(
+        StateUpdate(
+            {"appliance_model": "ANOTHER-MODEL", "ref_set_temp": 40, "ref_door_ajar": True},
+            full=True,
+        )
+    )
+    await hass.async_block_till_done()
+    assert "Sub-Zero's notification connection is back after" in caplog.text
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=PUSH_LOSS_GRACE + 2))
+    await hass.async_block_till_done()
+    assert coordinator.last_update_success
+    assert hass.states.get("sensor.kitchen_refrigerator_setpoint").state == "40"
+    assert "Error requesting" not in caplog.text
+    client.state.assert_awaited_once()
+
+
+@pytest.mark.parametrize("reconnect", ["fails", "connects_silently"])
+async def test_reconnecting_past_the_grace_period_marks_appliances_unavailable(
+    hass, loaded, monkeypatch, reconnect
+):
+    entry, client, updates, _, _ = loaded
+    monkeypatch.setattr("custom_components.subzero.coordinator.random.uniform", lambda *_: 0)
+    coordinator = entry.runtime_data.coordinators["test-fridge"]
+    await updates.put(StateUpdate({"ref_set_temp": 39}, full=False))
+    await updates.put(ApiError("Disconnected"))
+    if reconnect == "fails":
+        await updates.put(RateLimited(300))
+    await hass.async_block_till_done()
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=31))
+    await hass.async_block_till_done()
+    assert len(client.watched) == 2
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=PUSH_LOSS_GRACE - 2))
+    await hass.async_block_till_done()
+    assert hass.states.get("sensor.kitchen_refrigerator_setpoint").state == "39"
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=PUSH_LOSS_GRACE + 2))
+    await hass.async_block_till_done()
+    if reconnect == "fails":
+        assert hass.states.get("sensor.kitchen_refrigerator_setpoint").state == "unavailable"
+        assert isinstance(coordinator.last_exception, RateLimited)
+        return
+    # A connection is up, so its own outcome decides.
+    assert hass.states.get("sensor.kitchen_refrigerator_setpoint").state == "39"
+    await updates.put(ApiError("Disconnected again"))
+    await hass.async_block_till_done()
+    assert hass.states.get("sensor.kitchen_refrigerator_setpoint").state == "unavailable"
+
+
+async def test_grace_does_not_apply_while_setting_up(hass, loaded):
+    entry, client, updates, _, _ = loaded
+    await updates.put(StateUpdate({"ref_set_temp": 39}, full=False))
+    await hass.async_block_till_done()
+    entry.mock_state(hass, ConfigEntryState.SETUP_IN_PROGRESS)
+    await updates.put(ApiError("Disconnected"))
+    await hass.async_block_till_done()
+    entry.mock_state(hass, ConfigEntryState.LOADED)
+    assert hass.states.get("sensor.kitchen_refrigerator_setpoint").state == "unavailable"
+
+
+async def test_check_without_push_reads_status_instead_of_reopening(hass, loaded):
+    entry, client, _, _, _ = loaded
+    coordinator = entry.runtime_data.coordinators["test-fridge"]
+    client.push_connected = False
+    client.state.return_value = {
+        "appliance_model": "ANOTHER-MODEL",
+        "ref_set_temp": 38,
+        "ref_door_ajar": True,
+    }
+    await coordinator.async_check_now()
+    client.open_channel.assert_not_awaited()
+    assert client.state.await_count == 2
+    assert hass.states.get("binary_sensor.kitchen_refrigerator_door").state == "on"
+    assert coordinator.recent_checks[-1]["result"] == "disconnected"
+    assert coordinator.push_stats["channel_reopens"] == 0
+    assert coordinator.push_stats["silent_channels"] == 0
+    client.renew_connection.assert_not_called()
 
 
 async def test_expired_login_starts_reauthentication(hass, loaded):

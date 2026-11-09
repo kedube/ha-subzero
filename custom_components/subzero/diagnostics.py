@@ -82,6 +82,7 @@ async def async_get_config_entry_diagnostics(
         "polling_disabled": entry.pref_disable_polling,
         "notifications": dict(account.client.notification_stats),
         "connections": [dict(connection) for connection in account.client.connection_history],
+        "failed_connections": [dict(attempt) for attempt in account.client.failed_connections],
         "firebase": {
             "enabled": firebase_alerts_enabled(entry),
             "connected": bool(alerts and alerts.push and alerts.push.is_started()),

@@ -2,6 +2,19 @@
 
 Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then 2.00.
 
+## 1.07 (unreleased)
+
+### Changed
+
+- When the live connection to Sub-Zero drops, appliances stay available for up to 2 minutes while the integration reconnects. Before, a short drop, such as an internet blip, made every entity unavailable and logged an error for each appliance. Entities keep their last values meanwhile, and the **Live reporting mode** sensor shows **Disconnected**. Reconnecting reopens every appliance's updates, which brings them all up to date. If reconnecting takes longer than 2 minutes, the appliances become unavailable as before.
+- A connection that drops after working for at least 2 minutes is retried at once, as the Sub-Zero app does, instead of after 30 seconds.
+- Checks while the connection is down read the appliance's state directly instead of waiting 16 seconds for an answer that can't arrive.
+
+### Diagnostics
+
+- Each connection that was closed or lost records how: a close from Sub-Zero with its code and reason, or a dropped network connection.
+- Connection attempts that failed are listed with when and why, such as a network error.
+
 ## 1.06 (unreleased)
 
 ### Fixed

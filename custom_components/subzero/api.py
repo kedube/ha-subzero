@@ -34,8 +34,11 @@ API_BASE = "https://prod.iot.subzero.com"
 SIGNALR_ORIGIN = "https://sznacasigprod.service.signalr.net"
 SEPARATOR = "\x1e"
 PING_INTERVAL = 15
-# How many recent notification connections diagnostics list, newest last.
+# How many recent notification connections, and failed attempts to open one,
+# diagnostics list, newest last.
 RECENT_CONNECTIONS = 10
+# Longest close reason or SignalR error text diagnostics keep.
+MAX_CLOSE_TEXT = 200
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -66,6 +69,35 @@ class RateLimited(ApiError):
     def __init__(self, retry_after: float):
         self.retry_after = max(1, retry_after)
         super().__init__("Sub-Zero temporarily limited requests.")
+
+
+def error_summary(error: BaseException) -> str:
+    """Describe an error for diagnostics and logs.
+
+    The integration's own messages are fixed text. Other errors, including the
+    network error behind one of ours, show only their type, because their text can
+    hold URLs with connection IDs.
+    """
+    if not isinstance(error, ApiError | InvalidAuth):
+        return type(error).__name__
+    cause = error.__cause__ or error.__context__
+    if cause is None or isinstance(cause, ApiError | InvalidAuth):
+        return str(error)
+    return f"{error} ({type(cause).__name__})"
+
+
+def socket_end(message: aiohttp.WSMessage, close_code: int | None) -> dict:
+    """Record how the notification socket ended, for diagnostics.
+
+    A `close` message means the server sent a close frame. `closed` with code 1000
+    means the connection ended without one, and with 1006 that it was lost.
+    """
+    end: dict = {"message": message.type.name.lower(), "close_code": close_code}
+    if message.type is aiohttp.WSMsgType.CLOSE and isinstance(message.extra, str):
+        end["reason"] = message.extra[:MAX_CLOSE_TEXT]
+    elif message.type is aiohttp.WSMsgType.ERROR and isinstance(message.data, BaseException):
+        end["error"] = type(message.data).__name__
+    return end
 
 
 @dataclass(frozen=True)
@@ -352,6 +384,8 @@ class SubZeroClient:
         self.connections = 0
         # When recent connections started and ended, and why they ended.
         self.connection_history: deque[dict] = deque(maxlen=RECENT_CONNECTIONS)
+        # Attempts that failed before a connection opened, with when and why.
+        self.failed_connections: deque[dict] = deque(maxlen=RECENT_CONNECTIONS)
         self.notification_stats: dict[str, int | str | None] = {
             "received": 0,
             "ignored": 0,
@@ -723,10 +757,18 @@ class SubZeroClient:
         self, device_ids: list[str]
     ) -> AsyncIterator[tuple[str, StateUpdate | ApiError | ChannelOpened]]:
         while True:
+            connections = self.connections
             try:
                 async with aclosing(self._watch_connection(device_ids)) as updates:
                     async for event in updates:
                         yield event
+            except Exception as error:
+                if self.connections == connections:
+                    # A connection that opened records how it ended instead.
+                    self.failed_connections.append(
+                        {"time": datetime.now(UTC).isoformat(), "error": error_summary(error)}
+                    )
+                raise
             finally:
                 self.push_connected = False
 
@@ -832,6 +874,14 @@ class SubZeroClient:
                                 _LOGGER.debug("Skipping invalid notification frame: %s", error)
                                 continue
                             if event.get("type") == 7:
+                                error = event.get("error")
+                                connection["socket"] = {
+                                    "message": "signalr_close",
+                                    "error": error[:MAX_CLOSE_TEXT]
+                                    if isinstance(error, str)
+                                    else None,
+                                    "allow_reconnect": event.get("allowReconnect"),
+                                }
                                 raise ApiError("Sub-Zero closed the notification connection.")
                             if (
                                 event.get("type") != 1
@@ -882,6 +932,7 @@ class SubZeroClient:
                             continue
                         message = receiving.result()
                         if message.type != aiohttp.WSMsgType.TEXT:
+                            connection["socket"] = socket_end(message, websocket.close_code)
                             raise ApiError("Sub-Zero's notification connection disconnected.")
                         tasks.remove(receiving)
                         receiving = asyncio.create_task(websocket.receive())
@@ -891,7 +942,7 @@ class SubZeroClient:
                         if len(pending) > 262144:
                             raise ApiError("Sub-Zero sent an oversized notification.")
                 except Exception as error:
-                    end = str(error) if isinstance(error, ApiError) else type(error).__name__
+                    end = error_summary(error)
                     raise
                 finally:
                     connection.update(ended=datetime.now(UTC).isoformat(), end=end)

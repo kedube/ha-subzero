@@ -302,6 +302,8 @@ Sometimes the cloud stops delivering updates for a while, for every appliance at
 
 If the appliance doesn't answer within 16 seconds, the integration reads its state directly and reconnects, which usually restores updates for every appliance. The connection is also renewed at least every 50 minutes, which brings every appliance up to date.
 
+**If the connection drops,** for example when your internet connection blips, the integration reconnects: right away if the connection had been up for at least 2 minutes, then after 30 seconds, then 60, and so on. Appliances stay available for up to 2 minutes meanwhile, so a short drop doesn't make every entity unavailable or log an error for each appliance. Entities keep their last values during that time, and the **Live reporting mode** sensor shows **Disconnected**. Reconnecting brings every appliance up to date. If the integration still can't reconnect after 2 minutes, the appliances become unavailable until it does.
+
 Appliances that are busy sending updates need no checks, since each update shows the connection works. A status read the integration makes for another reason, such as confirming a control, doesn't delay a check.
 
 **Cloud requests.** Sub-Zero publishes no request limit. Each check is one request, plus one more when the appliance doesn't answer. With nothing happening, the integration makes none. An event or a door left open adds at most one check per follow-up check interval for 10 or 15 minutes: up to 5 or 8 at the default 2 minutes, and none with **Follow-up checks** off. The shared connection check adds one per interval while the connection is quiet: up to 20 an hour at the default 3 minutes, or 60 at 1 minute. If Sub-Zero asks the integration to slow down, it waits as long as asked, and updates keep arriving in the meantime.
@@ -320,7 +322,8 @@ The integration download shows:
 - the follow-up check and shared connection check settings and intervals, and whether **Enable polling for changes** is off;
 - how many live messages arrived, and how many were ignored or couldn't be read;
 - the Firebase listener's status, its last subscription sync, and how many alerts arrived;
-- the last 10 connections: when each started and ended, and why it ended (`lifetime`, `renewal`, `closed`, or an error);
+- the last 10 connections: when each started and ended, and why it ended (`lifetime`, `renewal`, `closed`, or an error). When the connection was closed or lost, `socket` shows how: whether Sub-Zero sent a close, with its code and reason, or the network dropped it;
+- the last 10 connection attempts that failed, with when and why, such as a network error looking up Sub-Zero's address;
 - whether the sidebar panel is on and in the sidebar.
 
 Each appliance's download shows its state, how the panel draws it (the layout read from its model number, and its Appearance), and these counters:

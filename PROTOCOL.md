@@ -407,7 +407,8 @@ Messages reach every live connection on the account. [O]
 | Client ping | `{"type":6}` every 15 s [I] | `signalr_netcore` defaults [A?] |
 | Silence timeout | Reconnect after 60 s without any frame [I] | The library's default [?] |
 | Renewal | At `min(3000 s, exp(accessToken) − now − 60 s)`, at least 1 s, or 3000 s when `exp` can't be read; or within one ping interval of a request (§13). Renewal starts over from `negotiateUser` and reopens every channel [I] | A new connection 55 minutes after the last (`Future.delayed`, then "Refreshing SignalR connection"), without reopening channels [A] |
-| Reconnect after an error | 30 s, doubling to 900 s, plus 0–5 s of jitter, and at least `Retry-After`. The delay starts over after a connection that lasted 120 s or more [I] | 3 connection attempts, then up to 5 automatic reconnects [A] |
+| Reconnect after an error | Within 1 s, or after `Retry-After`, when a connection that lasted 120 s or more and delivered messages drops. Otherwise 30 s, doubling to 900 s, plus 0–5 s of jitter, and at least `Retry-After`. The delay starts over after a connection that lasted 120 s or more [I] | 3 connection attempts, then up to 5 automatic reconnects [A] |
+| Availability during a reconnect | When a connection that delivered messages drops, appliances stay available for up to 120 s while it reconnects. Only the live reporting sensor shows Disconnected. If no connection is open after 120 s, every appliance becomes unavailable with the latest error. Checks during that time read status without reopening a channel (result `disconnected`). Not during setup [I] | — |
 
 The 50-minute cap is the integration's own, below the app's 55. The SignalR token's real lifetime, and any limit on the service side, are unknown [?]; integration diagnostics record each connection's `renews_after_seconds`, which reveals the token's lifetime whenever it's under 3060 s. [I]
 
@@ -1016,13 +1017,19 @@ Per appliance (`diagnostics.py: appliance_diagnostics`) [I]:
 | `connection_renewals`, `recent_connection_renewals` | Renewals they caused, and the times of the last 10 |
 | `check_reads`, `skipped_reads` | Checks that compared state, and reads skipped for a rate limit |
 | `missed_updates`, `unpushed_changes` | Door changes, and changes per property, that a check found before an update |
-| `recent_checks` | The last 20 checks: `time`, `reason`, `result` (`answered`, `silent`, `failed`), `snapshot_seconds`, `renewed`, `late_snapshot_seconds` |
+| `recent_checks` | The last 20 checks: `time`, `reason`, `result` (`answered`, `silent`, `failed`, `disconnected`), `snapshot_seconds`, `renewed`, `late_snapshot_seconds` |
 | `clock_zone` | The zone used for times without an offset |
 | `unrecognized_state_keys` | Property names the integration doesn't know, without values |
 
 Per account (`async_get_config_entry_diagnostics`) [I]:
 - `notifications`: `received`, `ignored` (which includes messages without state), `invalid`, and `last_received`;
-- `connections`: the last 10, each with `started`, `ended`, `end` (`lifetime`, `renewal`, `closed`, or the error), and `renews_after_seconds`;
+- `connections`: the last 10, each with `started`, `ended`, `end` (`lifetime`, `renewal`, `closed`, or the error), and `renews_after_seconds`. A connection whose socket ended also has `socket`:
+  - `message` `close`: the server sent a close frame, with `close_code` and `reason`;
+  - `closed`: the connection ended without a close frame, with `close_code` 1000, or was lost, with 1006;
+  - `error`: aiohttp's error type;
+  - `binary`: a binary frame arrived;
+  - `signalr_close`: a SignalR close message (type 7) arrived, with its `error` and `allow_reconnect`;
+- `failed_connections`: the last 10 attempts that failed before the handshake, each with `time` and `error`. The error is the integration's message, plus the type of the network error behind it, such as `Could not connect to Sub-Zero. (ClientConnectorDNSError)`;
 - the Firebase client's state, last sync, and alert count;
 - `push_connected`, `shared_connection_check`, `shared_connection_check_minutes`, and `polling_disabled`.
 
@@ -1040,6 +1047,7 @@ Measurements from real appliances, oldest first. [O]
 | 2026-10-10 | Overnight, about 10 hours of checks: one silent spell. The range and the wine unit, whose checks were in step, both went unanswered within a second, while the other appliances' checks at other times were answered. A renewal fixed it at once. |
 | 2026-10-22 | With the app's appliance list open while the integration was connected, one door change reached both (§5.8). |
 | 2026-11-02 | Reported to the upstream project (orienw/ha-subzero#10 and its fix): a Wolf range's kitchen timer start was about 27 years in the past, and an SO3050PMSP's 30-minute timer started 63 minutes after its end. End times were right (§7.5). |
+| 2026-11-08 | The first socket drop seen. A connection 33 minutes old (renewal was due at 50) ended at 04:04:53Z with a non-text message; which kind wasn't recorded then. The retry about 30 s later failed, the next one about 60 s after that worked (04:06:29Z), and every appliance had sent a snapshot by 04:06:40Z, with no door change missed. At 04:08Z the Firebase listener wasn't connected either, and its last subscription sync was at 04:08:00Z, not on its hourly schedule. Two unrelated services losing their connections together points to the host's network, not Sub-Zero. |
 | 2026-10-22 | About 5 hours of 10-minute checks on five appliances: 142 checks, 6 unanswered. The dishwasher went silent alone at 22:02:34Z. The beverage center, range, and wine unit, whose checks ran together, all went silent within 6 s at 23:33:14–20Z. The refrigerator went silent at 23:36:13Z, about 2.5 minutes after the renewal that caused, and the dishwasher again at 23:53:31Z. Nothing went silent for about 3 hours before 22:02, or in the 90 minutes between 22:02 and 23:33. All 778 live messages were readable (759 with state, 19 without), every one of the 11 Firebase alerts matched an event in the appliances' histories, and no door change was missed. |
 
 Together:
@@ -1061,7 +1069,7 @@ Together:
 
 1. **`set` acknowledgement.** The app reads `pload.pload.status`, while the integration has seen `resp`-wrapped answers. Which does the cloud return, and does `{"Message":"OK"}` with HTTP 500 really happen?
 2. **`message.type`.** What do its values mean, and could it replace recognizing full states by content?
-3. **Connection lifetime.** What is the SignalR token's lifetime, and does the service ever close connections? The connection diagnostics (§13.5) can answer the first.
+3. **Connection lifetime.** What is the SignalR token's lifetime, and does the service ever close connections? The connection diagnostics (§13.5) can answer the first, and a connection's `socket` record the second.
 4. **Silent spells.** What on Sub-Zero's side stops delivery to every appliance at once, and is delivery lost or only late? `late_snapshot_seconds` and the connection history are meant to show which. Another client isn't the cause (§5.8).
 5. **User ID header.** Which ID token claims do the app's `azureObjectId` and `sitecoreUserId` hold, and does the service care which is sent?
 6. **API scope.** What is the middle segment of `https://SubZeroB2CPrd.onmicrosoft.com/<...>/read`, and does its access token work as the bearer?

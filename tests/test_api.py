@@ -1020,6 +1020,10 @@ async def notification_stream(hass, aiohttp_server, monkeypatch, socket_enabled,
         for frame in frames:
             if isinstance(frame, bytes):
                 await socket.send_bytes(frame)
+            elif isinstance(frame, tuple):
+                code, reason = frame
+                await socket.close(code=code, message=reason.encode())
+                return socket
             else:
                 await socket.send_str(frame)
         async for _ in socket:
@@ -1289,6 +1293,90 @@ async def test_notification_protocol_failures_still_disconnect(
         with pytest.raises(api.ApiError, match=message):
             await anext(stream)
     assert not client.push_connected
+
+
+@pytest.mark.parametrize(
+    ("frame", "end", "socket"),
+    [
+        (
+            (4000, "Service restarting"),
+            "Sub-Zero's notification connection disconnected.",
+            {"message": "close", "close_code": 4000, "reason": "Service restarting"},
+        ),
+        (
+            b"not-text",
+            "Sub-Zero's notification connection disconnected.",
+            {"message": "binary", "close_code": None},
+        ),
+        (
+            '{"type":7,"error":"' + "x" * 300 + '","allowReconnect":true}' + api.SEPARATOR,
+            "Sub-Zero closed the notification connection.",
+            {"message": "signalr_close", "error": "x" * 200, "allow_reconnect": True},
+        ),
+    ],
+)
+async def test_connections_record_how_the_socket_ended(notification_stream, frame, end, socket):
+    client, stream, frames, _ = notification_stream
+    frames.append(frame)
+    async with asyncio.timeout(5):
+        with pytest.raises(api.ApiError):
+            await anext(stream)
+    assert client.connection_history[-1]["end"] == end
+    assert client.connection_history[-1]["socket"] == socket
+    # The connection opened, so it is not a failed attempt.
+    assert not client.failed_connections
+
+
+@pytest.mark.parametrize(
+    ("message", "close_code", "expected"),
+    [
+        (
+            aiohttp.WSMessage(aiohttp.WSMsgType.CLOSED, None, None),
+            1006,
+            {"message": "closed", "close_code": 1006},
+        ),
+        (
+            aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, ConnectionResetError("private"), None),
+            1006,
+            {"message": "error", "close_code": 1006, "error": "ConnectionResetError"},
+        ),
+    ],
+)
+def test_socket_end_names_errors_without_their_text(message, close_code, expected):
+    assert api.socket_end(message, close_code) == expected
+
+
+async def test_failed_connection_attempts_record_only_the_error_type(tokens):
+    client = api.SubZeroClient(MagicMock(), "test-key", tokens)
+
+    async def offline(*args, **kwargs):
+        try:
+            raise OSError("Unreachable: wss://example.invalid/client/?id=private-connection")
+        except OSError:
+            raise api.ApiError("Could not connect to Sub-Zero.") from None
+
+    client._request = offline
+    stream = client.watch(["test-fridge"])
+    with pytest.raises(api.ApiError):
+        await anext(stream)
+    await stream.aclose()
+    assert [attempt["error"] for attempt in client.failed_connections] == [
+        "Could not connect to Sub-Zero. (OSError)"
+    ]
+    assert "private" not in str(client.failed_connections)
+    assert not client.connection_history
+
+
+def test_error_summaries_keep_only_the_integrations_own_text():
+    assert api.error_summary(ValueError("private")) == "ValueError"
+    assert api.error_summary(InvalidAuth("Expired")) == "Expired"
+    try:
+        try:
+            raise api.ApiError("Inner")
+        except api.ApiError:
+            raise api.ApiError("Outer") from None
+    except api.ApiError as error:
+        assert api.error_summary(error) == "Outer"
 
 
 @pytest.fixture
