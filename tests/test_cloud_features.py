@@ -15,11 +15,6 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_system import METRIC_SYSTEM, US_CUSTOMARY_SYSTEM
-from pytest_homeassistant_custom_component.common import (
-    MockConfigEntry,
-    async_capture_events,
-    async_fire_time_changed,
-)
 
 from custom_components.subzero import async_remove_entry
 from custom_components.subzero.api import (
@@ -40,6 +35,11 @@ from custom_components.subzero.diagnostics import (
 )
 from custom_components.subzero.sensor import DESCRIPTIONS as SENSOR_DESCRIPTIONS
 from custom_components.subzero.sensor import SubZeroSensor, uptime_seconds
+from tests.common import (
+    MockConfigEntry,
+    async_capture_events,
+    async_fire_time_changed,
+)
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
@@ -485,6 +485,274 @@ async def test_newer_oven_series_start_with_the_app_write_sequence(hass, applian
     appliances.client.set_property.assert_awaited_once_with("oven", "cav2_set_temp", 425)
 
 
+IDLE_REMOTE_READY = {
+    "appliance_type": "17.15.1.3",
+    "cav_cook_mode": 0,
+    "cav_set_temp": 0,
+    "cav_remote_ready": True,
+}
+
+
+def drop_push(appliances):
+    """Sub-Zero's notification connection drops, and appliances stay available meanwhile."""
+    appliances.client.push_connected = False
+    appliances.entry.runtime_data._push_failed(ApiError("Stream disconnected"), dropped=True)
+
+
+def restore_push(appliances):
+    """The notification connection is back."""
+    appliances.client.push_connected = True
+    appliances.entry.runtime_data._push_restored()
+
+
+async def select_cooking_mode(hass, option):
+    await hass.services.async_call(
+        "select",
+        "select_option",
+        {"entity_id": "select.oven_cooking_mode", "option": option},
+        blocking=True,
+    )
+
+
+async def test_start_sends_the_mode_and_temperature_chosen_in_remote_ready(hass, appliances):
+    # An idle oven in Remote Ready reports no mode or setpoint and drops a mode sent alone.
+    await appliances.update("oven", IDLE_REMOTE_READY)
+    climate = "climate.oven_oven"
+    assert hass.states.get("button.oven_start_oven").state == "unavailable"
+    assert not (
+        hass.states.get(climate).attributes["supported_features"]
+        & ClimateEntityFeature.TARGET_TEMPERATURE
+    )
+    await select_cooking_mode(hass, "Convection")
+    assert hass.states.get("select.oven_cooking_mode").state == "Convection"
+    assert hass.states.get("sensor.oven_cooking_mode").state == "Off"
+    assert hass.states.get(climate).attributes["min_temp"] == 200
+    # The card offers a temperature only once there is one, so the mode brings the
+    # app's default for it.
+    assert hass.states.get(climate).attributes["temperature"] == 325
+    assert hass.states.get("button.oven_start_oven").state != "unavailable"
+    await hass.services.async_call(
+        "climate", "set_temperature", {"entity_id": climate, "temperature": 350}, blocking=True
+    )
+    assert hass.states.get(climate).attributes["temperature"] == 350
+    assert hass.states.get(climate).state == "off"
+    assert hass.states.get("sensor.oven_oven_setpoint").state == "unknown"
+    appliances.client.set_property.assert_not_called()
+    assert hass.states.get("button.oven_start_oven").state != "unavailable"
+    await hass.services.async_call(
+        "button", "press", {"entity_id": "button.oven_start_oven"}, blocking=True
+    )
+    assert appliances.client.set_property.await_args_list == [
+        call("oven", "cav_cook_mode", 8),
+        call("oven", "cav_unit_on", True),
+        call("oven", "cav_set_temp", 350),
+    ]
+    assert hass.states.get(climate).state == "heat"
+    assert appliances.entry.runtime_data.coordinators["oven"].start_settings == {}
+
+
+async def test_start_at_a_temperature_checks_the_one_supplied(hass, appliances):
+    await appliances.update("oven", IDLE_REMOTE_READY)
+    with pytest.raises(ServiceValidationError, match="cooking mode"):
+        await hass.services.async_call(
+            "climate", "turn_on", {"entity_id": "climate.oven_oven"}, blocking=True
+        )
+    await select_cooking_mode(hass, "Warm")
+    with pytest.raises(ServiceValidationError, match="range"):
+        await hass.services.async_call(
+            "climate",
+            "set_temperature",
+            {"entity_id": "climate.oven_oven", "temperature": 350, "hvac_mode": "heat"},
+            blocking=True,
+        )
+    appliances.client.set_property.assert_not_called()
+    await hass.services.async_call(
+        "climate",
+        "set_temperature",
+        {"entity_id": "climate.oven_oven", "temperature": 170, "hvac_mode": "heat"},
+        blocking=True,
+    )
+    assert appliances.client.set_property.await_args_list == [
+        call("oven", "cav_cook_mode", 12),
+        call("oven", "cav_unit_on", True),
+        call("oven", "cav_set_temp", 170),
+    ]
+
+
+async def test_settings_chosen_for_a_start_last_while_the_oven_stays_in_remote_ready(
+    hass, appliances
+):
+    await appliances.update("oven", IDLE_REMOTE_READY)
+    climate = "climate.oven_oven"
+    await select_cooking_mode(hass, "Convection")
+    await hass.services.async_call(
+        "climate", "set_temperature", {"entity_id": climate, "temperature": 350}, blocking=True
+    )
+    await select_cooking_mode(hass, "Bake")
+    assert hass.states.get(climate).attributes["temperature"] == 350
+    # A temperature outside the new mode's range gives way to the mode's default.
+    await select_cooking_mode(hass, "Warm")
+    assert hass.states.get(climate).attributes["temperature"] == 180
+    assert hass.states.get(climate).attributes["max_temp"] == 200
+    assert hass.states.get("button.oven_start_oven").state != "unavailable"
+    await appliances.update("oven", {"cav_door_ajar": True, "cav_remote_ready": False})
+    assert hass.states.get("select.oven_cooking_mode").state == "Off"
+    await appliances.update("oven", {"cav_door_ajar": False, "cav_remote_ready": True})
+    assert hass.states.get("select.oven_cooking_mode").state == "Off"
+    assert hass.states.get(climate).attributes.get("temperature") is None
+    assert hass.states.get("button.oven_start_oven").state == "unavailable"
+    appliances.client.set_property.assert_not_called()
+
+
+async def test_choosing_a_mode_leaves_a_reported_setpoint_that_suits_it(hass, appliances):
+    await appliances.update("oven", {"appliance_type": "17.15.1.3", "cav_remote_ready": True})
+    await select_cooking_mode(hass, "Roast")
+    coordinator = appliances.entry.runtime_data.coordinators["oven"]
+    assert coordinator.start_settings == {"cav_cook_mode": 2}
+    # The oven's own setpoint stays live.
+    await appliances.update("oven", {"cav_set_temp": 400})
+    assert hass.states.get("climate.oven_oven").attributes["temperature"] == 400
+    await hass.services.async_call(
+        "button", "press", {"entity_id": "button.oven_start_oven"}, blocking=True
+    )
+    assert appliances.client.set_property.await_args_list == [
+        call("oven", "cav_cook_mode", 2),
+        call("oven", "cav_unit_on", True),
+        call("oven", "cav_set_temp", 400),
+    ]
+
+
+async def test_start_stops_when_the_oven_drops_the_mode_before_power(hass, appliances):
+    await appliances.update("oven", IDLE_REMOTE_READY)
+    await select_cooking_mode(hass, "Convection")
+    await hass.services.async_call(
+        "climate",
+        "set_temperature",
+        {"entity_id": "climate.oven_oven", "temperature": 350},
+        blocking=True,
+    )
+    original = appliances.client.set_property.side_effect
+    coordinator = appliances.entry.runtime_data.coordinators["oven"]
+
+    async def write(device_id, key, value):
+        if key == "cav_unit_on":
+            appliances.states[device_id]["cav_cook_mode"] = 0
+            coordinator.apply_update(StateUpdate({"cav_cook_mode": 0}, full=False))
+            raise ApiError("Sub-Zero returned HTTP 503.")
+        await original(device_id, key, value)
+
+    appliances.client.set_property.side_effect = write
+    with pytest.raises(ServiceValidationError, match="cooking mode"):
+        await hass.services.async_call(
+            "button", "press", {"entity_id": "button.oven_start_oven"}, blocking=True
+        )
+    assert [args.args[1] for args in appliances.client.set_property.await_args_list] == [
+        "cav_cook_mode",
+        "cav_unit_on",
+    ]
+
+
+async def test_start_does_not_resend_the_mode_once_remote_ready_ends(hass, appliances):
+    await appliances.update("oven", IDLE_REMOTE_READY)
+    await select_cooking_mode(hass, "Convection")
+    await hass.services.async_call(
+        "climate",
+        "set_temperature",
+        {"entity_id": "climate.oven_oven", "temperature": 350},
+        blocking=True,
+    )
+    coordinator = appliances.entry.runtime_data.coordinators["oven"]
+
+    async def write(device_id, key, value):
+        appliances.states[device_id]["cav_remote_ready"] = False
+        coordinator.apply_update(StateUpdate({"cav_remote_ready": False}, full=False))
+        raise ApiError("Sub-Zero returned HTTP 503.")
+
+    appliances.client.set_property.side_effect = write
+    with pytest.raises(ServiceValidationError, match="Remote Ready"):
+        await hass.services.async_call(
+            "button", "press", {"entity_id": "button.oven_start_oven"}, blocking=True
+        )
+    appliances.client.set_property.assert_awaited_once_with("oven", "cav_cook_mode", 8)
+
+
+async def test_a_status_read_that_sees_remote_ready_end_drops_the_start_settings(hass, appliances):
+    await appliances.update("oven", IDLE_REMOTE_READY)
+    await select_cooking_mode(hass, "Convection")
+    coordinator = appliances.entry.runtime_data.coordinators["oven"]
+    assert coordinator.start_settings == {"cav_cook_mode": 8, "cav_set_temp": 325}
+    device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, "oven"), appliances.entry.entry_id
+    )
+    result = await async_get_device_diagnostics(hass, appliances.entry, device)
+    assert result["start_settings"] == {"cav_cook_mode": 8, "cav_set_temp": 325}
+    # A check's status read, not push, sees Remote Ready end, and push then shows it back.
+    appliances.states["oven"]["cav_remote_ready"] = False
+    await coordinator.async_refresh()
+    await appliances.update("oven", {"cav_remote_ready": True})
+    assert coordinator.start_settings == {}
+    assert hass.states.get("select.oven_cooking_mode").state == "Off"
+    assert hass.states.get("button.oven_start_oven").state == "unavailable"
+
+
+@pytest.mark.parametrize("gap", ["stream", "error", "failed refresh"])
+async def test_settings_chosen_for_a_start_do_not_outlast_a_gap_in_updates(hass, appliances, gap):
+    # Remote Ready can end and return unseen while updates are missed.
+    await appliances.update("oven", IDLE_REMOTE_READY)
+    await select_cooking_mode(hass, "Convection")
+    await hass.services.async_call(
+        "climate",
+        "set_temperature",
+        {"entity_id": "climate.oven_oven", "temperature": 350},
+        blocking=True,
+    )
+    assert hass.states.get("button.oven_start_oven").state != "unavailable"
+    coordinator = appliances.entry.runtime_data.coordinators["oven"]
+    if gap == "stream":
+        drop_push(appliances)
+        await hass.async_block_till_done()
+        assert hass.states.get("select.oven_cooking_mode").state == "Off"
+        restore_push(appliances)
+    elif gap == "error":
+        coordinator.async_set_update_error(ApiError("Channel error"))
+        # A refresh that was already running restores availability on its own.
+        coordinator.last_update_success = True
+        coordinator.async_update_listeners()
+        assert hass.states.get("select.oven_cooking_mode").state == "Off"
+    else:
+        # Home Assistant marks a failed refresh itself.
+        coordinator.last_update_success = False
+    await appliances.update("oven", dict(appliances.states["oven"]), full=True)
+    assert appliances.states["oven"]["cav_remote_ready"] is True
+    assert hass.states.get("select.oven_cooking_mode").state == "Off"
+    assert hass.states.get("button.oven_start_oven").state == "unavailable"
+    assert coordinator.start_settings == {}
+
+
+@pytest.mark.parametrize("gap", ["stream", "channel"])
+async def test_settings_for_a_start_cannot_be_chosen_while_updates_are_interrupted(
+    hass, appliances, gap
+):
+    await appliances.update("oven", IDLE_REMOTE_READY)
+    coordinator = appliances.entry.runtime_data.coordinators["oven"]
+    if gap == "stream":
+        drop_push(appliances)
+    else:
+        # The oven's own channel failed, and a status read restored availability.
+        coordinator._channel_error = ApiError("Channel error")
+    with pytest.raises(ServiceValidationError, match="reconnecting"):
+        await select_cooking_mode(hass, "Convection")
+    assert coordinator.start_settings == {}
+    appliances.client.set_property.assert_not_called()
+    if gap == "stream":
+        restore_push(appliances)
+    if gap == "channel":
+        # An update shows the channel works again.
+        await appliances.update("oven", {"cav_light_on": True})
+        await select_cooking_mode(hass, "Convection")
+        assert coordinator.start_settings == {"cav_cook_mode": 8, "cav_set_temp": 325}
+
+
 @pytest.mark.parametrize(
     ("prefix", "entity_id"),
     [
@@ -628,7 +896,7 @@ async def test_oven_interlocks_apply_below_the_entity_layer(
 async def test_ovens_without_knobs_ignore_the_mode_change_flag(appliances, type_id):
     await appliances.update(
         "oven",
-        {"appliance_type": type_id, "cav_remote_ready": True, "cav_mode_change_enabled": False},
+        {"appliance_type": type_id, "cav_unit_on": True, "cav_mode_change_enabled": False},
     )
     coordinator = appliances.entry.runtime_data.coordinators["oven"]
     await coordinator.async_set_properties({"cav_cook_mode": 2})

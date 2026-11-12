@@ -71,12 +71,14 @@ from .controls import (
     clock_zone,
     control_matches,
     excluded_properties,
+    held_for_start,
     ice_mode,
     ice_mode_properties,
     is_ice_maker,
     sabbath_allows,
     sabbath_enabled,
     start_properties,
+    start_temperature,
     supports_air_filter_reset,
     validate_control_properties,
     wash_cancel_enabled,
@@ -229,6 +231,8 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         self.recent_checks: deque[dict] = deque(maxlen=RECENT_CHECKS)
         self._channel_snapshot: asyncio.Future[None] | None = None
         self._renewed = False
+        # The cooking mode and temperature chosen for a remote start, by property.
+        self.start_settings: dict[str, int] = {}
         self._command_lock = asyncio.Lock()
         self._unsettled = False
         self._state_lock = asyncio.Lock()
@@ -470,13 +474,34 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         record["snapshot_seconds"] = round(time.monotonic() - started, 1)
         return True
 
+    @property
+    def start_state(self) -> dict:
+        """Reported state with the cooking mode and temperature kept for a remote start."""
+        return {**self.data, **self.start_settings}
+
+    @callback
+    def async_update_listeners(self) -> None:
+        # Every change of state, pushed or read, comes through here. A start's choices
+        # are kept only while the oven is seen to stay idle in Remote Ready.
+        if self.start_settings:
+            self.start_settings = {
+                key: value
+                for key, value in self.start_settings.items()
+                if self.last_update_success and held_for_start(self.data, key)
+            }
+        super().async_update_listeners()
+
     @callback
     def async_set_update_error(self, error: Exception) -> None:
         self._cancel_check()
+        self.start_settings = {}
         super().async_set_update_error(error)
 
     @callback
     def async_set_updated_data(self, data: dict) -> None:
+        if not self.last_update_success:
+            # State that returns after a gap can't show the oven stayed in Remote Ready.
+            self.start_settings = {}
         super().async_set_updated_data(data)
         self._schedule_check()
 
@@ -626,7 +651,9 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
                 properties = {} if temperature is None else {f"{prefix}_set_temp": temperature}
                 await self._async_write({**properties, key: True})
             else:
-                await self._async_write(start_properties(self.data, key, temperature), force=True)
+                await self._async_write(
+                    start_properties(self.start_state, key, temperature), force=True, start=True
+                )
 
     async def async_cancel_wash(self) -> None:
         async with self._command():
@@ -659,20 +686,34 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             # or clears a finished one.
             await self._async_write({key: 0})
 
-    async def _async_write(self, properties: dict, *, force: bool = False) -> None:
+    async def _async_write(
+        self, properties: dict, *, force: bool = False, start: bool = False
+    ) -> None:
         if not self.last_update_success:
             raise ServiceValidationError("The appliance is unavailable.")
+        unit = self.device.get("temperature_unit")
+        if properties and not force and all(held_for_start(self.data, key) for key in properties):
+            self._hold_for_start(properties)
+            return
         now = dt_util.utcnow()
         changes = {
             key: value
             for key, value in properties.items()
             if not (force and control_matches(self.data, key, value, now, self.clock_zone))
         }
+        # A start's cooking mode and temperature that are still to be sent. Its power
+        # write is left out, so every check still reads whether the oven reports ready.
+        pending = {
+            key: value
+            for key, value in properties.items()
+            if start and key.endswith(("_cook_mode", "_set_temp"))
+        }
         if changes or not force:
-            validate_control_properties(self.data, self.device.get("temperature_unit"), changes)
+            validate_control_properties(self.data, unit, changes, pending)
         requested_at = {}
         try:
             for key, value in properties.items():
+                pending.pop(key, None)
                 if not self.last_update_success:
                     raise ServiceValidationError("The appliance is unavailable.")
                 requested_at[key] = dt_util.utcnow()
@@ -688,7 +729,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
                     )
                 ):
                     requested_at[key] = await self._async_set_property(
-                        key, value, resend=key not in changes
+                        key, value, resend=key not in changes, pending=pending
                     )
             if not self.last_update_success or any(
                 not control_matches(self.data, key, value, requested_at[key], self.clock_zone)
@@ -700,6 +741,32 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             raise HomeAssistantError("Sign in to Sub-Zero again to change settings.") from error
         except ApiError as error:
             raise HomeAssistantError(str(error)) from error
+
+    @callback
+    def _hold_for_start(self, properties: dict) -> None:
+        """Keep a cooking mode or temperature for the remote start instead of sending it.
+
+        An oven idle in Remote Ready drops a cooking mode sent on its own, so like the
+        app's start dialog the choice waits for the start, which sends it.
+        """
+        if self._channel_error is not None or not self.client.push_connected:
+            # Remote Ready could end and return unseen before the start.
+            raise ServiceValidationError(
+                "Home Assistant is reconnecting to the appliance; try again."
+            )
+        validate_control_properties(
+            self.start_state, self.device.get("temperature_unit"), properties
+        )
+        held = {**self.start_settings, **properties}
+        for key in properties:
+            if key.endswith("_cook_mode"):
+                # The climate entity offers a temperature only once there is one.
+                setpoint = key.replace("cook_mode", "set_temp")
+                held[setpoint] = start_temperature(
+                    {**self.data, key: held[key]}, setpoint, held.get(setpoint)
+                )
+        self.start_settings = {key: value for key, value in held.items() if value is not None}
+        self.async_update_listeners()
 
     async def async_reset_air_filter(self) -> None:
         async with self._command():
@@ -738,7 +805,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
                 raise HomeAssistantError("The appliance did not confirm the requested ice mode.")
 
     async def _async_set_property(
-        self, key: str, value: bool | int, *, resend: bool = False
+        self, key: str, value: bool | int, *, resend: bool = False, pending: dict | None = None
     ) -> datetime:
         last_error = None
         for attempt in range(3):
@@ -750,7 +817,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             matched = control_matches(self.data, key, value, requested_at, self.clock_zone)
             if not resend or not matched:
                 validate_control_properties(
-                    self.data, self.device.get("temperature_unit"), {key: value}
+                    self.data, self.device.get("temperature_unit"), {key: value}, pending
                 )
             confirmed = asyncio.Event()
             acknowledged = False
@@ -1274,6 +1341,9 @@ class SubZeroAccount:
         the live reporting sensor shows the connection is down.
         """
         self._push_error = error
+        for coordinator in self.coordinators.values():
+            # Remote Ready may end and return unseen while push is down.
+            coordinator.start_settings = {}
         if (
             dropped
             and not self._initial_states

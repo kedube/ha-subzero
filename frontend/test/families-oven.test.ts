@@ -268,6 +268,29 @@ describe("range, Remote Ready", () => {
     expect(control(sections(broil), "cav", "remote_start_cav_unit_on")).toMatchObject({ reason: "Start this mode at the oven." });
   });
 
+  it("asks with the mode and temperature chosen for the start", () => {
+    // The oven reports neither while it waits; the select and climate entity hold the choice.
+    const chosen = withStates(ready(), {
+      cav_cook_mode: { select: "Convection", sensor: "Off" },
+      cav_set_temp: { climate: ["off", { temperature: 325, min_temp: 200, max_temp: 550, supported_features: 385 }], sensor: "unknown" },
+    });
+    const list = sections(chosen);
+    expect(control(list, "cav", "remote_start_cav_unit_on")).toMatchObject({
+      disabled: false,
+      confirm: "Start the right oven at Convection 325°?",
+    });
+    expect(control(list, "cav", "cav_set_temp")).toMatchObject({ disabled: false, value: 325 });
+    // Nothing chosen yet: Start says to choose a mode.
+    const none = withStates(ready("unavailable"), {
+      cav_cook_mode: { select: "Off", sensor: "Off" },
+      cav_set_temp: { climate: ["off", { min_temp: 200, max_temp: 550, supported_features: 384 }], sensor: "unknown" },
+    });
+    expect(control(sections(none), "cav", "remote_start_cav_unit_on")).toMatchObject({
+      disabled: true,
+      reason: "Choose a cooking mode first.",
+    });
+  });
+
   it("translates the question", () => {
     expect(control(sections(ready(), { language: "de" }), "cav", "remote_start_cav_unit_on")).toMatchObject({
       confirm: "Rechten Backofen mit Backen 350° starten?",

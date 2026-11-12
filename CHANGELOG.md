@@ -2,6 +2,27 @@
 
 Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then 2.00.
 
+## Unreleased
+
+### Fixed
+
+- **Start oven** now works on Wolf ovens other than E series and M series. These ovens report no cooking mode or temperature while they wait in Remote Ready, so Start oven stayed unavailable. Now you choose the cooking mode and temperature in Home Assistant or the sidebar panel while the oven waits in Remote Ready, then press **Start oven**. As the app does, Home Assistant keeps your choice and sends it with the start. E series and M series ovens still start with the mode and temperature set at the oven.
+- Firebase appliance alerts no longer stop with `Incorrect padding, shutting down FcmPushClient`, logged every minute. The Firebase library can't read alerts whose encryption details arrive in a newer format, and its fix isn't released yet, so the integration now reads those alerts itself.
+- `climate.set_temperature` with `hvac_mode: heat` on an oven checks the temperature you give it, instead of the oven's previous setpoint.
+
+### Changed
+
+- Choosing a cooking mode for a remote start fills in the app's usual temperature for it, such as 350 °F for Bake, which you can change before starting.
+- The mode and temperature chosen for a start are discarded when Remote Ready ends, on an appliance error, or when the connection to Sub-Zero drops, so an old choice can't start the oven later. They can't be chosen while Home Assistant is reconnecting.
+
+### Diagnostics
+
+- An appliance's diagnostics show the mode and temperature chosen for its remote start that haven't been sent yet.
+
+### Documentation
+
+- Development setup installs `pytest-homeassistant`, the test package for Home Assistant 2026.11 and later. Tests run on 2026.8 and 2026.11.
+
 ## 1.07
 
 ### Changed

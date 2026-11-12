@@ -16,7 +16,6 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_system import US_CUSTOMARY_SYSTEM
-from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 
 from custom_components.subzero import panel_api
 from custom_components.subzero.api import ApiError, Appliance, RateLimited, token_state
@@ -36,6 +35,7 @@ from custom_components.subzero.panel_api import (
     effective_appearance,
     lock_code,
 )
+from tests.common import MockConfigEntry, async_fire_time_changed
 
 from .conftest import APPLIANCE_STATES
 

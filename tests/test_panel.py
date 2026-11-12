@@ -20,11 +20,6 @@ from homeassistant.config_entries import ConfigEntryDisabler, ConfigEntryState
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.loader import async_get_integration
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant_custom_component.common import (
-    MockConfigEntry,
-    async_capture_events,
-    async_fire_time_changed,
-)
 
 from custom_components.subzero import frontend
 from custom_components.subzero.api import RateLimited
@@ -40,6 +35,11 @@ from custom_components.subzero.frontend import (
     async_add_entry_panel,
     async_forget_entry_panel,
     async_remove_entry_panel,
+)
+from tests.common import (
+    MockConfigEntry,
+    async_capture_events,
+    async_fire_time_changed,
 )
 
 from .conftest import APPLIANCE_STATES

@@ -477,6 +477,7 @@ How the integration uses it (`fcm.py: FcmAlerts`) [I]:
 - Codes without a text key in the app's table (105, 217, 305) and the separately stored codes (400, 401) aren't subscribed. [I]
 - Turning alerts off, or removing the integration, removes its subscriptions (`fcm.py: async_remove_alert_subscriptions`, `__init__.py: async_remove_entry`).
 - Each alert is delivered as an event (§8) and starts a check (§13).
+- Messages are Web Push encrypted (`aesgcm`), with the key in `crypto-key` and the salt in `encryption`. firebase-messaging 0.4.5 reads both by position (`dh=`, `salt=`) without restoring base64 padding, so a header with a second parameter, such as `p256ecdsa` from a sender that signs, or an unpadded value raises "Incorrect padding". That stops its client before the message is acknowledged, so the server resends it on every reconnect and alerts stop. The fixes are unreleased (sdb9696/firebase-messaging pull requests 37 and 43). `fcm.py: PushClient` reads such a message again with the parameters found by name and padded, and skips, which acknowledges, one it still can't read. [I][?] (reported by orienw/ha-subzero 0.7.3)
 
 ## 7. Appliance state
 
@@ -868,7 +869,7 @@ Without an `appliance_type`, the refrigerator's upper limit follows the model: 4
 Each step is a separate `set`, awaited and confirmed before the next.
 
 **Oven start** (`controls.py: start_properties`, `coordinator.py: async_start`) [A][I]. It needs `cav*_remote_ready`, a closed door, a mode the app can start (not 0, not start-at-the-oven, not Gourmet), and a setpoint above 0 within range. [I]
-1. `cav_cook_mode`: the current mode
+1. `cav_cook_mode`: the current mode, or the one kept for the start
 2. `cav_unit_on: true`
 3. `cav_set_temp`: the target
 
@@ -876,6 +877,12 @@ Each step is a separate `set`, awaited and confirmed before the next.
 - Series 3 and 4 get the setpoint, only if one was requested, and then `cav*_unit_on: true`; the code comment says "E series and M series start with a power write alone". [I][?]
 - A cavity that's already on gets only the setpoint and `unit_on`, and only where they differ. [I]
 - Turning off is `cav_unit_on: false`; choosing the Off mode sends it. [I]
+
+**Start choices kept for the start** (`controls.py: held_for_start`, `start_temperature`; `coordinator.py: _hold_for_start`, `start_settings`) [I]. Ovens outside series 3 and 4 report `cav*_cook_mode` 0 and no setpoint while idle in Remote Ready, and drop a mode sent on its own after about 13 seconds. The app keeps both in its start dialog and sends them with the start. [?] (reported by orienw/ha-subzero 0.7.3, not yet seen here)
+- While `cav*_unit_on` is false and `cav*_remote_ready` is true on such an oven, a write of only `cav*_cook_mode` and `cav*_set_temp` is kept instead of sent. The select, climate entity, and Start button read the kept values over the reported ones. [I]
+- Choosing a mode keeps a setpoint for it too: a kept one that suits the mode, else the reported one if it suits, else the dialog's default, clamped to the mode's range. The defaults are Bake and Roast 350 °F, Bake stone 450, Dehydrate 135, Warm 180, and 325 for the rest. [I], defaults per orienw/ha-subzero [?]
+- The start sends the kept mode, `unit_on`, then the kept setpoint. Each write is checked against the writes still to come, so the power write sees the mode and setpoint it will start with. [I]
+- The kept values are dropped on any state change that shows the oven no longer idle in Remote Ready (push or status read), on an update error, on a snapshot after one, and when the live connection drops, including during its grace period. They can't be chosen while the connection or the appliance's channel is down. [I]
 
 **Dishwasher start.** The app sends the cycle, then the delay (not for cycle 9), then each option, but only those changed in its start dialog, and finally `wash_cycle_on: true`. [A] The integration writes the cycle, delay, and options whenever they're changed, and its Start button sends only `wash_cycle_on: true`, even if already reported. It needs `remote_ready`, a closed door, and `mode` other than 2. [I]
 

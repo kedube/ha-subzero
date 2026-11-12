@@ -61,6 +61,8 @@ def appliance_diagnostics(
         },
         "unrecognized_state_keys": sorted(coordinator.unrecognized_keys),
         "state": async_redact_data(coordinator.data, PRIVATE_KEYS),
+        # The cooking mode and temperature chosen for an oven's remote start, not yet sent.
+        "start_settings": dict(coordinator.start_settings),
         "faults": records,
         "panel": panel,
     }

@@ -112,7 +112,7 @@ class SubZeroStartButton(SubZeroEntity, ButtonEntity):
         if not self.control_unlocked(key, True):
             return False
         try:
-            validate_remote_start(data, key)
+            validate_remote_start(self.coordinator.start_state, key)
         except ServiceValidationError:
             return False
         return supports_control(data, key)

@@ -181,6 +181,7 @@ Each oven cavity has its own entities. A second cavity's entities start with **L
 | Dismiss kitchen timer | Stops a running timer or clears a finished one, like the app's Cancel and Tap to Dismiss. |
 
 - Turn on **Remote Ready** at the oven before each remote start; opening the door cancels it. See [Wolf's Remote Ready guide](https://www.subzero-wolf.com/assistance/answers/wolf/m-series-oven/sub-zero-group-owners-app---set-up-remote-access).
+- Except on E series and M series ovens, which start with the mode and temperature set at the oven, choose the cooking mode and temperature in Home Assistant while the oven waits in Remote Ready, then press **Start oven**. These ovens report no mode or temperature while they wait, so, as the app does, Home Assistant keeps your choice and sends it with the start. Choosing a mode fills in the app's usual temperature for it, which you can change. The choice is discarded when Remote Ready ends, on an appliance error, or when the connection to Sub-Zero drops, and can't be made while it's reconnecting. To choose a temperature and start in one step, call `climate.set_temperature` with `hvac_mode: heat`.
 - Broil, Convection broil, Proof, Self clean, and Gourmet programs must be started at the oven, including from automations.
 - While either cavity self-cleans, the only change allowed is turning it off. The interior light is unavailable during Proof.
 - The oven temperature is shown even while the cavity is off. An oven that's off keeps reporting its last reading, so it stays stale until the cavity turns on again. Probe readings show as unknown when no probe is in use.
@@ -378,7 +379,7 @@ With Python 3.14:
 
 ```sh
 python -m venv .venv
-.venv/bin/pip install -r requirements-test.txt
+.venv/bin/pip install -r requirements-test.txt pytest-homeassistant
 .venv/bin/pytest
 .venv/bin/ruff check .
 .venv/bin/ruff format --check .

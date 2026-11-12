@@ -15,7 +15,6 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_system import US_CUSTOMARY_SYSTEM
-from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 
 from custom_components.subzero.api import (
     ApiError,
@@ -33,6 +32,7 @@ from custom_components.subzero.coordinator import (
     follow_up_check_minutes,
     shared_connection_check_minutes,
 )
+from tests.common import MockConfigEntry, async_fire_time_changed
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
@@ -115,7 +115,10 @@ async def fire_time_changed(hass, when=None):
     while checks := [
         task
         for task in hass._background_tasks
-        if task.get_name().endswith(" - channel check") and not task.done()
+        # From Home Assistant 2026.11 the set also holds futures, which have no name.
+        if isinstance(task, asyncio.Task)
+        and task.get_name().endswith(" - channel check")
+        and not task.done()
     ]:
         await asyncio.gather(*checks, return_exceptions=True)
     await hass.async_block_till_done()

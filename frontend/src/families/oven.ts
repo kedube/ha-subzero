@@ -148,19 +148,26 @@ function cavityReading(ctx: ApplianceContext, prefix: Prefix): CavityReading {
   const climate = ctx.state(`${prefix}_set_temp`, "climate");
   const climateState = read(ctx, `${prefix}_set_temp`, "climate");
   const on = isOn(ctx, `${prefix}_unit_on`, "binary_sensor") ?? (climateState !== null && climateState !== "off");
+  const remoteReady = isOn(ctx, `${prefix}_remote_ready`, "binary_sensor") === true;
+  // Most ovens report no mode or temperature while they wait in Remote Ready. The integration keeps
+  // the ones chosen for the start on the cooking mode select and the climate entity, and sends
+  // them with it, so those come first until the oven starts.
+  const waiting = !on && remoteReady;
   const preheated = isOn(ctx, `${prefix}_at_set_temp`, "binary_sensor") === true;
   const temperature = numberOf(ctx, `${prefix}_temp`, "sensor") ?? toNumber(climate?.attributes?.current_temperature);
-  const setpoint = numberOf(ctx, `${prefix}_set_temp`, "sensor") ?? toNumber(climate?.attributes?.temperature);
+  const reported = numberOf(ctx, `${prefix}_set_temp`, "sensor");
+  const chosen = toNumber(climate?.attributes?.temperature);
+  const setpoint = waiting ? (chosen ?? reported) : (reported ?? chosen);
   return {
     on,
     preheated,
     temperature,
     setpoint,
-    mode: read(ctx, `${prefix}_cook_mode`, "sensor", "select"),
+    mode: waiting ? read(ctx, `${prefix}_cook_mode`, "select", "sensor") : read(ctx, `${prefix}_cook_mode`, "sensor", "select"),
     light: isOn(ctx, `${prefix}_light_on`, "switch", "binary_sensor") === true,
     door: isOn(ctx, `${prefix}_door_ajar`, "binary_sensor") === true,
     probe: isOn(ctx, `${prefix}_probe_on`, "binary_sensor") === true,
-    remoteReady: isOn(ctx, `${prefix}_remote_ready`, "binary_sensor") === true,
+    remoteReady,
     progress: preheatProgress(on, preheated, temperature, setpoint, ctx.preheatStart(prefix), roomTemperature(ctx.hass)),
   };
 }

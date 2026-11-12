@@ -41,6 +41,7 @@ from .const import (
     RINSE_AND_HOLD,
     SELF_CLEAN,
     SETPOINT_KEYS,
+    START_TEMPERATURES,
     WASH_CYCLES,
     WINE_SETPOINT_KEYS,
     WRITABLE_BOOLEAN_KEYS,
@@ -441,6 +442,25 @@ def cook_mode_offered(data: dict, key: str, mode: int) -> bool:
     return True
 
 
+def held_for_start(data: dict, key: str) -> bool:
+    """Whether a cooking mode or temperature waits for the remote start.
+
+    Ovens outside E series and M series report no cooking mode or temperature while
+    idle in Remote Ready, and drop a cooking mode sent on its own, so like the app's
+    start dialog the choice is kept and sent with the start. E series and M series
+    start with the settings made at the oven.
+    """
+    prefix, _, name = key.partition("_")
+    parts = appliance_type(data)
+    return (
+        prefix in OVEN_PREFIXES
+        and name in {"cook_mode", "set_temp"}
+        and data.get(f"{prefix}_unit_on") is False
+        and data.get(f"{prefix}_remote_ready") is True
+        and (parts is None or parts[1] not in LEGACY_START_SERIES)
+    )
+
+
 def validate_remote_start(data: dict, key: str) -> None:
     if key == "wash_cycle_on":
         if data.get("remote_ready") is not True:
@@ -529,6 +549,25 @@ def temperature_range(key: str, data: dict) -> tuple[int, int] | None:
     return None
 
 
+def start_temperature(data: dict, key: str, kept: int | None) -> int | None:
+    """The setpoint to keep for a remote start in the cavity's cooking mode.
+
+    Like the app's start dialog, a kept setpoint that suits the mode stays. Without
+    one the reported setpoint stands when it suits the mode, and the mode's usual
+    temperature is kept when it does not.
+    """
+    bounds = temperature_range(key, data)
+    if bounds is None:
+        return None
+    if kept is not None and bounds[0] <= kept <= bounds[1]:
+        return kept
+    reported = data.get(key)
+    if is_finite_number(reported) and bounds[0] <= reported <= bounds[1]:
+        return None
+    usual = START_TEMPERATURES.get(data[key.replace("set_temp", "cook_mode")], 325)
+    return min(max(usual, bounds[0]), bounds[1])
+
+
 # Home Assistant shows Celsius users a °F setpoint range widened to whole degrees (the minimum
 # floored, the maximum ceiled), so its end values come back as much as a Celsius degree, 1.8 °F,
 # past the range's ends once converted and rounded.
@@ -550,10 +589,21 @@ def snap_to_range(value: int, bounds: tuple[float, float] | None) -> int:
     return value
 
 
-def validate_control_properties(data: dict, temperature_unit: str | None, properties: dict) -> None:
+def validate_control_properties(
+    data: dict, temperature_unit: str | None, properties: dict, pending: dict | None = None
+) -> None:
+    """Check settings against the reported state before they are sent.
+
+    `pending` holds the cooking mode and temperature of a remote start that are still
+    to be sent. They travel with the start, so its writes are checked against the
+    state they will leave.
+    """
     if not properties:
         raise ServiceValidationError("No settings supplied.")
+    reported = data
     for key, value in properties.items():
+        if pending:
+            data = {**reported, **{k: v for k, v in pending.items() if k != key}}
         if not supports_control(data, key):
             raise ServiceValidationError("The appliance does not report this setting.")
         if reason := control_lock(data, key, value):
