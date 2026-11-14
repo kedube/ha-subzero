@@ -2,7 +2,7 @@
 
 Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then 2.00.
 
-## Unreleased
+## 1.11
 
 ### Fixed
 
