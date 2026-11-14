@@ -40,6 +40,25 @@ export function eventsFrom(rows: unknown, since: number): ApplianceEvent[] {
   return events.sort((a, b) => b.time - a.time);
 }
 
+// The doors each door alert is about, by their binary sensors' property keys.
+const ALERT_DOORS: Record<string, readonly string[]> = {
+  refrigerator_door_ajar: ["ref_door_ajar", "ref2_door_ajar"],
+  freezer_door_ajar: ["frz_door_ajar"],
+  wine_door_ajar: ["wine_door_ajar", "wine2_door_ajar"],
+  ice_maker_door_ajar: ["ice_door_ajar"],
+  oven_door_ajar: ["cav_door_ajar"],
+  lower_oven_door_ajar: ["cav2_door_ajar"],
+};
+
+/**
+ * Whether an event is a door alert whose door has closed since, by the doors as drawn: it would
+ * read as an open door under a closed one. A door with no sensor can't say, so its alert stands.
+ */
+export function doorClosedSince(type: string, doors: Readonly<Record<string, boolean>>): boolean {
+  const keys = ALERT_DOORS[type]?.filter((key) => key in doors);
+  return !!keys?.length && !keys.some((key) => doors[key]);
+}
+
 /** The event the Appliance event entity shows now, read as its history row would be; null when it has none. */
 export function liveEvent(entity: HassEntity | undefined): ApplianceEvent | null {
   if (!entity) return null;

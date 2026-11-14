@@ -3,7 +3,7 @@ import { renderGeneric } from "../drawings/generic";
 import { renderDrawing } from "../drawings/index";
 import type { DrawingInput, DrawingState } from "../drawings/types";
 import { translatorFor } from "../data/locale";
-import { eventName, liveEvent, ovenNames, type OvenNames } from "../families/events";
+import { doorClosedSince, eventName, liveEvent, ovenNames, type OvenNames } from "../families/events";
 import { familyModel, makeContext, type ContextHelpers } from "../families/index";
 import type { ApplianceContext, DisplayText, FamilyModel, InfoRow, StatusPill } from "../families/types";
 import type { HomeAssistant } from "../hass";
@@ -18,9 +18,19 @@ export interface CardView {
   /** The display has nothing live to show, so its digits are greyed (see displayIdle). */
   dim: boolean;
   state: DrawingState;
-  /** The appliance's latest event, from its event entity's live state: its name, and when, in ms. */
+  /**
+   * The appliance's latest event, from its event entity's live state: its name, and when, in ms.
+   * Null once it's older than EVENT_SHOWN_FOR, or for a door alert whose door has closed.
+   */
   event: { name: string; time: number } | null;
 }
+
+/**
+ * How long the overview card shows an appliance's latest event: long enough for a wash that
+ * ended overnight, not so long that an alert from days ago reads as news. The full view's
+ * Recent events keeps the history.
+ */
+export const EVENT_SHOWN_FOR = 12 * 60 * 60 * 1000;
 
 /**
  * Whether the display has nothing live to show: every oven off with no kitchen timer running, or
@@ -120,7 +130,8 @@ export function cardView(
 ): CardView {
   const { state, status, display, dim, ctx, part } = evaluate(appliance, hass, t, now, helpers);
   const eventId = appliance.entities?.appliance_event?.event;
-  const live = eventId ? liveEvent(hass.states[eventId]) : null;
+  const latest = eventId ? liveEvent(hass.states[eventId]) : null;
+  const live = latest && now - latest.time < EVENT_SHOWN_FOR && !doorClosedSince(latest.type, state.doors) ? latest : null;
   return {
     status,
     rows: part("info rows", (model) => model.infoRows(ctx), []),

@@ -2,6 +2,12 @@
 
 Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then 2.00.
 
+## Unreleased
+
+### Fixed
+
+- The sidebar panel's overview cards no longer show old events as if they were news, such as a door alert from weeks ago. A card shows an appliance's latest event for 12 hours. A door alert, such as **Refrigerator door open**, shows only while that door is still open. Recent events in an appliance's full view still lists every event.
+
 ## 1.09
 
 ### Added

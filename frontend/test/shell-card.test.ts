@@ -236,12 +236,51 @@ describe("sz-appliance-card", () => {
     expect(text(line().querySelector(".what"))).toBe("Wash cycle complete");
     expect(text(line().querySelector("time"))).toBe("11:42 AM");
     expect(line().querySelector("time")!.getAttribute("datetime")).toBe("2026-10-24T11:42:00.000Z");
-    // It follows the entity, with no history read; an older day shows its date.
-    card.hass = { ...hass, states: fired("2026-10-21T08:05:00.000+00:00", "rinse_aid_low") };
+    // It follows the entity, with no history read; one from the day before shows its date.
+    card.hass = { ...hass, states: fired("2026-10-24T20:05:00.000+00:00", "rinse_aid_low") };
+    card.now = Date.parse("2026-10-25T06:00:00Z");
     await settle(card);
-    expect(text(line())).toBe("Rinse aid low Oct 21, 8:05 AM");
+    expect(text(line())).toBe("Rinse aid low Oct 24, 8:05 PM");
     expect(hass.callWS).not.toHaveBeenCalled();
     expect(text(line().previousElementSibling)).toContain("Refrigerator");
+  });
+
+  it("leaves out an event once it's 12 hours old, keeping the line's place", async () => {
+    fake.model = model();
+    const EVENT = "event.range_appliance_event";
+    const range = makeAppliance("range", SPECS.range, { entities: { appliance_event: { event: EVENT } } });
+    const at = "2026-10-24T00:00:01.000+00:00";
+    const card = await mount(range, makeHass({ states: { [EVENT]: entity(EVENT, at, { event_type: "kitchen_timer_complete" }, at) } }));
+    const line = () => shadow(card).querySelector(".event")!;
+    expect(text(line().querySelector(".what"))).toBe("Kitchen timer ended");
+    // The clock moving on is enough: the card redraws on each tick.
+    card.now = Date.parse("2026-10-24T12:00:01Z");
+    await settle(card);
+    expect(line()).not.toBeNull();
+    expect(text(line())).toBe("");
+  });
+
+  it("shows a door alert only while its door is open", async () => {
+    const DOOR = "binary_sensor.fridge_door";
+    fake.model = model({
+      drawingState: vi.fn((ctx: ApplianceContext) => ({
+        available: true,
+        doors: { ref_door_ajar: ctx.hass.states[DOOR]?.state === "on", frz_door_ajar: false },
+        readouts: {},
+      })),
+    });
+    const EVENT = "event.fridge_appliance_event";
+    const fridge = { ...FRIDGE, entities: { ...FRIDGE.entities, appliance_event: { event: EVENT } } };
+    const at = "2026-10-24T11:50:00.000+00:00";
+    const door = (state: string) => ({ [DOOR]: entity(DOOR, state), [EVENT]: entity(EVENT, at, { event_type: "refrigerator_door_ajar" }, at) });
+    const hass = hassFor({ states: door("on") });
+    const card = await mount(fridge, hass);
+    const line = () => shadow(card).querySelector(".event")!;
+    expect(text(line().querySelector(".what"))).toBe("Refrigerator door open");
+    // Closed, it would read as an open door under a closed one.
+    card.hass = { ...hass, states: door("off") };
+    await settle(card);
+    expect(text(line())).toBe("");
   });
 
   it("keeps the event line's place while there's no event, and has none without the entity", async () => {

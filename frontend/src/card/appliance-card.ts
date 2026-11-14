@@ -104,7 +104,7 @@ export class ApplianceCard extends LitElement {
 
   /**
    * The appliance's latest event and when it happened, under the info panel. The line is there
-   * for any appliance with an event entity, empty until it has an event, so a row of cards keeps
+   * for any appliance with an event entity, empty while it has no recent event, so a row of cards keeps
    * its panels level.
    */
   private renderEvent(hass: HomeAssistant, appliance: PanelAppliance, view: CardView) {

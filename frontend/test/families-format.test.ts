@@ -9,7 +9,7 @@ import {
   wifiQuality,
   withUnit,
 } from "../src/families/common";
-import { eventName, eventsFrom, liveEvent, ovenNames } from "../src/families/events";
+import { doorClosedSince, eventName, eventsFrom, liveEvent, ovenNames } from "../src/families/events";
 import type { HomeAssistant } from "../src/hass";
 import { makeTranslate } from "../src/i18n";
 import { range, wallOven } from "./fixtures/appliances";
@@ -140,6 +140,18 @@ describe("events", () => {
       { type: "dishwasher_started", time: Date.parse("2026-10-24T17:59:30Z") },
       { type: "dishwasher_complete", time: Date.parse("2026-10-23T08:30:00Z") },
     ]);
+  });
+
+  it("knows a door alert whose door has closed since", () => {
+    expect(doorClosedSince("refrigerator_door_ajar", { ref_door_ajar: false, frz_door_ajar: true })).toBe(true);
+    expect(doorClosedSince("refrigerator_door_ajar", { ref_door_ajar: true })).toBe(false);
+    // Either of a zone's doors keeps it standing.
+    expect(doorClosedSince("wine_door_ajar", { wine_door_ajar: false, wine2_door_ajar: true })).toBe(false);
+    expect(doorClosedSince("lower_oven_door_ajar", { cav_door_ajar: true, cav2_door_ajar: false })).toBe(true);
+    expect(doorClosedSince("oven_door_ajar", { cav_door_ajar: true, cav2_door_ajar: false })).toBe(false);
+    // Without the door's sensor there's no telling; other events aren't about doors.
+    expect(doorClosedSince("freezer_door_ajar", { ref_door_ajar: false })).toBe(false);
+    expect(doorClosedSince("kitchen_timer_complete", { cav_door_ajar: false })).toBe(false);
   });
 
   it("names events in the user's language", () => {
