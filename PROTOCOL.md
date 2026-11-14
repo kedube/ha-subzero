@@ -961,7 +961,8 @@ Active faults come from this endpoint, not from the `active_faults` property, wh
 
 | Condition | Integration | Source |
 | --- | --- | --- |
-| HTTP 429 | Reads `Retry-After` as seconds or an HTTP date (at least 1 s; 600 s if missing or unreadable). Until then, every request from that account fails at once with `RateLimited` | [I] (`retry_delay`, `_json`) |
+| HTTP 429 | Reads `Retry-After` as seconds or an HTTP date (at least 1 s; 600 s if missing or unreadable). Until then, every request from that account to the same API fails at once with `RateLimited`: the APIs are the first path segment on `API_BASE` (`consumerapp`, `signal-r`, `fault-notifications`, `faults-meta-data`), the SignalR service, and sign-in. Requests to other APIs go ahead. Each 429 is logged with the request it refused, and diagnostics list the last 10 (`rate_limits`) and count requests over the last hour (`requests_last_hour`) | [I] (`retry_delay`, `rate_limit_scope`, `_json`) |
+| Which API Sub-Zero limits | On 2026-11-14 a scheduled connection renewal got a 429, and the connection stayed down for 40 minutes, its timing fitting a refused reconnect every 600 s. Five fault reads went through in the middle, seconds before a reconnect that the log shows was held back again. So the limit didn't cover the whole account; per API is how Azure API Management limits. Whether `negotiateUser`, the SignalR negotiate, or the channel opens were refused isn't known; `rate_limits` records it from 1.11 | [O][?] |
 | 429 during a check's read | The read is skipped and the appliance keeps its state; updates continue | [I] |
 | 429 during setup | Setup is retried later (`ConfigEntryNotReady`) | [I] |
 | 429 while opening channels | On a new connection's first round of opens, the connection ends and the reconnect waits at least `Retry-After`. On a retry of a channel that already failed, the connection stays and the retry waits at least `Retry-After` | [I] |

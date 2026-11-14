@@ -8,8 +8,8 @@ import math
 import random
 import time
 import uuid
-from collections import deque
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections import Counter, deque
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from contextlib import AsyncExitStack, aclosing
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -41,6 +41,12 @@ CONNECT_TIMEOUT = 30
 RECENT_CONNECTIONS = 10
 # Longest close reason or SignalR error text diagnostics keep.
 MAX_CLOSE_TEXT = 200
+# How many recent rate limits diagnostics list, newest last.
+RECENT_RATE_LIMITS = 10
+# Diagnostics count requests over the last hour, by name.
+REQUEST_WINDOW = 3600
+# Requests remembered for the count: far more than an hour's.
+MAX_LOGGED_REQUESTS = 5000
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -66,11 +72,48 @@ class ApiError(Exception):
 
 
 class RateLimited(ApiError):
-    """Wait before making another request to the service."""
+    """Wait before making another request to the same API.
 
-    def __init__(self, retry_after: float):
+    `request` names the request Sub-Zero refused, which may be an earlier one than the
+    request that raised this, since a refusal holds back the rest of its API.
+    """
+
+    def __init__(self, retry_after: float, request: str | None = None):
         self.retry_after = max(1, retry_after)
-        super().__init__("Sub-Zero temporarily limited requests.")
+        self.request = request
+        if request is None:
+            message = "Sub-Zero temporarily limited requests."
+        else:
+            message = (
+                f"Sub-Zero temporarily limited requests ({request}, "
+                f"retrying in {round(self.retry_after)} s)."
+            )
+        super().__init__(message)
+
+
+def rate_limit_scope(url: URL) -> str:
+    """The API a 429 holds back: the one that sent it.
+
+    Sub-Zero's APIs share a host behind Azure API Management, which limits each API on
+    its own, and differ in their first path segment (`consumerapp`, `signal-r`,
+    `fault-notifications`). On 2026-11-14 fault reads went through between refused
+    attempts to connect. The SignalR service and sign-in are hosts of their own.
+    """
+    if url.origin() == URL(API_BASE):
+        return next((part for part in url.path.split("/") if part), "")
+    if url.origin() == URL(SIGNALR_ORIGIN):
+        return "signalr"
+    return "sign-in"
+
+
+def request_counts(log: Iterable[tuple[float, str, bool]], now: float) -> dict:
+    """How many of each request were sent, and held back by a rate limit, lately."""
+    sent: Counter[str] = Counter()
+    held: Counter[str] = Counter()
+    for at, name, was_held in log:
+        if now - at <= REQUEST_WINDOW:
+            (held if was_held else sent)[name] += 1
+    return {"sent": dict(sorted(sent.items())), "held": dict(sorted(held.items()))}
 
 
 def error_summary(error: BaseException) -> str:
@@ -378,7 +421,13 @@ class SubZeroClient:
             self.tokens["expires_at"] = 0
         self.on_tokens = on_tokens
         self._refresh_lock = asyncio.Lock()
-        self._retry_at = 0.0
+        # Until when each API (rate_limit_scope) is held back by a 429, and which
+        # request it refused.
+        self._holds: dict[str, tuple[float, str]] = {}
+        # Recent 429s: when, which request, and the wait Sub-Zero asked for.
+        self.rate_limits: deque[dict] = deque(maxlen=RECENT_RATE_LIMITS)
+        # (monotonic time, request name, held back) for each request, for request_counts.
+        self.request_log: deque[tuple[float, str, bool]] = deque(maxlen=MAX_LOGGED_REQUESTS)
         self.push_connected = False
         self._renewal_requested = False
         # Counts notification connections, so a message can be matched to the one
@@ -402,11 +451,16 @@ class SubZeroClient:
     def _api_token(self) -> str:
         return self.tokens.get("id_token", self.tokens["access_token"])
 
+    def request_counts(self) -> dict:
+        """Requests in the last hour by name, sent and held back by a rate limit."""
+        return request_counts(self.request_log, time.monotonic())
+
     async def _json(
         self,
         method: str,
         url: str | URL,
         *,
+        name: str,
         token_request=False,
         appliance_command=False,
         list_response=False,
@@ -414,8 +468,14 @@ class SubZeroClient:
         headers: dict[str, str] | None = None,
         **kwargs,
     ) -> dict | list:
-        if self._retry_at > time.monotonic():
-            raise RateLimited(self._retry_at - time.monotonic())
+        """Send a request named `name` for diagnostics, a name without IDs in it."""
+        scope = rate_limit_scope(URL(url))
+        now = time.monotonic()
+        held_until, refused = self._holds.get(scope, (0.0, ""))
+        if held_until > now:
+            self.request_log.append((now, name, True))
+            raise RateLimited(held_until - now, refused)
+        self.request_log.append((now, name, False))
         try:
             async with self.session.request(
                 method,
@@ -426,9 +486,29 @@ class SubZeroClient:
                 **kwargs,
             ) as response:
                 if response.status == 429:
-                    delay = retry_delay(response.headers.get("Retry-After"))
-                    self._retry_at = time.monotonic() + delay
-                    raise RateLimited(delay)
+                    header = response.headers.get("Retry-After")
+                    delay = retry_delay(header)
+                    self._holds[scope] = (time.monotonic() + delay, name)
+                    # Once per refusal: requests held back meanwhile aren't sent or logged.
+                    _LOGGER.warning(
+                        "Sub-Zero refused a %s request (HTTP 429); requests to its %s API "
+                        "wait %d s%s",
+                        name,
+                        scope,
+                        round(delay),
+                        "" if header is not None else ", as it gave no Retry-After",
+                    )
+                    self.rate_limits.append(
+                        {
+                            "time": datetime.now(UTC).isoformat(),
+                            "request": name,
+                            "api": scope,
+                            "retry_after": round(delay),
+                            # Whether Sub-Zero said how long to wait, or the default applies.
+                            "retry_after_sent": header is not None,
+                        }
+                    )
+                    raise RateLimited(delay, name)
                 if response.status in (401, 403) or (token_request and response.status == 400):
                     raise InvalidAuth("Sub-Zero requires a new sign-in.")
                 if appliance_command and (200 <= response.status < 300 or response.status == 500):
@@ -477,6 +557,7 @@ class SubZeroClient:
             data = await self._json(
                 "POST",
                 TOKEN_URL,
+                name="token refresh",
                 token_request=True,
                 data={
                     "grant_type": "refresh_token",
@@ -497,6 +578,7 @@ class SubZeroClient:
         method: str,
         path: str,
         *,
+        name: str,
         user_id: str | None = None,
         list_response=False,
         extra_headers: dict[str, str] | None = None,
@@ -511,20 +593,21 @@ class SubZeroClient:
             "Accept": "application/json",
             **(extra_headers or {}),
         }
+        url = API_BASE + path
         try:
             return await self._json(
-                method, API_BASE + path, headers=headers, list_response=list_response, **kwargs
+                method, url, name=name, headers=headers, list_response=list_response, **kwargs
             )
         except InvalidAuth:
             await self.refresh(rejected_token=token)
         headers["Authorization"] = "Bearer " + self._api_token
         headers["Userid"] = user_id or self.tokens["api_user_id"]
         return await self._json(
-            method, API_BASE + path, headers=headers, list_response=list_response, **kwargs
+            method, url, name=name, headers=headers, list_response=list_response, **kwargs
         )
 
     async def appliances(self) -> list[Appliance]:
-        data = await self._request("GET", "/consumerapp/user/devices")
+        data = await self._request("GET", "/consumerapp/user/devices", name="appliance list")
         if not isinstance(data.get("devices"), list):
             raise ApiError("Sub-Zero did not return the appliance list.")
         account_id = data.get("mySubZeroUniqueUserId")
@@ -558,6 +641,7 @@ class SubZeroClient:
         return await self._request(
             "POST",
             path,
+            name=command,
             json={"req_id": str(uuid.uuid4()), "pload": payload},
             appliance_command=True,
         )
@@ -619,7 +703,7 @@ class SubZeroClient:
     async def appliance_faults(self, device_id: str) -> list[ApplianceFault]:
         path = "/fault-notifications/v1/notifications/device/" + quote(device_id, safe="")
         try:
-            data = await self._request("GET", path, list_response=True)
+            data = await self._request("GET", path, name="faults", list_response=True)
         except ApiError as error:
             if error.status == 404:
                 return []
@@ -640,7 +724,7 @@ class SubZeroClient:
             + quote(applies_to, safe="")
         )
         try:
-            data = await self._request("GET", path, list_response=True)
+            data = await self._request("GET", path, name="fault details", list_response=True)
         except ApiError, InvalidAuth:
             return None
         if not isinstance(data, list) or not data:
@@ -658,11 +742,14 @@ class SubZeroClient:
             metadata["resolution_steps"] = "\n".join(steps)
         return metadata or None
 
-    async def _alerts_request(self, method: str, path: str, psid: str | None = None, **kwargs):
+    async def _alerts_request(
+        self, method: str, path: str, psid: str | None = None, *, name: str, **kwargs
+    ):
         """Send a phone alert request the way the app does, with its device ID as `uuid`."""
         return await self._request(
             method,
             "/consumerapp/api/notification" + path,
+            name=name,
             extra_headers={"uuid": psid} if psid else None,
             any_response=True,
             **kwargs,
@@ -679,6 +766,7 @@ class SubZeroClient:
                 f"/registrations/devices/{quote(psid, safe='')}/appliances/"
                 + quote(device_id, safe=""),
                 psid,
+                name="alert registration",
             )
         except ApiError as error:
             if error.status == 404:
@@ -697,7 +785,12 @@ class SubZeroClient:
 
     async def register_for_alerts(self, registration: dict, *, update: bool) -> None:
         """Create or update an appliance's alert registration, as the app does."""
-        await self._alerts_request("PUT" if update else "POST", "/registrations", json=registration)
+        await self._alerts_request(
+            "PUT" if update else "POST",
+            "/registrations",
+            name="alert registration update" if update else "alert registration create",
+            json=registration,
+        )
 
     async def alert_types(self, psid: str, device_id: str) -> set[int]:
         """Return the alert codes a phone ID receives for an appliance."""
@@ -705,6 +798,7 @@ class SubZeroClient:
             "GET",
             f"/devices/{quote(psid, safe='')}/appliances/{quote(device_id, safe='')}/events",
             psid,
+            name="alert types",
         )
         codes = set()
         for item in data if isinstance(data, list) else ():
@@ -719,6 +813,7 @@ class SubZeroClient:
             "POST",
             f"/devices/{quote(psid, safe='')}/events",
             psid,
+            name="alert subscribe",
             json=[
                 {
                     "deviceId": device_id,
@@ -737,6 +832,7 @@ class SubZeroClient:
             "DELETE",
             f"/devices/{quote(psid, safe='')}/events/type",
             psid,
+            name="alert unsubscribe",
             json={"valueTypes": [str(code) for code in sorted(codes)], "deviceId": device_id},
         )
 
@@ -780,7 +876,7 @@ class SubZeroClient:
         # A new connection opens every channel, so it settles any pending request.
         self._renewal_requested = False
         info = await self._request(
-            "POST", "/signal-r/negotiateUser", user_id=self.tokens["user_id"]
+            "POST", "/signal-r/negotiateUser", name="negotiateUser", user_id=self.tokens["user_id"]
         )
         try:
             endpoint = URL(info["url"])
@@ -797,6 +893,7 @@ class SubZeroClient:
         transport = await self._json(
             "POST",
             negotiate,
+            name="SignalR negotiate",
             headers={
                 **headers,
                 "X-Requested-With": "FlutterHttpClient",

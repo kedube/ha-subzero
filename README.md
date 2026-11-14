@@ -326,6 +326,8 @@ The integration download shows:
 - the Firebase listener's status, its last subscription sync, and how many alerts arrived;
 - the last 10 connections: when each started and ended, and why it ended (`lifetime`, `renewal`, `closed`, or an error). When the connection was closed or lost, `socket` shows how: whether Sub-Zero sent a close, with its code and reason, or the network dropped it;
 - the last 10 connection attempts that failed, with when and why, such as a network error looking up Sub-Zero's address;
+- the requests sent to Sub-Zero in the last hour, by kind, such as `get` for a status read or `negotiateUser` for a new connection, and those held back by a rate limit;
+- the last 10 times Sub-Zero limited requests (HTTP 429): which request it refused, the API that then waits, how long, and whether Sub-Zero said how long to wait;
 - whether the sidebar panel is on and in the sidebar.
 
 Each appliance's download shows its state, how the panel draws it (the layout read from its model number, and its Appearance), and these counters:

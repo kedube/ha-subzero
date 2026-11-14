@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import time
+from collections import deque
 from datetime import UTC, datetime, timedelta, timezone
 from functools import partial
 from types import SimpleNamespace
@@ -1997,6 +1999,25 @@ async def test_temperature_readings_and_limits_follow_home_assistant_units(hass,
             blocking=True,
         )
     assert appliances.client.set_property.await_count == 1
+
+
+async def test_diagnostics_show_recent_requests_and_rate_limits(hass, appliances):
+    client = appliances.entry.runtime_data.client
+    limit = {
+        "time": "2026-11-14T08:17:29+00:00",
+        "request": "negotiateUser",
+        "api": "signal-r",
+        "retry_after": 600,
+        "retry_after_sent": False,
+    }
+    client.rate_limits = deque([limit])
+    now = time.monotonic()
+    client.request_log = deque(
+        [(now - 4000, "get", False), (now - 60, "get", False), (now, "negotiateUser", True)]
+    )
+    result = await async_get_config_entry_diagnostics(hass, appliances.entry)
+    assert result["rate_limits"] == [limit]
+    assert result["requests_last_hour"] == {"sent": {"get": 1}, "held": {"negotiateUser": 1}}
 
 
 async def test_diagnostics_omit_private_values(hass, appliances):

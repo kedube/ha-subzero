@@ -1,13 +1,14 @@
 """Download appliance capabilities without account or network identifiers."""
 
 import logging
+import time
 
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceEntry
 
 from . import SubZeroConfigEntry
-from .api import fault_record
+from .api import fault_record, request_counts
 from .const import DOMAIN, PRIVATE_KEYS
 from .coordinator import (
     SubZeroCoordinator,
@@ -85,6 +86,9 @@ async def async_get_config_entry_diagnostics(
         "notifications": dict(account.client.notification_stats),
         "connections": [dict(connection) for connection in account.client.connection_history],
         "failed_connections": [dict(attempt) for attempt in account.client.failed_connections],
+        # Requests to Sub-Zero in the last hour by kind, and the latest it refused (HTTP 429).
+        "requests_last_hour": request_counts(account.client.request_log, time.monotonic()),
+        "rate_limits": [dict(limit) for limit in account.client.rate_limits],
         "firebase": {
             "enabled": firebase_alerts_enabled(entry),
             "connected": bool(alerts and alerts.push and alerts.push.is_started()),

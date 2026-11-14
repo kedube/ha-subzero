@@ -13,9 +13,10 @@ import aiohttp
 import pytest
 from aiohttp import web
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from yarl import URL
 
 from custom_components.subzero import api
-from custom_components.subzero.auth import InvalidAuth
+from custom_components.subzero.auth import TOKEN_URL, InvalidAuth
 from custom_components.subzero.const import (
     STATE_KEYS,
     WRITABLE_BOOLEAN_KEYS,
@@ -416,8 +417,101 @@ async def test_rate_limit_blocks_followup_requests(api_server, tokens):
             with pytest.raises(api.RateLimited) as error:
                 await client.appliances()
             assert 298 <= error.value.retry_after <= 300
+            assert error.value.request == "appliance list"
     assert len(api_server["requests"]) == 1
     assert api_server["refreshes"] == 0
+    assert [limit["retry_after_sent"] for limit in client.rate_limits] == [True]
+    assert client.request_counts()["held"] == {"appliance list": 2}
+
+
+def test_rate_limits_are_kept_per_api():
+    base = URL(api.API_BASE)
+    assert api.rate_limit_scope(base / "consumerapp/device/x/directmethod/executeAPICmd") == (
+        "consumerapp"
+    )
+    assert api.rate_limit_scope(base / "signal-r/negotiateUser") == "signal-r"
+    assert api.rate_limit_scope(base / "fault-notifications/v1/notifications/device/x") == (
+        "fault-notifications"
+    )
+    signalr = URL(api.SIGNALR_ORIGIN + "/client/negotiate?hub=x")
+    assert api.rate_limit_scope(signalr) == "signalr"
+    assert api.rate_limit_scope(URL(TOKEN_URL)) == "sign-in"
+
+
+def test_request_counts_cover_the_last_hour():
+    log = [(50.0, "get", False), (100.0, "get", False), (3700.0, "get", False)]
+    log.append((3700.0, "open_cloud_async", True))
+    assert api.request_counts(log, 3700.0) == {
+        "sent": {"get": 2},
+        "held": {"open_cloud_async": 1},
+    }
+
+
+async def test_a_rate_limit_holds_back_only_the_api_that_sent_it(
+    aiohttp_server, monkeypatch, socket_enabled, tokens, caplog
+):
+    """On 2026-11-14 fault reads went through between refused attempts to connect."""
+    sent = []
+
+    async def negotiate_user(request):
+        sent.append("negotiateUser")
+        # No Retry-After, so the integration's own wait applies.
+        return web.json_response({}, status=429)
+
+    async def devices(request):
+        sent.append("appliance list")
+        return web.json_response({"devices": []})
+
+    async def faults(request):
+        sent.append("faults")
+        return web.json_response([])
+
+    app = web.Application()
+    app.router.add_post("/signal-r/negotiateUser", negotiate_user)
+    app.router.add_get("/consumerapp/user/devices", devices)
+    app.router.add_get("/fault-notifications/v1/notifications/device/{device}", faults)
+    server = await aiohttp_server(app)
+    monkeypatch.setattr(api, "API_BASE", str(server.make_url("/")).rstrip("/"))
+    async with aiohttp.ClientSession() as session:
+        client = api.SubZeroClient(session, "test-key", tokens)
+        with pytest.raises(api.RateLimited) as refused:
+            await anext(client.watch(["test-fridge"]))
+        assert refused.value.request == "negotiateUser"
+        assert refused.value.retry_after == 600
+        assert str(refused.value) == (
+            "Sub-Zero temporarily limited requests (negotiateUser, retrying in 600 s)."
+        )
+        # Other APIs answer meanwhile; the refused one waits without sending.
+        assert await client.appliances() == []
+        assert await client.appliance_faults("test-fridge") == []
+        with pytest.raises(api.RateLimited) as held:
+            await anext(client.watch(["test-fridge"]))
+        assert held.value.request == "negotiateUser"
+        assert held.value.retry_after <= 600
+    assert sent == ["negotiateUser", "appliance list", "faults"]
+    assert [{**limit, "time": None} for limit in client.rate_limits] == [
+        {
+            "time": None,
+            "request": "negotiateUser",
+            "api": "signal-r",
+            "retry_after": 600,
+            "retry_after_sent": False,
+        }
+    ]
+    assert client.request_counts() == {
+        "sent": {"appliance list": 1, "faults": 1, "negotiateUser": 1},
+        "held": {"negotiateUser": 1},
+    }
+    assert [attempt["error"] for attempt in client.failed_connections][0] == str(refused.value)
+    # The refusal is logged once; the request held back after it isn't.
+    assert [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == api.__name__ and "429" in record.getMessage()
+    ] == [
+        "Sub-Zero refused a negotiateUser request (HTTP 429); requests to its signal-r API "
+        "wait 600 s, as it gave no Retry-After"
+    ]
 
 
 @pytest.mark.parametrize("offline", [False, True, "recover"])

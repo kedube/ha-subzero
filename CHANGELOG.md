@@ -2,6 +2,17 @@
 
 Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then 2.00.
 
+## Unreleased
+
+### Fixed
+
+- When Sub-Zero limits one kind of request, the integration now waits only on requests of that kind. Before, any rate limit (HTTP 429) stopped every request for 10 minutes, so commands, status reads, fault checks, and alert setup all failed while only the live connection was being refused. Sub-Zero limits its APIs separately: fault reads went through while reconnecting was refused.
+
+### Diagnostics
+
+- Each rate limit is logged with the request Sub-Zero refused and how long requests of that kind wait. Before, only the first was logged, as `Sub-Zero temporarily limited requests.`
+- The integration download lists the last 10 rate limits, with the request refused, how long to wait, and whether Sub-Zero said how long. It also counts the requests sent to Sub-Zero in the last hour, by kind, and those held back by a rate limit.
+
 ## 1.10
 
 ### Fixed
