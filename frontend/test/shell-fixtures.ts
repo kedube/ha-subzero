@@ -1,7 +1,7 @@
 // Shared builders for the shell and data tests: appliances as the websocket API sends them, and
 // a `hass` object with only the members the panel uses.
-import { vi } from "vitest";
-import type { HassEntity, HomeAssistant } from "../src/hass";
+import { vi, type Mock } from "vitest";
+import type { HassConnection, HassEntity, HomeAssistant } from "../src/hass";
 import type { Appearance, ApplianceSpec, PanelAppliance, PanelMessage } from "../src/types";
 
 // Lit announces dev mode once per test file; it isn't a panel problem.
@@ -140,10 +140,12 @@ export function entity(
 }
 
 export interface FakeConnection {
-  subscribeMessage: ReturnType<typeof vi.fn>;
+  // Typed by what they stand in for: a bare `Mock` also covers constructors (from vitest 4),
+  // which a generic method like subscribeMessage won't take.
+  subscribeMessage: Mock<HassConnection["subscribeMessage"]>;
   /** Sends a panel message to the newest subscriber, or to the one subscribed `nth` (from 0). */
   send(message: PanelMessage, nth?: number): void;
-  unsubscribe: ReturnType<typeof vi.fn>;
+  unsubscribe: Mock<() => Promise<void>>;
   addEventListener(type: string, listener: () => void): void;
   removeEventListener(type: string, listener: () => void): void;
   /** Fires a connection event ("ready", "disconnected") as home-assistant-js-websocket does. */
@@ -154,8 +156,8 @@ export function makeConnection(): FakeConnection {
   const callbacks: Array<(message: PanelMessage) => void> = [];
   const listeners = new Map<string, Set<() => void>>();
   const unsubscribe = vi.fn(async () => {});
-  const subscribeMessage = vi.fn(async (next: (message: PanelMessage) => void) => {
-    callbacks.push(next);
+  const subscribeMessage = vi.fn<HassConnection["subscribeMessage"]>(async (next) => {
+    callbacks.push(next as (message: PanelMessage) => void);
     return unsubscribe;
   });
   return {
