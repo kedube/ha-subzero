@@ -3,8 +3,9 @@ import type { Appearance } from "../types";
 import { closedView, door, DOOR_TOP, DW_HEIGHT, type Front, openView, toeKick, topReveal } from "./dishwasher/door";
 import { controlStrip, interior, OPEN_ANGLE, OPEN_WIDEN, stripTop } from "./dishwasher/open";
 import { dishwasherOverlay, dishwasherWords, doorOpen, FLOOR_LIGHT } from "./dishwasher/status";
-import { Defs, floorShadow, materialDefs, paintDefs, parseColor } from "./generic/materials";
-import { LABEL_H, labelScale, statusRow } from "./generic/overlay";
+import { floorShadow, materialDefs, paintDefs, parseColor, pills } from "./generic/materials";
+import { Ids } from "./materials-core";
+import { LABEL_H, labelScale, statusRow } from "./overlay";
 import type { DrawingInput, DrawingRenderer } from "./types";
 import { spoken } from "./words";
 
@@ -37,7 +38,7 @@ export function dishwasherFront(appearance: Appearance): Front {
  * and 2.4″ off the door when it's open), with room for a row `labelHeight` tall.
  */
 export function dishwasherBody(
-  d: Defs,
+  d: Ids,
   width: number,
   front: Front,
   open: boolean,
@@ -72,7 +73,7 @@ export function dishwasherBody(
  * Cove's floor light: a pool of colored light thrown on the floor in front of the toe kick,
  * with only a faint spill back onto the kick's foot.
  */
-export function floorLight(d: Defs, width: number, color: string): SVGTemplateResult {
+export function floorLight(d: Ids, width: number, color: string): SVGTemplateResult {
   return svg`
     <defs>
       <radialGradient id=${d.id("floor-light")} cx="0.5" cy="0.5" r="0.5">
@@ -95,7 +96,7 @@ export function floorLight(d: Defs, width: number, color: string): SVGTemplateRe
 export const renderDishwasher: DrawingRenderer = (input: DrawingInput) => {
   const { spec, state } = input;
   if (spec.family !== "dishwasher") return null;
-  const d = new Defs(input.uid);
+  const d = new Ids(input.uid);
   const width = Math.round((spec.width ?? 24) * 10);
   const front = dishwasherFront(input.appearance);
   const open = doorOpen(state);
@@ -121,6 +122,6 @@ export const renderDishwasher: DrawingRenderer = (input: DrawingInput) => {
     ${floorShadow(d, 0, width, DW_HEIGHT, input.theme)}
     <g filter=${state.available ? nothing : d.url("offline")}>${body}</g>
     ${lightColor ? floorLight(d, width, lightColor) : nothing}
-    ${statusRow(d, width / 2, statusY, label, chips, reducedMotion, scale)}
+    ${statusRow(pills(d), width / 2, statusY, label, chips, reducedMotion, scale)}
   </svg>`;
 };

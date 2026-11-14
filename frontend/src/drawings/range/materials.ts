@@ -1,18 +1,6 @@
 import { svg, type SVGTemplateResult } from "lit";
 import type { KnobColor } from "../../types";
-
-/** SVG ids for one drawing: every id carries the drawing's uid. */
-export interface Ids {
-  id(name: string): string;
-  url(name: string): string;
-}
-
-export function makeIds(uid: string): Ids {
-  return {
-    id: (name) => `${uid}-${name}`,
-    url: (name) => `url(#${uid}-${name})`,
-  };
-}
+import { KNOB_PALETTE, knobFace, offlineFilter, satinTube, type Ids } from "../materials-core";
 
 /**
  * Brushed stainless brightness across Wolf's DF48850/S/P photo, lit by one broad studio light in
@@ -38,6 +26,9 @@ const STAINLESS: ReadonlyArray<readonly [number, number]> = [
 
 /** The width the table spans, centered on the range: the 48″ body. */
 const SPAN = 478.75;
+
+/** How the range looks while it can't be reached. */
+const OFFLINE = { saturation: 0.06, slope: 0.6, lift: 0.24 };
 
 /** Fades for lights and glows, unless the viewer asked for reduced motion. */
 export function fade(opacity: number, reducedMotion: boolean): string {
@@ -67,26 +58,6 @@ function stainlessLevel(fraction: number): number {
 export function stainlessAt(x: number, width: number): number {
   return stainlessLevel(0.5 + (x - width / 2) / SPAN);
 }
-
-interface KnobPalette {
-  light: string;
-  base: string;
-  dark: string;
-  /** The fin's shaded side. */
-  edge: string;
-  /** The knob's top edge, seen from a little above. */
-  rim: string;
-  rimOpacity: number;
-  /** Strength of the soft specular highlight. */
-  sheen: number;
-}
-
-/** Knob colors sampled from Wolf's photos and swatches (signature red #8e292f). */
-export const KNOB_PALETTE: Record<KnobColor, KnobPalette> = {
-  red: { light: "#953c42", base: "#843236", dark: "#62191e", edge: "#4c1418", rim: "#a5676a", rimOpacity: 0.6, sheen: 0.05 },
-  black: { light: "#3c3c3f", base: "#262628", dark: "#141415", edge: "#060606", rim: "#58585c", rimOpacity: 0.6, sheen: 0.08 },
-  stainless: { light: "#d2d4d5", base: "#a9abad", dark: "#6a6d70", edge: "#45484b", rim: "#e6e7e8", rimOpacity: 0.4, sheen: 0.12 },
-};
 
 const opacity = (value: number) => Math.round(Math.min(1, Math.max(0, value)) * 1000) / 1000;
 
@@ -182,24 +153,7 @@ export function rangeDefs(ids: Ids, width: number, knobs: KnobColor): SVGTemplat
       <rect width="1" height="1" fill=${ids.url("rise")} />
     </mask>
 
-    <linearGradient id=${ids.id("tube")} x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#8a8988" />
-      <stop offset="0.07" stop-color="#a09f9d" />
-      <stop offset="0.11" stop-color="#cac9c7" />
-      <stop offset="0.15" stop-color="#fbfbfa" />
-      <stop offset="0.3" stop-color="#ffffff" />
-      <stop offset="0.35" stop-color="#f7f7f6" />
-      <stop offset="0.4" stop-color="#dfdedc" />
-      <stop offset="0.45" stop-color="#d6d5d3" />
-      <stop offset="0.53" stop-color="#e2e1df" />
-      <stop offset="0.62" stop-color="#d8d7d5" />
-      <stop offset="0.73" stop-color="#cdccca" />
-      <stop offset="0.79" stop-color="#dad9d7" />
-      <stop offset="0.85" stop-color="#f9f9f8" />
-      <stop offset="0.9" stop-color="#f0efee" />
-      <stop offset="0.95" stop-color="#bebdbb" />
-      <stop offset="1" stop-color="#8c8b89" />
-    </linearGradient>
+    ${satinTube(ids.id("tube"))}
     <linearGradient id=${ids.id("tube-glint")} x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#fff" stop-opacity="0" />
       <stop offset="0.25" stop-color="#fff" stop-opacity="0.95" />
@@ -236,12 +190,7 @@ export function rangeDefs(ids: Ids, width: number, knobs: KnobColor): SVGTemplat
       <stop offset="0" stop-color="#6c6e70" />
       <stop offset="1" stop-color="#5c5e60" />
     </linearGradient>
-    <radialGradient id=${ids.id("knob")} cx="0.45" cy="0.32" r="0.8">
-      <stop offset="0" stop-color=${knob.light} />
-      <stop offset="0.45" stop-color=${knob.base} />
-      <stop offset="0.85" stop-color=${knob.base} />
-      <stop offset="1" stop-color=${knob.dark} />
-    </radialGradient>
+    ${knobFace(ids.id("knob"), knob)}
 
     <linearGradient id=${ids.id("glass")} x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#141516" />
@@ -375,18 +324,6 @@ export function rangeDefs(ids: Ids, width: number, knobs: KnobColor): SVGTemplat
     <filter id=${ids.id("pill-shadow")} x="-30%" y="-60%" width="160%" height="220%">
       <feGaussianBlur stdDeviation="1.4" />
     </filter>
-    <filter id=${ids.id("offline")} color-interpolation-filters="sRGB">
-      <feColorMatrix type="saturate" values="0.06" />
-      <feComponentTransfer>
-        <feFuncR type="linear" slope="0.6" intercept="0.24" />
-        <feFuncG type="linear" slope="0.6" intercept="0.24" />
-        <feFuncB type="linear" slope="0.6" intercept="0.24" />
-      </feComponentTransfer>
-    </filter>
+    ${offlineFilter(ids.id("offline"), OFFLINE)}
   </defs>`;
-}
-
-/** The floor shadow's strength for the page theme: the one thing that adapts to it. */
-export function floorShadow(theme: "light" | "dark"): number {
-  return theme === "dark" ? 0.62 : 0.3;
 }

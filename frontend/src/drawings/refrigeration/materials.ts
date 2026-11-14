@@ -1,5 +1,6 @@
 import { nothing, svg, type SVGTemplateResult } from "lit";
 import type { Appearance, HandleStyle } from "../../types";
+import { floorShadowStrength, isWood, offlineFilter, parseHex, tint } from "../materials-core";
 import { n, type Camera, type Rect } from "./geometry";
 import type { Layout } from "./layout";
 
@@ -36,7 +37,7 @@ export function finishOf(appearance: Appearance): Finish {
   switch (appearance.finish) {
     case "panel": {
       const color = /^#[0-9a-f]{6}$/i.test(appearance.panel_color ?? "") ? appearance.panel_color! : "#d9d4ca";
-      return { kind: "panel", color, wood: isWood(color) };
+      return { kind: "panel", color, wood: isWood(parseHex(color)) };
     }
     case "white":
       return { kind: "panel", color: "#f0efea", wood: false };
@@ -48,34 +49,9 @@ export function finishOf(appearance: Appearance): Finish {
   }
 }
 
-function rgb(hex: string): [number, number, number] {
-  const v = parseInt(hex.slice(1), 16);
-  return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
-}
-
-function hex([r, g, b]: [number, number, number]): string {
-  const c = (v: number) => Math.round(Math.min(255, Math.max(0, v))).toString(16).padStart(2, "0");
-  return `#${c(r)}${c(g)}${c(b)}`;
-}
-
 /** Lightens toward white (amount > 0) or darkens toward black (amount < 0). */
 export function shade(color: string, amount: number): string {
-  const [r, g, b] = rgb(color);
-  const t = amount >= 0 ? 255 : 0;
-  const k = Math.abs(amount);
-  return hex([r + (t - r) * k, g + (t - g) * k, b + (t - b) * k]);
-}
-
-function isWood(color: string): boolean {
-  const [r, g, b] = rgb(color).map((v) => v / 255);
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const light = (max + min) / 2;
-  if (max === min) return false;
-  const sat = (max - min) / (1 - Math.abs(2 * light - 1));
-  let hue = max === r ? ((g - b) / (max - min)) % 6 : max === g ? (b - r) / (max - min) + 2 : (r - g) / (max - min) + 4;
-  hue = (hue * 60 + 360) % 360;
-  return hue >= 12 && hue <= 48 && sat >= 0.18 && light >= 0.12 && light <= 0.78;
+  return tint(parseHex(color), amount);
 }
 
 /**
@@ -165,6 +141,9 @@ const TUBE: Array<[number, string]> = [
   [1, "#55585b"],
 ];
 
+/** How a refrigerator looks while it can't be reached: gray, with a faint cool cast. */
+const OFFLINE = { saturation: 0.06, slope: 0.62, lift: [0.17, 0.17, 0.18] as const };
+
 /**
  * The shared definitions: gradients, the brushed-grain pattern (one turbulence filter), soft
  * shadow blurs and the offline filter. Every id is prefixed with the drawing's uid.
@@ -235,15 +214,6 @@ export function defs(s: Scene): SVGTemplateResult {
     <linearGradient id=${s.id("tubeV")} x1="0" y1="0" x2="1" y2="0">${stops(TUBE)}</linearGradient>
     <linearGradient id=${s.id("tubeH")} x1="0" y1="1" x2="0" y2="0">${stops(TUBE)}</linearGradient>
     <linearGradient id=${s.id("capV")} x1="0" y1="0" x2="1" y2="0">
-      ${stops([
-        [0, "#6f7275"],
-        [0.18, "#b6b9bb"],
-        [0.5, "#d3d5d6"],
-        [0.8, "#a9acae"],
-        [1, "#6b6e71"],
-      ])}
-    </linearGradient>
-    <linearGradient id=${s.id("capH")} x1="0" y1="1" x2="0" y2="0">
       ${stops([
         [0, "#6f7275"],
         [0.18, "#b6b9bb"],
@@ -356,7 +326,7 @@ export function defs(s: Scene): SVGTemplateResult {
     </linearGradient>
     <radialGradient id=${s.id("floor")} cx="0.5" cy="0.5" r="0.5">
       ${alphaStops([
-        [0, "#000000", dark ? 0.62 : 0.3],
+        [0, "#000000", floorShadowStrength(s.theme)],
         [0.55, "#000000", dark ? 0.32 : 0.13],
         [1, "#000000", 0],
       ])}
@@ -387,23 +357,13 @@ export function defs(s: Scene): SVGTemplateResult {
     <filter id=${s.id("blur")} x="-50%" y="-50%" width="200%" height="200%">
       <feGaussianBlur stdDeviation="2.2" />
     </filter>
-    <filter id=${s.id("blurL")} x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="7" />
-    </filter>
     <filter id=${s.id("pill")} x="-30%" y="-60%" width="160%" height="220%">
       <feGaussianBlur stdDeviation="1.4" />
     </filter>
     <filter id=${s.id("mute")} color-interpolation-filters="sRGB">
       <feColorMatrix type="saturate" values="0.78" />
     </filter>
-    <filter id=${s.id("offline")} color-interpolation-filters="sRGB">
-      <feColorMatrix type="saturate" values="0.06" />
-      <feComponentTransfer>
-        <feFuncR type="linear" slope="0.62" intercept="0.17" />
-        <feFuncG type="linear" slope="0.62" intercept="0.17" />
-        <feFuncB type="linear" slope="0.62" intercept="0.18" />
-      </feComponentTransfer>
-    </filter>
+    ${offlineFilter(s.id("offline"), OFFLINE)}
   </defs>`;
 }
 

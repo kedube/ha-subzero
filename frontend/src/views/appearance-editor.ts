@@ -1,8 +1,10 @@
 import { LitElement, css, html, nothing, type PropertyValues, type TemplateResult } from "lit";
+import { Confirmation } from "../card/confirm";
 import { DrawingSize } from "../card/drawing-size";
-import { partStyles, renderConfirmBar } from "../card/parts";
-import { attempt, drawingInput, safeDrawing } from "../card/view";
+import { partStyles } from "../card/parts";
+import { drawingInput, evaluate, safeDrawing } from "../card/view";
 import { icon, icons } from "../controls/base";
+import { dropdownStyles, segmentedStyles } from "../controls/styles";
 import {
   appearanceChanges,
   formChoices,
@@ -14,7 +16,7 @@ import {
 import { panelHelpers } from "../data/helpers";
 import { errorMessage, translatorFor } from "../data/locale";
 import type { DrawingState } from "../drawings/types";
-import { familyModel, makeContext } from "../families/index";
+import { hasKnobs as ovenHasKnobs } from "../drawings/wall-oven/layout";
 import type { HomeAssistant } from "../hass";
 import type { Translate } from "../i18n";
 import { buttonStyles, syncTheme, tokens } from "../styles";
@@ -43,7 +45,6 @@ export class AppearanceEditor extends LitElement {
     pending: { state: true },
     saving: { state: true },
     message: { state: true },
-    askingReset: { state: true },
   };
 
   declare hass: HomeAssistant | undefined;
@@ -51,19 +52,21 @@ export class AppearanceEditor extends LitElement {
   declare pending: Appearance | undefined;
   declare saving: boolean;
   declare message: { kind: "error" | "saved"; text: string } | null;
-  /** Reset changes the look for everyone, so it asks first. */
-  declare askingReset: boolean;
 
   // The saved Appearance that `pending` started from; changes are measured against it.
   private saved: Appearance | undefined;
   private readonly uid = `sza${++editors}`;
+  // The preview's drawing prefixes its SVG ids with this one, apart from the fields' own ids:
+  // they share the shadow root, where two of the same id would resolve to the wrong element.
+  private readonly drawingUid = `szp${editors}`;
   private readonly size = new DrawingSize(this, ".preview .drawing > svg");
+  // Reset changes the look for everyone, so it asks first.
+  private readonly resetting = new Confirmation(this, ".actions .reset");
 
   constructor() {
     super();
     this.saving = false;
     this.message = null;
-    this.askingReset = false;
   }
 
   protected override willUpdate(changed: PropertyValues<this>): void {
@@ -107,7 +110,7 @@ export class AppearanceEditor extends LitElement {
               )
             : nothing}
           ${pending.finish === "panel" ? this.panelColors(t, options.panel_colors ?? [], locked) : nothing}
-          ${options.knobs
+          ${options.knobs && this.hasKnobs(appliance, pending)
             ? this.radios(
                 "knobs",
                 t("appearance.knobs"),
@@ -147,8 +150,8 @@ export class AppearanceEditor extends LitElement {
             <button
               type="button"
               class="sz-button reset"
-              aria-expanded=${this.askingReset ? "true" : "false"}
-              ?disabled=${locked || this.askingReset}
+              aria-expanded=${this.resetting.asking ? "true" : "false"}
+              ?disabled=${locked || this.resetting.asking}
               @click=${() => this.askReset()}
             >
               ${t("appearance.reset")}
@@ -162,16 +165,11 @@ export class AppearanceEditor extends LitElement {
               ${this.saving ? t("appearance.saving") : t("appearance.save")}
             </button>
           </div>
-          ${this.askingReset && admin
-            ? html`<div class="ask" @keydown=${this.onAskKey}>
-                ${renderConfirmBar({
-                  text: t("appearance.reset_confirm"),
-                  confirm: t("appearance.reset_action"),
-                  cancel: t("ctl.not_now"),
-                  onConfirm: () => this.answerReset(true),
-                  onCancel: () => this.answerReset(false),
-                })}
-              </div>`
+          ${admin
+            ? this.resetting.bar(
+                { text: t("appearance.reset_confirm"), confirm: t("appearance.reset_action"), cancel: t("ctl.not_now") },
+                () => void this.save(null),
+              )
             : nothing}
           ${this.message
             ? html`<p
@@ -189,23 +187,26 @@ export class AppearanceEditor extends LitElement {
   private renderPreview(appliance: PanelAppliance, pending: Appearance) {
     // The appliance as it is now, in the pending look, with its doors shut so the look shows.
     const hass = this.hass!;
-    const live = attempt(
-      `${appliance.spec.family} preview state`,
-      () =>
-        familyModel(appliance).drawingState(
-          makeContext(appliance, hass, translatorFor(hass), Date.now(), panelHelpers),
-        ),
-      null as DrawingState | null,
-    );
-    const state: DrawingState = { ...(live ?? { readouts: {} }), available: true, doors: {} };
+    const live = evaluate(appliance, hass, translatorFor(hass), Date.now(), panelHelpers).state;
+    const state: DrawingState = { ...live, available: true, doors: {} };
     const preview = { ...appliance, available: true };
     return safeDrawing(
-      drawingInput(preview, state, hass, this.uid, {
+      drawingInput(preview, state, hass, this.drawingUid, {
         appearance: pending,
         spec: previewSpec(appliance, pending),
         pixelHeight: this.size.height,
       }),
     );
+  }
+
+  /**
+   * Whether the pending look has knobs to color, by the rule the drawing uses: a wall oven's show
+   * only in the Professional style. The integration offers knob colors for those ovens whatever
+   * the style, since the style can change.
+   */
+  private hasKnobs(appliance: PanelAppliance, pending: Appearance): boolean {
+    const spec = previewSpec(appliance, pending);
+    return spec.family !== "wall_oven" || ovenHasKnobs(spec, pending);
   }
 
   /** The style the model number gives (wall ovens, ranges), which a null style keeps. */
@@ -232,7 +233,7 @@ export class AppearanceEditor extends LitElement {
           (choice) => html`<button
             type="button"
             role="radio"
-            class=${choice.swatch ? "swatch" : "segment"}
+            class=${choice.swatch ? "swatch" : nothing}
             aria-checked=${choice.value === value ? "true" : "false"}
             aria-label=${choice.swatch ? choice.label : nothing}
             title=${choice.swatch ? choice.label : nothing}
@@ -344,25 +345,10 @@ export class AppearanceEditor extends LitElement {
     this.message = null;
   }
 
-  private async askReset(): Promise<void> {
-    this.askingReset = true;
+  private askReset(): void {
     this.message = null;
-    await this.updateComplete;
-    // The safe choice first, so Enter or Space doesn't reset anything by accident.
-    this.renderRoot.querySelector<HTMLButtonElement>(".ask .sz-button")?.focus();
+    void this.resetting.ask();
   }
-
-  private answerReset(reset: boolean): void {
-    this.askingReset = false;
-    if (reset) void this.save(null);
-    void this.updateComplete.then(() => this.renderRoot.querySelector<HTMLButtonElement>(".actions .reset")?.focus());
-  }
-
-  private readonly onAskKey = (event: KeyboardEvent): void => {
-    if (event.key !== "Escape") return;
-    event.stopPropagation();
-    this.answerReset(false);
-  };
 
   private async save(changes: Partial<Appearance> | null): Promise<void> {
     const { hass, appliance } = this;
@@ -406,6 +392,8 @@ export class AppearanceEditor extends LitElement {
     tokens,
     buttonStyles,
     partStyles,
+    segmentedStyles,
+    dropdownStyles,
     css`
       :host {
         display: block;
@@ -454,7 +442,8 @@ export class AppearanceEditor extends LitElement {
         display: grid;
         gap: 8px;
       }
-      /* Labels, chips and the dropdown look like the full view's controls above. */
+      /* Labels look like the full view's controls above; the chips and the dropdown are theirs
+         (segmentedStyles, dropdownStyles). */
       .label {
         font-size: 14px;
         font-weight: 500;
@@ -469,33 +458,6 @@ export class AppearanceEditor extends LitElement {
       .chosen {
         font-size: 13.5px;
         color: var(--sz-muted);
-      }
-      .segmented {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-        max-width: 100%;
-      }
-      .segment {
-        min-height: 40px;
-        padding: 6px 14px;
-        border: none;
-        border-radius: 999px;
-        background: var(--sz-control-bg);
-        color: var(--sz-text);
-        font: inherit;
-        font-size: 13.5px;
-        font-weight: 600;
-        cursor: pointer;
-        -webkit-tap-highlight-color: transparent;
-        touch-action: manipulation;
-      }
-      .segment:hover:not(:disabled):not([aria-checked="true"]) {
-        background: var(--sz-control-hover);
-      }
-      .segment[aria-checked="true"] {
-        background: var(--sz-accent-fill, var(--sz-accent));
-        color: var(--sz-on-accent);
       }
       .swatches {
         display: flex;
@@ -554,12 +516,7 @@ export class AppearanceEditor extends LitElement {
         cursor: pointer;
       }
       .swatch.custom:focus-within,
-      .swatch:focus-visible,
-      select:focus-visible {
-        outline: 2px solid var(--sz-accent);
-        outline-offset: 2px;
-      }
-      .segment:focus-visible {
+      .swatch:focus-visible {
         outline: 2px solid var(--sz-accent);
         outline-offset: 2px;
       }
@@ -573,47 +530,15 @@ export class AppearanceEditor extends LitElement {
         opacity: 0.5;
         cursor: default;
       }
+      /* In the field's grid the dropdown is as wide as its select, not the field. */
       .dropdown {
-        position: relative;
-        display: inline-flex;
         width: fit-content;
-        max-width: 100%;
-      }
-      select {
-        max-width: 100%;
-        min-height: 40px;
-        padding: 7px 36px 7px 14px;
-        border: none;
-        border-radius: 999px;
-        background: var(--sz-control-bg);
-        color: var(--sz-text);
-        font: inherit;
-        font-size: 14px;
-        font-weight: 600;
-        text-overflow: ellipsis;
-        cursor: pointer;
-        -webkit-appearance: none;
-        appearance: none;
       }
       :host([dark]) select {
         color-scheme: dark;
       }
-      .dropdown svg {
-        position: absolute;
-        top: 50%;
-        right: 12px;
-        width: 18px;
-        height: 18px;
-        margin-top: -9px;
-        fill: currentColor;
-        pointer-events: none;
-      }
       /* Any finger, not just a main one: touch laptops report a mouse as their main pointer. */
       @media (any-pointer: coarse) {
-        .segment,
-        select {
-          min-height: 44px;
-        }
         .swatch {
           width: 44px;
           height: 44px;

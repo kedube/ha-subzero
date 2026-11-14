@@ -2,7 +2,7 @@ import { LitElement, html, nothing, svg, type PropertyDeclarations, type Propert
 import type { Control } from "../families/types";
 import { makeTranslate, type Translate } from "../i18n";
 import { buttonStyles } from "../styles";
-import { controlStyles } from "./styles";
+import { controlStyles, dropdownStyles, segmentedStyles } from "./styles";
 
 /** The one event every control fires, with the value to apply (none for a button). */
 export const VALUE_EVENT = "sz-value";
@@ -10,6 +10,9 @@ export const VALUE_EVENT = "sz-value";
 export interface ValueDetail {
   value: unknown;
 }
+
+/** Home Assistant's own event: its root element opens the more-info dialog for `detail.entityId`. */
+export const MORE_INFO_EVENT = "hass-more-info";
 
 // After a call succeeds, how long a control keeps showing the value it sent while Home Assistant
 // catches up with the entity's new state.
@@ -40,6 +43,8 @@ export abstract class ControlElement<C extends Control> extends LitElement {
     pending: { type: Boolean, reflect: true },
     error: { attribute: false },
     sharedReason: { attribute: false },
+    entityId: { attribute: false },
+    quiet: { type: Boolean, reflect: true },
     optimistic: { state: true },
   };
 
@@ -47,6 +52,10 @@ export abstract class ControlElement<C extends Control> extends LitElement {
   declare t: Translate;
   declare pending: boolean;
   declare error: string | null;
+  /** The entity the control shows or changes; its label then opens Home Assistant's more-info dialog for it. */
+  declare entityId: string | undefined;
+  /** Hides the label of a control whose widget goes under it: a lone control named like its section. */
+  declare quiet: boolean;
   /**
    * The section shows this control's lock reason once, above several controls; the control keeps
    * it for screen readers only, so it's still read out with the control.
@@ -56,7 +65,7 @@ export abstract class ControlElement<C extends Control> extends LitElement {
   declare optimistic: unknown;
   private settleTimer: ReturnType<typeof setTimeout> | undefined;
 
-  static override styles = [buttonStyles, controlStyles];
+  static override styles = [buttonStyles, segmentedStyles, dropdownStyles, controlStyles];
 
   constructor() {
     super();
@@ -64,6 +73,7 @@ export abstract class ControlElement<C extends Control> extends LitElement {
     this.pending = false;
     this.error = null;
     this.sharedReason = false;
+    this.quiet = false;
     this.optimistic = undefined;
   }
 
@@ -79,7 +89,7 @@ export abstract class ControlElement<C extends Control> extends LitElement {
 
   protected override willUpdate(changed: PropertyValues<this>): void {
     if (this.optimistic === undefined) return;
-    if ((changed.has("control") && same(this.current(), this.optimistic)) || (changed.has("error") && this.error)) {
+    if ((changed.has("control") && shows(this.current(), this.optimistic)) || (changed.has("error") && this.error)) {
       this.clearOptimistic();
     }
   }
@@ -107,6 +117,11 @@ export abstract class ControlElement<C extends Control> extends LitElement {
   protected emit(value: unknown): void {
     this.dispatchEvent(new CustomEvent<ValueDetail>(VALUE_EVENT, { detail: { value }, bubbles: true, composed: true }));
   }
+
+  /** Asks Home Assistant for the entity's more-info dialog, the way its own cards do. */
+  private readonly moreInfo = (): void => {
+    this.dispatchEvent(new CustomEvent(MORE_INFO_EVENT, { detail: { entityId: this.entityId }, bubbles: true, composed: true }));
+  };
 
   protected get disabled(): boolean {
     return Boolean(this.control?.disabled);
@@ -145,11 +160,18 @@ export abstract class ControlElement<C extends Control> extends LitElement {
     if (!control) return html``;
     const hint = options.hint === undefined ? control.hint : options.hint;
     const reason = this.reason();
+    const label = html`<span class="label" id="label">${control.label}</span>`;
+    // A label that's hidden (see `quiet`) stays text: a button there would take focus unseen.
+    const opens = this.entityId !== undefined && !(this.quiet && options.stacked);
     return html`
       <div class="row ${options.stacked ? "stacked" : ""}">
         <div class="text">
           <div class="title">
-            <span class="label" id="label">${control.label}</span>
+            ${opens
+              ? html`<button type="button" class="more" aria-label=${this.t("ctl.more_info", { name: control.label })} @click=${this.moreInfo}>
+                  ${label}
+                </button>`
+              : label}
             ${options.aside ? html`<span class="aside">${options.aside}</span>` : nothing}
           </div>
           ${hint ? html`<span class="hint" id="hint">${hint}</span>` : nothing}
@@ -179,9 +201,15 @@ export interface FrameOptions {
   hint?: string | null;
 }
 
-function same(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  return typeof a === "object" && typeof b === "object" && a !== null && b !== null && JSON.stringify(a) === JSON.stringify(b);
+/**
+ * Whether the entity now shows what was sent. A value sent in parts (a light's brightness
+ * without its white temperature) is compared by the parts sent.
+ */
+function shows(current: unknown, sent: unknown): boolean {
+  if (current === sent) return true;
+  if (typeof current !== "object" || typeof sent !== "object" || current === null || sent === null) return false;
+  const now = current as Record<string, unknown>;
+  return Object.entries(sent).every(([key, value]) => now[key] === value);
 }
 
 export function defineOnce(name: string, element: CustomElementConstructor): void {

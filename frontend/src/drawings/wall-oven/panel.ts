@@ -6,14 +6,18 @@ import {
   KNOB_RADIUS,
   KNOB_Y,
   PANEL_HEIGHT,
-  SCREEN,
+  SCREEN_BEZEL,
   SINGLE_KNOBS,
-  TM_PANEL_GLASS,
-  WIDTH,
+  onPanel,
+  panelGlass,
+  panelRoom,
+  screenRect,
   type OvenSeries,
   type OvenStyle,
 } from "./layout";
-import { round, url, type Materials } from "./materials";
+import { round } from "../materials-core";
+import { isSelfCleaning } from "../oven-state";
+import { url, type Materials } from "./materials";
 
 /** One cavity as the screen shows it. */
 export interface ScreenCavity {
@@ -23,6 +27,8 @@ export interface ScreenCavity {
 
 export interface PanelOptions {
   m: Materials;
+  /** The oven's width: the screen stays in the panel's middle, the controls spread around it. */
+  width: number;
   /** Legends print dark on stainless and light on the black and carbon finishes. */
   darkFinish: boolean;
   style: OvenStyle;
@@ -48,17 +54,17 @@ export function panelDetails(o: PanelOptions): SVGTemplateResult {
   const { m } = o;
   if (o.style === "contemporary") {
     return svg`
-      <rect x="0" y="0" width=${WIDTH} height=${PANEL_HEIGHT} fill=${url(m.blackGlass)} />
-      <line x1="0" y1="0.4" x2=${WIDTH} y2="0.4" stroke="#fff" stroke-width="0.8" opacity="0.18" />
+      <rect x="0" y="0" width=${o.width} height=${PANEL_HEIGHT} fill=${url(m.blackGlass)} />
+      <line x1="0" y1="0.4" x2=${o.width} y2="0.4" stroke="#fff" stroke-width="0.8" opacity="0.18" />
       ${screenContent(o, false)}
     `;
   }
   if (o.style === "transitional" && o.series === "m") {
-    const g = TM_PANEL_GLASS;
+    const g = panelGlass(o.width);
     const frame0 = g.u0 - 6.6;
     const frame1 = g.u1 + 6.6;
     return svg`
-      <line x1="0" y1="0.4" x2=${WIDTH} y2="0.4" stroke="#fff" stroke-width="0.8" opacity="0.5" />
+      <line x1="0" y1="0.4" x2=${o.width} y2="0.4" stroke="#fff" stroke-width="0.8" opacity="0.5" />
       <line x1=${round(frame0)} y1="8.1" x2=${round(frame1)} y2="8.1" stroke="#fff" stroke-width="0.45" opacity="0.45" />
       <line x1=${round(frame0)} y1="8.7" x2=${round(frame1)} y2="8.7" stroke="#000" stroke-width="0.4" opacity="0.12" />
       <line x1=${round(frame0)} y1="8.1" x2=${round(frame0)} y2=${PANEL_HEIGHT} stroke="#fff" stroke-width="0.45" opacity="0.45" />
@@ -71,17 +77,17 @@ export function panelDetails(o: PanelOptions): SVGTemplateResult {
   }
   const knobs = o.knobs && o.style === "professional";
   return svg`
-    <line x1="0" y1="0.4" x2=${WIDTH} y2="0.4" stroke="#fff" stroke-width="0.8" opacity="0.5" />
-    ${knobs ? knobRow(o) : touchLegends(o.double, o.darkFinish)}
-    ${screenFrame(m)}
+    <line x1="0" y1="0.4" x2=${o.width} y2="0.4" stroke="#fff" stroke-width="0.8" opacity="0.5" />
+    ${knobs ? knobRow(o) : touchLegends(o.double, o.darkFinish, o.width)}
+    ${screenFrame(m, o.width)}
     ${screenContent(o, true)}
   `;
 }
 
 /** The touchscreen: a slim brushed bezel, a touch lighter than the panel, around dark glass. */
-function screenFrame(m: Materials): SVGTemplateResult {
-  const { x, y, width, height } = SCREEN;
-  const b = 2.3;
+function screenFrame(m: Materials, ovenWidth: number): SVGTemplateResult {
+  const { x, y, width, height } = screenRect(ovenWidth);
+  const b = SCREEN_BEZEL;
   return svg`
     <rect x=${x - b} y=${y - b} width=${width + b * 2} height=${height + b * 2} rx="0.8" fill="#fff" opacity="0.13" />
     <line x1=${x - b} y1=${y - b + 0.3} x2=${x + width + b} y2=${y - b + 0.3} stroke="#000" stroke-width="0.5" opacity="0.12" />
@@ -102,7 +108,7 @@ type Icon = (x: number, y: number) => SVGTemplateResult;
  * as a real touchscreen sleeps (the drawing has no clock to show).
  */
 function screenContent(o: PanelOptions, framed: boolean): SVGTemplateResult {
-  const { x, y, width, height } = SCREEN;
+  const { x, y, width, height } = screenRect(o.width);
   const on = o.cavities.filter((c) => c.oven.on && c.oven.temp);
   // Where the screen's small text and icons would be too small to read (a double oven on a small
   // card), it shows only what still reads: the temperatures and the preheat bars.
@@ -110,7 +116,7 @@ function screenContent(o: PanelOptions, framed: boolean): SVGTemplateResult {
   const detail = o.unitsPerPixel === null || smallText / o.unitsPerPixel >= SMALLEST_TEXT_PX;
   const probe = detail && o.cavities.some((c) => c.oven.probe);
   const remote = detail && o.cavities.some((c) => c.oven.remote_ready);
-  const locked = detail && o.cavities.some((c) => c.oven.on && c.oven.self_clean);
+  const locked = detail && o.cavities.some((c) => isSelfCleaning(c.oven));
   const icons = [probe ? probeIcon : null, remote ? remoteIcon : null, locked ? lockIcon : null].filter(
     (icon): icon is Icon => icon !== null,
   );
@@ -249,8 +255,10 @@ const TEMP_WORDS: Array<[number, string]> = [
 ];
 
 function knobRow(o: PanelOptions): SVGTemplateResult {
-  const xs = o.double ? DOUBLE_KNOBS : SINGLE_KNOBS;
-  const radius = o.double ? KNOB_RADIUS * 0.975 : KNOB_RADIUS;
+  const xs = (o.double ? DOUBLE_KNOBS : SINGLE_KNOBS).map((x) => onPanel(x, o.width));
+  // On a panel narrower than the 30″ one the knobs stand closer, so they're a little smaller.
+  const fit = Math.min(1, Math.sqrt(panelRoom(o.width)));
+  const radius = (o.double ? KNOB_RADIUS * 0.975 : KNOB_RADIUS) * fit;
   const legend = radius * (BEZEL_RADIUS / KNOB_RADIUS) + 1.5;
   // The left knob of each pair picks the mode: off points up, and the photos' Bake sits one stop
   // to the left. The right knob sets the temperature and rests upright.
@@ -269,12 +277,20 @@ function knobRow(o: PanelOptions): SVGTemplateResult {
       ${arcWords(pair.mode, KNOB_Y, legend, MODE_WORDS, o.darkFinish)}
       ${arcWords(pair.temp, KNOB_Y, legend, TEMP_WORDS, o.darkFinish)}
       ${pair.caption ? printed((pair.mode + pair.temp) / 2, 40.2, pair.caption, o.darkFinish) : nothing}
-      ${knob(o.m, pair.mode, KNOB_Y, radius, pair.angle, o.reducedMotion)}
-      ${knob(o.m, pair.temp, KNOB_Y, radius, 0, o.reducedMotion)}`,
+      ${knob(o.m, pair.mode, KNOB_Y, radius, pair.angle, o.reducedMotion, o.width)}
+      ${knob(o.m, pair.temp, KNOB_Y, radius, 0, o.reducedMotion, o.width)}`,
   )}`;
 }
 
-function knob(m: Materials, cx: number, cy: number, r: number, angle: number, reducedMotion: boolean): SVGTemplateResult {
+function knob(
+  m: Materials,
+  cx: number,
+  cy: number,
+  r: number,
+  angle: number,
+  reducedMotion: boolean,
+  ovenWidth: number,
+): SVGTemplateResult {
   const bezel = r * (BEZEL_RADIUS / KNOB_RADIUS);
   const ring = (bezel + r) / 2;
   // A CSS transform, so the knob turns smoothly when it changes (unless motion is reduced).
@@ -295,7 +311,7 @@ function knob(m: Materials, cx: number, cy: number, r: number, angle: number, re
   return svg`
     <circle cx=${cx} cy=${cy + 0.9} r=${bezel + 0.5} fill="#000" opacity="0.06" />
     <circle cx=${cx} cy=${cy} r=${ring} fill="none" stroke=${url(m.metal)} stroke-width=${round(bezel - r)} />
-    <circle cx=${cx} cy=${cy} r=${ring} fill="none" stroke=${url(cx < WIDTH / 2 ? m.bezelRight : m.bezelLeft)}
+    <circle cx=${cx} cy=${cy} r=${ring} fill="none" stroke=${url(cx < ovenWidth / 2 ? m.bezelRight : m.bezelLeft)}
       stroke-width=${round(bezel - r)} />
     <circle cx=${cx} cy=${cy} r=${round(bezel + 0.4)} fill="none" stroke="#000" stroke-width="0.5" opacity="0.22" />
     <circle cx=${cx} cy=${cy} r=${round(r + 0.95)} fill="none" stroke="#fff" stroke-width="1" opacity="0.18" />
@@ -337,11 +353,13 @@ function printed(x: number, y: number, word: string, dark: boolean, size = 1.85)
  * E Series touch legends, printed on the stainless: the modes in two rows of five on the left,
  * Clear and Start beside the screen, and the number keys on the right.
  */
-function touchLegends(double: boolean, dark: boolean): SVGTemplateResult {
+function touchLegends(double: boolean, dark: boolean, ovenWidth: number): SVGTemplateResult {
   const top = ["BAKE", "ROAST", "BROIL", "WARM", "CLEAN"];
   const bottom = ["CONV", "C ROAST", "PROOF", "GOURMET", "MORE"];
   const words: SVGTemplateResult[] = [];
-  const word = (x: number, y: number, text: string, size?: number) => words.push(printed(x, y, text, dark, size));
+  // Each legend is placed where the 30″ panel has it, then moved to this panel's width.
+  const word = (x: number, y: number, text: string, size?: number) =>
+    words.push(printed(onPanel(x, ovenWidth), y, text, dark, size));
   top.forEach((text, i) => word(19.3 + i * 13.4, 20.3, text));
   bottom.forEach((text, i) => word(19.3 + i * 13.4, 30.2, text));
   if (double) {

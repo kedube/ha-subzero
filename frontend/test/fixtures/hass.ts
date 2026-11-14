@@ -46,6 +46,8 @@ export function makeFixture(options: {
   entities: EntityTable;
   locks?: Partial<Record<string, LockCode>>;
   available?: boolean;
+  /** What the integration works out from the type; nothing by default. */
+  traits?: Partial<PanelAppliance["traits"]>;
 }): Fixture {
   const entities: EntityMap = {};
   const states: Record<string, HassEntity> = {};
@@ -68,6 +70,8 @@ export function makeFixture(options: {
       available: options.available ?? true,
       spec: options.spec,
       detected_form: options.spec.form,
+      form_specs: { [options.spec.form]: options.spec },
+      traits: { knob_oven: false, left_right_ovens: false, ...options.traits },
       appearance: APPEARANCE,
       appearance_options: { finish: ["stainless"], panel_colors: [], knobs: null, handle: null, style: null, forms: [] },
       entities,
@@ -130,7 +134,7 @@ export function makeHass(
     themes: { darkMode: false },
     user: { is_admin: true },
     config: { unit_system: { temperature: options.unit ?? "°F" }, time_zone: "America/New_York" },
-    connection: { subscribeMessage: async () => async () => {} },
+    connection: { subscribeMessage: async () => async () => {}, addEventListener: () => {}, removeEventListener: () => {} },
     async callService(domain, service, data, target) {
       calls.push({ domain, service, data, target });
       if (options.reject) throw options.reject;

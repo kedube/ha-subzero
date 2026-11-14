@@ -5,8 +5,8 @@ import { ControlElement, defineOnce } from "./base";
 
 type Light = Extract<Control, { kind: "light" }>;
 
-// The hood's task light doesn't go below 5% (light.py).
-const MIN_BRIGHTNESS = 5;
+// The hood's task light doesn't go below 5% (HOOD_INTEGER_RANGES["light_percent"] in const.py).
+export const MIN_BRIGHTNESS = 5;
 
 /** A light: on or off, then brightness and white temperature sliders while it's on. */
 export class SzLight extends ControlElement<Light> {

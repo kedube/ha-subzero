@@ -153,7 +153,7 @@ export interface Appearance {
   finish: Finish;
   /** "#rrggbb" for a panel-ready front (finish "panel"); null otherwise. */
   panel_color: string | null;
-  /** Ranges and knob wall ovens. */
+  /** Ranges, and wall ovens drawn with knobs (see hasKnobs in drawings/wall-oven/layout.ts). */
   knobs: KnobColor;
   /** Refrigeration and dishwashers. */
   handle: HandleStyle;
@@ -221,6 +221,15 @@ export interface PanelAppliance {
   spec: ApplianceSpec;
   /** The form detection found, before any override. */
   detected_form: string;
+  /** What `spec` would be with each form the Appearance editor offers, and with the detected form, by form. */
+  form_specs: Record<string, ApplianceSpec>;
+  /** Facts the integration works out from the appliance's type and properties. */
+  traits: {
+    /** An oven with a mode knob (the integration's KNOB_OVEN_TYPES), which reports whether it allows mode changes. */
+    knob_oven: boolean;
+    /** Two ovens the app calls right and left: a range with two cavities. */
+    left_right_ovens: boolean;
+  };
   /** The effective Appearance, defaults filled in. */
   appearance: Appearance;
   appearance_options: AppearanceOptions;

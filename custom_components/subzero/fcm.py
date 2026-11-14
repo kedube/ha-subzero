@@ -14,11 +14,13 @@ from datetime import UTC, datetime
 from firebase_messaging import FcmPushClient, FcmRegisterConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .alert_loc_keys import ALERT_LOCATION_KEYS, RANGE_ALERT_LOCATION_KEYS
 from .api import ApiError, SubZeroClient
 from .app_config import FIREBASE_CONFIG
+from .const import DOMAIN
 from .controls import (
     appliance_type,
     has_left_and_right_ovens,
@@ -28,12 +30,14 @@ from .controls import (
     is_oven,
     is_wine,
 )
-from .coordinator import SubZeroCoordinator
+from .coordinator import SubZeroCoordinator, firebase_alerts_issue
 
 _LOGGER = logging.getLogger(__name__)
 RETRY_INTERVAL = 300
 REFRESH_INTERVAL = 3600
 HEALTH_CHECK_INTERVAL = 60
+# Failed attempts in a row, RETRY_INTERVAL apart, before a repair says alerts aren't working.
+FAILURES_BEFORE_REPAIR = 3
 
 
 def parse_alert(message: dict) -> tuple[str, datetime, int, int] | None:
@@ -147,6 +151,32 @@ class FcmAlerts:
         self.last_error: str | None = None
         self.last_sync: str | None = None
         self.subscription_healthy = False
+        self._failures = 0
+
+    @callback
+    def _attempt_failed(self) -> None:
+        """Count a failed attempt, and raise a repair once they add up.
+
+        Appliances keep reporting through the live connection meanwhile; only the alerts
+        that Firebase would deliver sooner are missing.
+        """
+        self._failures += 1
+        if self._failures == FAILURES_BEFORE_REPAIR:
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                firebase_alerts_issue(self.entry.entry_id),
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="firebase_alerts_failing",
+                translation_placeholders={"name": self.entry.title},
+            )
+
+    @callback
+    def _attempt_succeeded(self) -> None:
+        if self._failures >= FAILURES_BEFORE_REPAIR:
+            ir.async_delete_issue(self.hass, DOMAIN, firebase_alerts_issue(self.entry.entry_id))
+        self._failures = 0
 
     @callback
     def _save(self, **changes: object) -> None:
@@ -257,12 +287,14 @@ class FcmAlerts:
                         interval = REFRESH_INTERVAL if self.subscription_healthy else RETRY_INTERVAL
                         next_sync = time.monotonic() + interval
                     delay = min(delay, max(1, next_sync - time.monotonic()))
+                    self._attempt_succeeded()
                 # Firebase and appliance requests can fail independently.
                 except Exception as error:
                     self.last_error = type(error).__name__
                     self.subscription_healthy = False
                     _LOGGER.warning("Firebase alert setup failed: %s", type(error).__name__)
                     delay = RETRY_INTERVAL
+                    self._attempt_failed()
                 try:
                     await asyncio.wait_for(self._stop.wait(), timeout=delay)
                 except TimeoutError:

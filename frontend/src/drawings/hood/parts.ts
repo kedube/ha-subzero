@@ -1,15 +1,6 @@
 import { nothing, svg, type SVGTemplateResult } from "lit";
-import {
-  HOOD_LIGHT,
-  clamp,
-  metalGradient,
-  mix,
-  points,
-  round,
-  url,
-  type Materials,
-  type Pt,
-} from "../wall-oven/materials";
+import { clamp, mix, pointList, round, type Ids, type Point } from "../materials-core";
+import { HOOD_LIGHT, metalGradient, url, type Materials } from "../wall-oven/materials";
 
 /**
  * Wolf's Pro Ventilation hoods (the 2026 50-generation: VWC wall chimney, VI island, VL liner),
@@ -81,18 +72,18 @@ export interface HoodIds {
   vapor: string;
 }
 
-export function hoodIds(uid: string): HoodIds {
+export function hoodIds(ids: Ids): HoodIds {
   return {
-    baffles: `${uid}-baffles`,
-    canopy: `${uid}-canopy`,
-    flange: `${uid}-flange`,
-    lens: `${uid}-lens`,
-    lampGlow: `${uid}-lamp-glow`,
-    wood: `${uid}-wood`,
-    lightCone: `${uid}-cone`,
-    fade: `${uid}-fade`,
-    fadeMask: `${uid}-fade-mask`,
-    vapor: `${uid}-vapor`,
+    baffles: ids.id("baffles"),
+    canopy: ids.id("canopy"),
+    flange: ids.id("flange"),
+    lens: ids.id("lens"),
+    lampGlow: ids.id("lamp-glow"),
+    wood: ids.id("wood"),
+    lightCone: ids.id("cone"),
+    fade: ids.id("fade"),
+    fadeMask: ids.id("fade-mask"),
+    vapor: ids.id("vapor"),
   };
 }
 
@@ -138,7 +129,7 @@ export function lightPositions(width: number): number[] {
 }
 
 /** The underside's outline: the angled returns from the rolled edge back to the wall. */
-function undersideOutline(x0: number, x1: number, under: number, band: boolean): Pt[] {
+function undersideOutline(x0: number, x1: number, under: number, band: boolean): Point[] {
   const front = (band ? CHAMFER : 0) + RETURN_FRONT;
   return [
     [x0 + front, under],
@@ -190,7 +181,7 @@ export function hoodDefs(ids: HoodIds, look: HoodLook, theme: "light" | "dark"):
  */
 export function canopyBase(m: Materials, ids: HoodIds, width: number, top: number): SVGTemplateResult {
   const inset = Math.min(90, width * 0.3);
-  const face: Pt[] = [
+  const face: Point[] = [
     [inset, top],
     [width - inset, top],
     [width, top + CANOPY],
@@ -198,8 +189,8 @@ export function canopyBase(m: Materials, ids: HoodIds, width: number, top: numbe
   ];
   return svg`
     ${metalGradient(ids.canopy, "stainless", 0, width, 0.35, HOOD_LIGHT)}
-    <polygon points=${points(face)} fill=${url(ids.canopy)} />
-    <polygon points=${points(face)} fill=${url(m.sheen)} />
+    <polygon points=${pointList(face)} fill=${url(ids.canopy)} />
+    <polygon points=${pointList(face)} fill=${url(m.sheen)} />
   `;
 }
 
@@ -222,7 +213,7 @@ export function canopyDetails(width: number, top: number): SVGTemplateResult {
  */
 export function bandBase(m: Materials, x0: number, x1: number, top: number): SVGTemplateResult {
   const lip = top + BAND;
-  const strip: Pt[] = [
+  const strip: Point[] = [
     [x0, lip],
     [x1, lip],
     [x1 - CHAMFER, lip + LIP],
@@ -230,8 +221,8 @@ export function bandBase(m: Materials, x0: number, x1: number, top: number): SVG
   ];
   return svg`
     <rect x=${x0} y=${top} width=${round(x1 - x0)} height=${BAND} fill=${url(m.metal)} />
-    <polygon points=${points(strip)} fill=${url(m.metal)} />
-    <polygon points=${points(strip)} fill="#000" opacity="0.07" />
+    <polygon points=${pointList(strip)} fill=${url(m.metal)} />
+    <polygon points=${pointList(strip)} fill="#000" opacity="0.07" />
   `;
 }
 
@@ -264,7 +255,7 @@ export function frontDetails(
   const baffleBottom = baffleTop + BAFFLE_ROW;
   const backEdge = bottom - BACK_EDGE;
   const open = (y: number) => inset(y) + FLANGE;
-  const opening: Pt[] = [
+  const opening: Point[] = [
     [x0 + open(baffleTop), baffleTop],
     [x1 - open(baffleTop), baffleTop],
     [x1 - open(backEdge), backEdge],
@@ -277,8 +268,8 @@ export function frontDetails(
   // side walls, in shadow.
   const end0 = x0 + open(backEdge);
   const end1 = x1 - open(backEdge);
-  const clipId = `${m.uid}-opening`;
-  const undersideId = `${m.uid}-underside`;
+  const clipId = m.ids.id("opening");
+  const undersideId = m.ids.id("underside");
   return svg`
     ${band
       ? svg`
@@ -288,13 +279,13 @@ export function frontDetails(
         <line x1=${x0} y1=${lip + 0.6} x2=${x1} y2=${lip + 0.6} stroke="#fff" stroke-width="0.5"
           opacity="0.3" />`
       : nothing}
-    <polygon points=${points([[x0 + cut, edge], [x1 - cut, edge], [x1 - front, under], [x0 + front, under]])}
+    <polygon points=${pointList([[x0 + cut, edge], [x1 - cut, edge], [x1 - front, under], [x0 + front, under]])}
       fill=${url(m.chrome)} />
     <line x1=${x0 + cut} y1=${edge + 0.2} x2=${x1 - cut} y2=${edge + 0.2} stroke="#000" stroke-width="0.6"
       opacity="0.4" />
-    <clipPath id=${undersideId}><polygon points=${points(outline)} /></clipPath>
-    <clipPath id=${clipId}><polygon points=${points(opening)} /></clipPath>
-    <polygon points=${points(outline)} fill=${url(ids.flange)} />
+    <clipPath id=${undersideId}><polygon points=${pointList(outline)} /></clipPath>
+    <clipPath id=${clipId}><polygon points=${pointList(opening)} /></clipPath>
+    <polygon points=${pointList(outline)} fill=${url(ids.flange)} />
     <g clip-path=${url(clipId)}>
       <rect x=${x0} y=${round(baffleTop)} width=${round(w)} height=${round(backEdge - baffleTop)} fill="#57595b" />
       ${baffleRow(ids, end0, end1, mid, baffleTop, seams)}
@@ -312,7 +303,7 @@ export function frontDetails(
       )}
       <rect x=${x0} y=${round(baffleTop)} width=${round(w)} height="1.6" fill="#000" opacity="0.18" />
     </g>
-    <polygon points=${points(opening)} fill="none" stroke="#000" stroke-width="0.5" opacity="0.35" />
+    <polygon points=${pointList(opening)} fill="none" stroke="#000" stroke-width="0.5" opacity="0.35" />
     <rect x=${round(end0)} y=${round(backEdge)} width=${round(end1 - end0)} height=${round(bottom - backEdge)} fill="#e4e5e6" />
     ${look.light > 0
       ? svg`<g clip-path=${url(undersideId)}>${lights.map(
@@ -320,10 +311,10 @@ export function frontDetails(
             fill=${url(ids.lampGlow)} opacity=${round(0.5 + 0.5 * look.light)} />`,
         )}</g>`
       : nothing}
-    <clipPath id=${`${m.uid}-below-edge`}>
+    <clipPath id=${m.ids.id("below-edge")}>
       <rect x=${round(x0 - 20)} y=${round(edge)} width=${round(w + 40)} height=${round(UNDER + EDGE + 20)} />
     </clipPath>
-    <g clip-path=${url(`${m.uid}-below-edge`)}>${lights.map((x) => lamp(m, ids, x, under, look))}</g>
+    <g clip-path=${url(m.ids.id("below-edge"))}>${lights.map((x) => lamp(m, ids, x, under, look))}</g>
     ${knob(m, mid - KNOB_OFFSET, under, "light", look.light > 0 ? 18 + look.light * 42 : 0)}
     ${knob(m, mid + KNOB_OFFSET, under, "fan", FAN_ANGLES[Math.round(clamp(look.fan, 0, 4))])}
   `;
@@ -482,13 +473,13 @@ export function lightSpill(
     <g opacity=${strength} filter=${url(m.blurWide)}>
       ${lights.map((x) => {
         // Starting a little inside the hood, so the blur leaves the light strongest just below it.
-        const cone: Pt[] = [
+        const cone: Point[] = [
           [x - 8, bottom - 10],
           [x + 8, bottom - 10],
           [x + 58, bottom + depth],
           [x - 58, bottom + depth],
         ];
-        return svg`<polygon points=${points(cone)} fill=${url(ids.lightCone)} />`;
+        return svg`<polygon points=${pointList(cone)} fill=${url(ids.lightCone)} />`;
       })}
     </g>
   `;
@@ -513,9 +504,9 @@ export function fanVapor(
   const count = 2 + Math.round(clamp(fan, 0, 4));
   const span = x1 - x0;
   const duration = round(4.4 - 0.8 * fan);
-  const name = `${m.uid}-vapor`;
-  const clipId = `${m.uid}-vapor-clip`;
-  const fadeId = `${m.uid}-vapor-fade`;
+  const name = m.ids.id("vapor");
+  const clipId = m.ids.id("vapor-clip");
+  const fadeId = m.ids.id("vapor-fade");
   const wisps = Array.from({ length: count }, (_, i) => {
     // Spread across the middle of the hood, nudged a little so no wisp sits squarely on a light.
     const x = x0 + span * (0.14 + (0.72 * (i + 0.5)) / count) + (i % 2 ? 4 : -4);
@@ -556,8 +547,8 @@ export function fanVapor(
 /** The halo: a soft ring of light along the underside's edges, and the light it sheds below. */
 export function halo(m: Materials, x0: number, x1: number, edge: number, band = true): SVGTemplateResult {
   const color = "#ffeccc";
-  const fall = `${m.uid}-halo-fall`;
-  const clipId = `${m.uid}-halo-clip`;
+  const fall = m.ids.id("halo-fall");
+  const clipId = m.ids.id("halo-clip");
   const under = edge + EDGE;
   const bottom = under + UNDER;
   const outline = undersideOutline(x0, x1, under, band);
@@ -566,9 +557,9 @@ export function halo(m: Materials, x0: number, x1: number, edge: number, band = 
       <stop offset="0" stop-color=${color} stop-opacity="0.6" />
       <stop offset="1" stop-color=${color} stop-opacity="0" />
     </linearGradient>
-    <clipPath id=${clipId}><polygon points=${points(outline)} /></clipPath>
+    <clipPath id=${clipId}><polygon points=${pointList(outline)} /></clipPath>
     <g clip-path=${url(clipId)}>
-      <polygon points=${points(outline)} fill=${color} opacity="0.22" />
+      <polygon points=${pointList(outline)} fill=${color} opacity="0.22" />
       <g filter=${url(m.blur)}>
         <line x1=${x0} y1=${under + 0.6} x2=${x1} y2=${under + 0.6} stroke=${color} stroke-width="3" />
         <line x1=${x0} y1=${bottom - 1.2} x2=${x1} y2=${bottom - 1.2} stroke=${color} stroke-width="2.4" />
@@ -647,12 +638,12 @@ export function surround(
       <feBlend in="grain" in2="SourceGraphic" mode="overlay" result="wood" />
       <feComposite in="wood" in2="SourceAlpha" operator="in" />
     </filter>
-    <linearGradient id=${`${m.uid}-stain`} x1="0" y1="0" x2="1" y2="0">
+    <linearGradient id=${m.ids.id("stain")} x1="0" y1="0" x2="1" y2="0">
       <stop offset="0" stop-color="#4b4d4f" />
       <stop offset="0.5" stop-color="#5c5e60" />
       <stop offset="1" stop-color="#46484a" />
     </linearGradient>
-    <rect x="0" y="0" width=${width} height=${height} fill=${url(`${m.uid}-stain`)}
+    <rect x="0" y="0" width=${width} height=${height} fill=${url(m.ids.id("stain"))}
       filter=${url(ids.wood)} />
     <rect x="0" y="0" width=${width} height=${height} fill=${url(m.sheen)} />
     <line x1="0" y1="0.4" x2=${width} y2="0.4" stroke="#fff" stroke-width="0.6" opacity="0.2" />

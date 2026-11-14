@@ -9,6 +9,11 @@ export class SzDuration extends ControlElement<Duration> {
   static override properties = { custom: { state: true } };
 
   declare custom: boolean;
+  /**
+   * What the custom input starts from, read once as it opens. A running timer's value moves on
+   * every minute, and binding it would replace whatever is being typed.
+   */
+  private draft = "";
 
   constructor() {
     super();
@@ -24,7 +29,16 @@ export class SzDuration extends ControlElement<Duration> {
     if (!control || this.disabled || !Number.isFinite(minutes)) return;
     const value = Math.min(control.max, Math.max(control.min, Math.round(minutes)));
     this.custom = false;
-    if (value !== this.value()) this.send(value);
+    // A running timer reads the minutes it has left, so choosing that number is still a change:
+    // it sets the timer to it again.
+    if (control.remaining || value !== this.value()) this.send(value);
+  }
+
+  private toggleCustom(): void {
+    if (this.disabled) return;
+    this.custom = !this.custom;
+    const value = this.value();
+    this.draft = value === null || value === 0 ? "" : String(value);
   }
 
   private readonly onSubmit = (event: Event): void => {
@@ -69,9 +83,7 @@ export class SzDuration extends ControlElement<Duration> {
             aria-expanded=${this.custom && !disabled ? "true" : "false"}
             aria-disabled=${this.locked}
             aria-describedby=${describedBy}
-            @click=${() => {
-              if (!this.disabled) this.custom = !this.custom;
-            }}
+            @click=${() => this.toggleCustom()}
           >
             ${this.t("ctl.custom")}
           </button>
@@ -85,7 +97,7 @@ export class SzDuration extends ControlElement<Duration> {
                 max=${control.max}
                 step="1"
                 required
-                .value=${value === null || value === 0 ? "" : String(value)}
+                .value=${this.draft}
                 aria-label=${this.t("ctl.minutes")}
               />
               <button type="submit" class="sz-button primary">${this.t("ctl.set")}</button>

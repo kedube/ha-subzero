@@ -13,37 +13,71 @@ export interface IceDelayValue {
   repeat: boolean;
 }
 
-/** The time of day in `timeZone` (the browser's when unset), in minutes since midnight. */
-function wallClock(now: Date, timeZone: string | undefined): number {
-  if (timeZone) {
-    try {
-      const parts = new Intl.DateTimeFormat("en-US", {
-        timeZone,
-        hourCycle: "h23",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      }).formatToParts(now);
-      const part = (type: string) => Number(parts.find((candidate) => candidate.type === type)?.value ?? 0);
-      return part("hour") * 60 + part("minute") + part("second") / 60;
-    } catch {
-      // An unknown zone: the browser's clock is the better guess than none.
-    }
-  }
-  return now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
+const MINUTE_MS = 60_000;
+const DAY_MS = 86_400_000;
+
+/** What the clock in `timeZone` reads at the moment `at` (ms), as the UTC moment that reads the same. */
+function clockIn(timeZone: string, at: number): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(at);
+  const part = (type: string) => Number(parts.find((candidate) => candidate.type === type)?.value ?? 0);
+  return Date.UTC(part("year"), part("month") - 1, part("day"), part("hour"), part("minute"), part("second"));
+}
+
+/** The moment the clock in `timeZone` reads `clock` (as clockIn gives it), found from a moment near it. */
+function momentOf(timeZone: string, clock: number, near: number): number {
+  const offsetAt = (at: number) => clockIn(timeZone, at) - Math.floor(at / 1000) * 1000;
+  // The zone's offset nearby gives a first answer; the offset at that answer settles it when the
+  // clocks change in between.
+  const first = clock - offsetAt(near);
+  return clock - offsetAt(first);
+}
+
+/** The next moment (ms) after `now` that the clock in `timeZone` reads `hours`:`minutes`. */
+function nextInZone(timeZone: string, hours: number, minutes: number, now: number): number {
+  const clock = clockIn(timeZone, now);
+  const today = clock - (clock % DAY_MS) + (hours * 60 + minutes) * MINUTE_MS;
+  const moment = momentOf(timeZone, today, now);
+  return moment > now ? moment : momentOf(timeZone, today + DAY_MS, moment + DAY_MS);
+}
+
+/** The same on the browser's own clock, whose dates know its zone's clock changes. */
+function nextLocal(hours: number, minutes: number, now: number): number {
+  const moment = new Date(now);
+  moment.setHours(hours, minutes, 0, 0);
+  if (moment.getTime() <= now) moment.setDate(moment.getDate() + 1);
+  return moment.getTime();
 }
 
 /**
  * Minutes from `now` until the next `time` ("HH:MM") on the clock the user reads times on: the
- * server's zone when their profile asks for it, else the browser's. A time that's already passed
- * today means tomorrow, which the action still takes (up to 1439 minutes).
+ * server's zone when their profile asks for it, else the browser's. Real minutes, so across a
+ * clock change the delay still starts when that clock reads the time. A time that's already
+ * passed today means tomorrow, which the action still takes (up to 1439 minutes).
  */
 export function minutesUntil(time: string, now: Date, timeZone?: string): number | null {
   const match = /^(\d{1,2}):(\d{2})$/.exec(time);
   if (!match) return null;
-  let minutes = Math.ceil(Number(match[1]) * 60 + Number(match[2]) - wallClock(now, timeZone));
-  if (minutes <= 0) minutes += 1440;
-  return Math.min(1439, minutes);
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  let moment: number | undefined;
+  if (timeZone) {
+    try {
+      moment = nextInZone(timeZone, hours, minutes, now.getTime());
+    } catch {
+      // An unknown zone: the browser's clock is the better guess than none.
+    }
+  }
+  moment ??= nextLocal(hours, minutes, now.getTime());
+  return Math.min(1439, Math.max(1, Math.ceil((moment - now.getTime()) / MINUTE_MS)));
 }
 
 /** The ice delay form: how many hours, starting now or later today, once or daily. */

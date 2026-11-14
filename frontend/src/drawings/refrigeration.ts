@@ -1,4 +1,6 @@
 import { html, nothing, svg, type SVGTemplateResult } from "lit";
+import { Ids } from "./materials-core";
+import { LABEL_H, labelScale } from "./overlay";
 import { n, type Camera, type Rect } from "./refrigeration/geometry";
 import { cavity, crisperBins } from "./refrigeration/interior";
 import { buildLayout, type Front, type Layout } from "./refrigeration/layout";
@@ -12,7 +14,6 @@ import {
   handleDiameter,
   handlePlacement,
   kick,
-  LABEL_H,
   readout,
   sideHinges,
   top,
@@ -76,7 +77,7 @@ export const renderRefrigeration: DrawingRenderer = (input) => {
   // one place whatever the doors do.
   const { reach, y0, y1 } = openExtent(scene, layout, state, parts);
   const box = { x: -reach, y: y0, w: layout.w + 2 * reach, h: y1 - y0 };
-  const ui = unitsPerPixel(box.h, input.pixelHeight);
+  const ui = labelScale(box.h, input.pixelHeight);
 
   const lightPools = layout.fronts
     .filter((front, index) => open[index] && front.kind === "door")
@@ -112,8 +113,7 @@ export const renderRefrigeration: DrawingRenderer = (input) => {
 };
 
 function sceneFor(input: DrawingInput, layout: Layout): Scene {
-  // Several drawings share one shadow root, so every id carries the uid (kept id-safe).
-  const uid = input.uid.replace(/[^A-Za-z0-9_-]/g, "_") || "rf";
+  const ids = new Ids(input.uid);
   // The eye: a product photo's for full-size units, so doors swing in mild perspective. For
   // undercounter drawers it's a standing person's, so a pulled drawer is seen from above; for
   // undercounter doors it's level with the door's middle, as in the photos, which keeps a
@@ -126,8 +126,8 @@ function sceneFor(input: DrawingInput, layout: Layout): Scene {
       : { cx: layout.w / 2, cy: layout.span.y1 / 2, d: 2200 };
   const inside: Camera = { ...camera, d: layout.undercounter ? 1000 : 1150 };
   return {
-    id: (name) => `${uid}-${name}`,
-    ref: (name) => `url(#${uid}-${name})`,
+    id: (name) => ids.id(name),
+    ref: (name) => ids.url(name),
     layout,
     finish: finishOf(input.appearance),
     handle: input.appearance.handle,
@@ -164,17 +164,6 @@ function openExtent(
     }
   });
   return { reach, y0, y1: Math.max(y1, layout.h + (FLOOR * (layout.h - y0)) / (1 - FLOOR)) };
-}
-
-/**
- * Drawing units per CSS pixel of UI: from the height the drawing is shown at when the caller
- * knows it, else text at 3% of the drawing's height. A label never takes more than an eighth
- * of a thumbnail's height.
- */
-function unitsPerPixel(viewHeight: number, pixelHeight?: number): number {
-  const most = (0.125 * viewHeight) / LABEL_H;
-  if (pixelHeight && pixelHeight > 0) return Math.min(viewHeight / pixelHeight, most);
-  return (0.03 * viewHeight) / 12;
 }
 
 function union(rects: Rect[]): Rect {

@@ -113,6 +113,8 @@ export function makeAppliance(id: string, spec: ApplianceSpec, over: Partial<Pan
     available: true,
     spec,
     detected_form: spec.form,
+    form_specs: { [spec.form]: spec },
+    traits: { knob_oven: false, left_right_ovens: false },
     appearance: { ...DEFAULT_APPEARANCE },
     appearance_options: {
       finish: ["stainless", "panel", "black"],
@@ -139,19 +141,38 @@ export function entity(
 
 export interface FakeConnection {
   subscribeMessage: ReturnType<typeof vi.fn>;
-  /** Sends a panel message to the newest subscriber. */
-  send(message: PanelMessage): void;
+  /** Sends a panel message to the newest subscriber, or to the one subscribed `nth` (from 0). */
+  send(message: PanelMessage, nth?: number): void;
   unsubscribe: ReturnType<typeof vi.fn>;
+  addEventListener(type: string, listener: () => void): void;
+  removeEventListener(type: string, listener: () => void): void;
+  /** Fires a connection event ("ready", "disconnected") as home-assistant-js-websocket does. */
+  fire(type: string): void;
 }
 
 export function makeConnection(): FakeConnection {
-  let callback: ((message: PanelMessage) => void) | undefined;
+  const callbacks: Array<(message: PanelMessage) => void> = [];
+  const listeners = new Map<string, Set<() => void>>();
   const unsubscribe = vi.fn(async () => {});
   const subscribeMessage = vi.fn(async (next: (message: PanelMessage) => void) => {
-    callback = next;
+    callbacks.push(next);
     return unsubscribe;
   });
-  return { subscribeMessage, unsubscribe, send: (message) => callback?.(message) };
+  return {
+    subscribeMessage,
+    unsubscribe,
+    send: (message, nth = callbacks.length - 1) => callbacks[nth]?.(message),
+    addEventListener: (type, listener) => {
+      if (!listeners.has(type)) listeners.set(type, new Set());
+      listeners.get(type)!.add(listener);
+    },
+    removeEventListener: (type, listener) => {
+      listeners.get(type)?.delete(listener);
+    },
+    fire: (type) => {
+      for (const listener of [...(listeners.get(type) ?? [])]) listener();
+    },
+  };
 }
 
 export function makeHass(over: Partial<HomeAssistant> = {}): HomeAssistant {

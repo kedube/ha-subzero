@@ -19,7 +19,7 @@ import "./select";
 import "./setpoint";
 import "./toggle";
 
-export { VALUE_EVENT, type ValueDetail } from "./base";
+export { MORE_INFO_EVENT, VALUE_EVENT, type ValueDetail } from "./base";
 
 export interface ControlBinding {
   t: Translate;
@@ -34,6 +34,10 @@ export interface ControlBinding {
   formatNumber?: NumberFormatter;
   /** The section shows the control's lock reason once for several controls (see ControlElement). */
   sharedReason?: boolean;
+  /** The control's entity, whose more-info dialog its label opens (see controlEntity in families/common.ts). */
+  entityId?: string;
+  /** The view's clock in ms, which countdowns count on; each keeps its own if unset. */
+  now?: number;
 }
 
 /** The element for a control's kind. */
@@ -41,6 +45,7 @@ export function renderControl(control: Control, binding: ControlBinding): Templa
   const { t, pending, error, onValue } = binding;
   const quiet = binding.quiet === true;
   const shared = binding.sharedReason === true;
+  const entity = binding.entityId;
   switch (control.kind) {
     case "setpoint":
       return html`<sz-setpoint
@@ -49,26 +54,27 @@ export function renderControl(control: Control, binding: ControlBinding): Templa
         .pending=${pending}
         .error=${error}
         .sharedReason=${shared}
+        .entityId=${entity}
         .formatNumber=${binding.formatNumber}
         ?quiet=${quiet}
         @sz-value=${onValue}
       ></sz-setpoint>`;
     case "select":
-      return html`<sz-select .control=${control} .t=${t} .pending=${pending} .error=${error} .sharedReason=${shared} ?quiet=${quiet} @sz-value=${onValue}></sz-select>`;
+      return html`<sz-select .control=${control} .t=${t} .pending=${pending} .error=${error} .sharedReason=${shared} .entityId=${entity} ?quiet=${quiet} @sz-value=${onValue}></sz-select>`;
     case "toggle":
-      return html`<sz-toggle .control=${control} .t=${t} .pending=${pending} .error=${error} .sharedReason=${shared} ?quiet=${quiet} @sz-value=${onValue}></sz-toggle>`;
+      return html`<sz-toggle .control=${control} .t=${t} .pending=${pending} .error=${error} .sharedReason=${shared} .entityId=${entity} ?quiet=${quiet} @sz-value=${onValue}></sz-toggle>`;
     case "action":
-      return html`<sz-action .control=${control} .t=${t} .pending=${pending} .error=${error} .sharedReason=${shared} ?quiet=${quiet} @sz-value=${onValue}></sz-action>`;
+      return html`<sz-action .control=${control} .t=${t} .pending=${pending} .error=${error} .sharedReason=${shared} .entityId=${entity} ?quiet=${quiet} @sz-value=${onValue}></sz-action>`;
     case "duration":
-      return html`<sz-duration .control=${control} .t=${t} .pending=${pending} .error=${error} .sharedReason=${shared} ?quiet=${quiet} @sz-value=${onValue}></sz-duration>`;
+      return html`<sz-duration .control=${control} .t=${t} .pending=${pending} .error=${error} .sharedReason=${shared} .entityId=${entity} ?quiet=${quiet} @sz-value=${onValue}></sz-duration>`;
     case "fan":
-      return html`<sz-fan .control=${control} .t=${t} .pending=${pending} .error=${error} .sharedReason=${shared} ?quiet=${quiet} @sz-value=${onValue}></sz-fan>`;
+      return html`<sz-fan .control=${control} .t=${t} .pending=${pending} .error=${error} .sharedReason=${shared} .entityId=${entity} ?quiet=${quiet} @sz-value=${onValue}></sz-fan>`;
     case "light":
-      return html`<sz-light .control=${control} .t=${t} .pending=${pending} .error=${error} .sharedReason=${shared} ?quiet=${quiet} @sz-value=${onValue}></sz-light>`;
+      return html`<sz-light .control=${control} .t=${t} .pending=${pending} .error=${error} .sharedReason=${shared} .entityId=${entity} ?quiet=${quiet} @sz-value=${onValue}></sz-light>`;
     case "reading":
-      return html`<sz-reading .control=${control} .t=${t} ?quiet=${quiet}></sz-reading>`;
+      return html`<sz-reading .control=${control} .t=${t} .entityId=${entity} ?quiet=${quiet}></sz-reading>`;
     case "countdown":
-      return html`<sz-countdown .control=${control} .t=${t} ?quiet=${quiet}></sz-countdown>`;
+      return html`<sz-countdown .control=${control} .t=${t} .entityId=${entity} .now=${binding.now} ?quiet=${quiet}></sz-countdown>`;
     case "ice_delay":
       return html`<sz-ice-delay
         .control=${control}

@@ -1,5 +1,5 @@
 import type { Translate } from "../../i18n";
-import type { ChipIcon, LabelSpec } from "../generic/overlay";
+import type { LabelSpec, OverlayIcon } from "../overlay";
 import type { DrawingState } from "../types";
 
 /** How a dishwasher's live state reads in a drawing: Cove's floor light, chips and words. */
@@ -27,10 +27,10 @@ export function doorOpen(state: DrawingState): boolean {
  * The frosted progress ring and indicator chips for the current state. Time left stays on the
  * card's display (every dishwasher card has one), so the door carries no text.
  */
-export function dishwasherOverlay(state: DrawingState): { label: LabelSpec | null; chips: ChipIcon[] } {
+export function dishwasherOverlay(state: DrawingState): { label: LabelSpec | null; chips: OverlayIcon[] } {
   const dw = state.dishwasher;
   if (!dw || !state.available) return { label: null, chips: [] };
-  const chips: ChipIcon[] = [];
+  const chips: OverlayIcon[] = [];
   let label: LabelSpec | null = null;
   switch (dw.status) {
     case "running":

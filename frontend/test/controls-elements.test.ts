@@ -313,6 +313,142 @@ describe("toggle", () => {
     await settle(element);
     expect(root(element).querySelector(".spinner")).not.toBeNull();
   });
+
+  const power: Control = {
+    ...toggle,
+    id: "cav_power",
+    label: "Power",
+    value: true,
+    confirmOff: { text: "Turn off the right oven?", button: "Turn off" },
+  };
+
+  it("asks before turning off when it has a question for that", async () => {
+    const { element, sent } = await mount(power);
+    const flip = () => root(element).querySelector<HTMLButtonElement>("[role=switch]")!;
+    flip().click();
+    await settle(element);
+    expect(sent).toEqual([]);
+    const bar = root(element).querySelector(".confirm")!;
+    expect(bar.querySelector(".question")?.textContent).toBe("Turn off the right oven?");
+    expect(bar.classList.contains("danger")).toBe(true);
+    // The safe choice has focus, and the switch waits for the answer.
+    expect(root(element).activeElement).toBe(byText(element, "Not now"));
+    expect(flip().disabled).toBe(true);
+    byText(element, "Not now").click();
+    await settle(element);
+    expect(root(element).querySelector(".confirm")).toBeNull();
+    expect(sent).toEqual([]);
+    expect(flip().getAttribute("aria-checked")).toBe("true");
+    expect(root(element).activeElement).toBe(flip());
+
+    flip().click();
+    await settle(element);
+    byText(element, "Turn off").click();
+    await settle(element);
+    expect(sent).toEqual([false]);
+    expect(root(element).querySelector(".confirm")).toBeNull();
+    expect(flip().getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("closes the question with Escape, and when the oven goes off by itself", async () => {
+    const { element, sent } = await mount(power);
+    root(element).querySelector<HTMLButtonElement>("[role=switch]")!.click();
+    await settle(element);
+    root(element).querySelector(".confirm")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, composed: true }));
+    await settle(element);
+    expect(root(element).querySelector(".confirm")).toBeNull();
+
+    root(element).querySelector<HTMLButtonElement>("[role=switch]")!.click();
+    await settle(element);
+    expect(root(element).querySelector(".confirm")).not.toBeNull();
+    // Turned off at the oven: nothing left to ask, now or when it's next on.
+    element.control = { ...power, value: false };
+    await settle(element);
+    expect(root(element).querySelector(".confirm")).toBeNull();
+    element.control = power;
+    await settle(element);
+    expect(root(element).querySelector(".confirm")).toBeNull();
+    expect(sent).toEqual([]);
+  });
+
+  it("turns on without asking", async () => {
+    const { element, sent } = await mount({ ...power, value: false });
+    root(element).querySelector<HTMLButtonElement>("[role=switch]")!.click();
+    await settle(element);
+    expect(sent).toEqual([true]);
+    expect(root(element).querySelector(".confirm")).toBeNull();
+  });
+});
+
+describe("more-info", () => {
+  const light: Control = { kind: "toggle", id: "cav_light_on", label: "Light", action: { type: "switch", entity_id: "switch.oven_light" }, value: false };
+
+  async function withEntity(control: Control, entityId: string | undefined) {
+    const mounted = await mount(control);
+    (mounted.element as Mounted & { entityId: string | undefined }).entityId = entityId;
+    await settle(mounted.element);
+    return mounted;
+  }
+
+  it("opens Home Assistant's more-info dialog for the entity from the label", async () => {
+    const { element, sent } = await withEntity(light, "switch.oven_light");
+    const heard: Array<{ detail: unknown; bubbles: boolean; composed: boolean }> = [];
+    const listen = (event: Event) => heard.push({ detail: (event as CustomEvent).detail, bubbles: event.bubbles, composed: event.composed });
+    document.addEventListener("hass-more-info", listen);
+    const label = root(element).querySelector<HTMLButtonElement>("button.more")!;
+    label.click();
+    document.removeEventListener("hass-more-info", listen);
+    expect(heard).toEqual([{ detail: { entityId: "switch.oven_light" }, bubbles: true, composed: true }]);
+    // The label does nothing to the control itself.
+    expect(sent).toEqual([]);
+    expect(root(element).querySelector("[role=switch]")!.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("is a button the keyboard reaches, named for what it opens, around the label the widget is named by", async () => {
+    const { element } = await withEntity(light, "switch.oven_light");
+    const label = root(element).querySelector<HTMLButtonElement>("button.more")!;
+    expect(label.type).toBe("button");
+    expect(label.textContent?.trim()).toBe("Light");
+    expect(label.getAttribute("aria-label")).toBe("Light: more information");
+    expect(label.tabIndex).toBe(0);
+    // The switch is still named by the label's own text, not the button's longer name.
+    const named = root(element).getElementById("label")!;
+    expect(named.textContent).toBe("Light");
+    expect(named.closest("button")).toBe(label);
+    expect(root(element).querySelector("[role=switch]")!.getAttribute("aria-labelledby")).toBe("label");
+    const german = await mount(light, "de");
+    (german.element as Mounted & { entityId: string }).entityId = "switch.oven_light";
+    await settle(german.element);
+    expect(root(german.element).querySelector("button.more")!.getAttribute("aria-label")).toBe("Light: weitere Informationen");
+  });
+
+  it("leaves a label as text when there's no entity behind it", async () => {
+    const { element } = await mount({ kind: "reading", id: "model", label: "Model", value: "DF48850SP" });
+    expect(root(element).querySelector("button.more")).toBeNull();
+    expect(root(element).querySelector(".label")?.textContent).toBe("Model");
+  });
+
+  it("works for a value that's only read, and for a locked control", async () => {
+    const reading = await withEntity({ kind: "reading", id: "ap_rssi", label: "Wi-Fi signal", value: "Good · -55 dBm" }, "sensor.fridge_rssi");
+    expect(root(reading.element).querySelector("button.more")).not.toBeNull();
+    const locked = await withEntity({ ...light, disabled: true, reason: "The oven light stays off during Proof." }, "switch.oven_light");
+    const heard = vi.fn();
+    locked.element.addEventListener("hass-more-info", heard);
+    root(locked.element).querySelector<HTMLButtonElement>("button.more")!.click();
+    expect(heard).toHaveBeenCalledOnce();
+  });
+
+  it("has no button where the label is hidden", async () => {
+    // A lone control named like its section, its widget under the label: the label is only read out.
+    const options = ["Off", "On", "Max ice", "Night ice"].map((value) => ({ value, label: value }));
+    const select: Control = { kind: "select", id: "ice_maker_mode", label: "Ice maker", action: { type: "select", entity_id: "select.ice" }, value: "On", options };
+    const { element } = await withEntity(select, "select.ice");
+    expect(root(element).querySelector("button.more")).not.toBeNull();
+    element.toggleAttribute("quiet", true);
+    await settle(element);
+    expect(root(element).querySelector("button.more")).toBeNull();
+    expect(root(element).querySelector(".label")?.textContent).toBe("Ice maker");
+  });
 });
 
 describe("action", () => {
@@ -415,6 +551,41 @@ describe("duration", () => {
     root(element).querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
     expect(sent).toEqual([10, 25]);
   });
+
+  it("sends nothing for the duration it's already set to", async () => {
+    const { element, sent } = await mount({ ...timer, value: 5 });
+    byText(element, "5 min").click();
+    expect(sent).toEqual([]);
+  });
+
+  it("sets a running timer again to the minutes it happens to have left", async () => {
+    // A kitchen timer set to 10 minutes, with 5 of them left.
+    const { element, sent } = await mount({ ...timer, value: 5, remaining: true });
+    byText(element, "5 min").click();
+    expect(sent).toEqual([5]);
+    await settle(element);
+    byText(element, "Custom").click();
+    await settle(element);
+    const input = root(element).querySelector<HTMLInputElement>("input[type=number]")!;
+    expect(input.value).toBe("5");
+    input.value = "5";
+    root(element).querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+    expect(sent).toEqual([5, 5]);
+  });
+
+  it("keeps what's being typed when the timer's minute rolls over", async () => {
+    const { element } = await mount({ ...timer, value: 5, remaining: true });
+    byText(element, "Custom").click();
+    await settle(element);
+    const input = root(element).querySelector<HTMLInputElement>("input[type=number]")!;
+    input.focus();
+    input.value = "12";
+    element.control = { ...timer, value: 4, remaining: true };
+    await settle(element);
+    expect(root(element).querySelector<HTMLInputElement>("input[type=number]")!.value).toBe("12");
+    // The label still follows the timer.
+    expect(root(element).querySelector(".aside")?.textContent).toBe("4 min");
+  });
 });
 
 describe("fan", () => {
@@ -466,6 +637,33 @@ describe("light", () => {
     const { element } = await mount({ ...lamp, on: false, brightness: null, kelvin: null });
     expect(root(element).querySelector("input[type=range]")).toBeNull();
   });
+
+  it("stops holding a change once the light reports it, though it sent only part of the light's state", async () => {
+    const { element } = await mount(lamp);
+    const level = () => root(element).querySelector<HTMLInputElement>("input.level")!;
+    level().value = "60";
+    level().dispatchEvent(new Event("change"));
+    await settle(element);
+    expect(level().value).toBe("60");
+    // The light reports the brightness that was sent, then something else changes it.
+    element.control = { ...lamp, brightness: 60 };
+    await settle(element);
+    element.control = { ...lamp, brightness: 40 };
+    await settle(element);
+    expect(level().value).toBe("40");
+  });
+
+  it("holds a change the light hasn't reported yet", async () => {
+    const { element } = await mount(lamp);
+    const level = () => root(element).querySelector<HTMLInputElement>("input.level")!;
+    level().value = "60";
+    level().dispatchEvent(new Event("change"));
+    await settle(element);
+    // Another part of its state moves first; the brightness sent still shows.
+    element.control = { ...lamp, kelvin: 4000 };
+    await settle(element);
+    expect(level().value).toBe("60");
+  });
 });
 
 describe("reading and countdown", () => {
@@ -487,16 +685,60 @@ describe("reading and countdown", () => {
     const none = await mount({ kind: "countdown", id: "u", label: "Time left", end: null });
     expect(root(none.element).querySelector(".reading")?.textContent).toBe("—");
   });
+
+  it("counts on the clock it's given instead of its own", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse("2026-10-24T18:00:00Z"));
+    const { element } = await mount({ kind: "countdown", id: "t", label: "Time left", end: "2026-10-24T18:04:12Z" });
+    const clocked = element as Mounted & { now: number | undefined };
+    const shown = () => root(element).querySelector(".reading")?.textContent;
+    // The view's clock, here a little behind the system's.
+    clocked.now = Date.parse("2026-10-24T17:59:00Z");
+    await settle(element);
+    expect(shown()).toBe("5:12");
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(3000);
+    await settle(element);
+    expect(shown()).toBe("5:12");
+    clocked.now += 1000;
+    await settle(element);
+    expect(shown()).toBe("5:11");
+    // Without one again, it keeps time itself.
+    clocked.now = undefined;
+    await settle(element);
+    expect(vi.getTimerCount()).toBe(1);
+    expect(shown()).toBe("4:09");
+  });
+
+  it("always shows the hours when asked, as a dishwasher's display does", async () => {
+    const { element } = await mount({ kind: "countdown", id: "wash_cycle_end_time", label: "Time left", end: "2026-10-24T18:42:17Z", hours: true });
+    (element as Mounted & { now: number }).now = Date.parse("2026-10-24T18:00:00Z");
+    await settle(element);
+    expect(root(element).querySelector(".reading")?.textContent).toBe("0:42:17");
+  });
 });
 
 describe("ice delay form", () => {
   it("counts minutes until a time later today, or tomorrow once it's passed", () => {
-    const now = new Date(2026, 9, 24, 18, 30, 20);
+    // In July, when no zone changes its clocks from one day to the next.
+    const now = new Date(2026, 6, 15, 18, 30, 20);
     expect(minutesUntil("22:00", now)).toBe(210);
     expect(minutesUntil("18:31", now)).toBe(1);
     expect(minutesUntil("08:00", now)).toBe(810);
     expect(minutesUntil("18:30", now)).toBe(1439);
     expect(minutesUntil("nope", now)).toBeNull();
+  });
+
+  it("counts real minutes across a clock change, so the delay starts when the clock reads the time", () => {
+    // New York falls back an hour at 2:00 on November 1, 2026: 20:00 the evening before to 8:00 is 13 hours.
+    expect(minutesUntil("08:00", new Date("2026-11-01T00:00:00Z"), "America/New_York")).toBe(780);
+    // And springs forward at 2:00 on March 8: 20:00 to 8:00 is 11 hours.
+    expect(minutesUntil("08:00", new Date("2026-03-08T01:00:00Z"), "America/New_York")).toBe(660);
+    // Later the same night, after the change, and a time before it.
+    expect(minutesUntil("08:00", new Date("2026-11-01T07:30:00Z"), "America/New_York")).toBe(330);
+    expect(minutesUntil("01:00", new Date("2026-11-01T00:00:00Z"), "America/New_York")).toBe(300);
+    // An unknown zone falls back on the browser's clock.
+    expect(minutesUntil("22:00", new Date(2026, 6, 15, 18, 30, 20), "Mars/Olympus")).toBe(210);
   });
 
   it("reads the time on the server's clock when the user's profile asks for it", () => {

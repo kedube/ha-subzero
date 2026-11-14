@@ -3,9 +3,10 @@
  * the panel shows them, and building controls that follow the entities exactly, locks and
  * unavailable states included.
  */
+import { languageOf } from "../data/locale";
 import type { HassEntity, HomeAssistant } from "../hass";
 import type { Translate } from "../i18n";
-import type { EntityDomain, LockCode, PanelAppliance } from "../types";
+import type { EntityDomain, LockCode } from "../types";
 import { optionLabel } from "./options";
 import type { ApplianceContext, Control, Section } from "./types";
 
@@ -83,28 +84,42 @@ export function anyOpen(ctx: ApplianceContext, keys: readonly string[]): boolean
   return keys.some((key) => isOn(ctx, key, "binary_sensor") === true);
 }
 
-/** Series, category and version from `appliance_type` ("17.8.2.0" is 8, 2, 0), as controls.py reads it. */
-export function applianceType(appliance: PanelAppliance): [number, number, number] | null {
-  const parts = (appliance.appliance_type ?? "").split(".");
-  if (parts.length === 3) parts.unshift("0");
-  if (parts.length !== 4 || !parts.every((part) => /^\d+$/.test(part))) return null;
-  return [Number(parts[1]), Number(parts[2]), Number(parts[3])];
-}
-
 // ---------------------------------------------------------------------------------------------
 // Formatting
 
-export function temperatureUnit(hass: HomeAssistant): string {
-  return hass.config?.unit_system?.temperature || "°F";
+/**
+ * The unit a temperature comes in: the entity's own when it has one (the user can pick a unit
+ * for a sensor or a number), else the unit system's, which climate entities always use.
+ */
+export function temperatureUnit(hass: HomeAssistant, entity?: HassEntity): string {
+  const own = entity?.attributes?.unit_of_measurement;
+  return (typeof own === "string" && own) || hass.config?.unit_system?.temperature || "°F";
 }
 
 export function isCelsius(hass: HomeAssistant): boolean {
   return temperatureUnit(hass).includes("C");
 }
 
-/** Where a preheat starts when the panel never saw the cavity's first reading. */
-export function roomTemperature(hass: HomeAssistant): number {
-  return isCelsius(hass) ? 21 : 70;
+type Scale = "C" | "F" | "K";
+
+function scale(unit: string): Scale | null {
+  return unit.includes("C") ? "C" : unit.includes("F") ? "F" : unit.trim() === "K" ? "K" : null;
+}
+
+/** A temperature in another unit ("°C", "°F" or "K"); null when either unit is none of those. */
+export function convertTemperature(value: number | null, from: string, to: string): number | null {
+  const source = scale(from);
+  const target = scale(to);
+  if (value === null || !source || !target) return null;
+  if (source === target) return value;
+  const celsius = source === "C" ? value : source === "F" ? ((value - 32) * 5) / 9 : value - 273.15;
+  return target === "C" ? celsius : target === "F" ? (celsius * 9) / 5 + 32 : celsius + 273.15;
+}
+
+/** Where a preheat starts when the panel never saw the cavity's first reading, in `unit`. */
+export function roomTemperature(unit: string): number {
+  const known = scale(unit);
+  return known === "C" ? 21 : known === "K" ? 294 : 70;
 }
 
 /** "38°": temperatures already come in the user's unit, and the panel shows whole degrees. */
@@ -120,15 +135,12 @@ export function parseTime(value: unknown): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
-function language(hass: Pick<HomeAssistant, "locale" | "language">): string {
-  return hass.locale?.language || hass.language || "en";
-}
-
 // The locales Home Assistant's frontend formats each of its number formats with.
 const NUMBER_LOCALES: Record<string, string[] | undefined> = {
   comma_decimal: ["en-US", "en"],
   decimal_comma: ["de", "es", "it"],
   space_comma: ["fr", "sv", "cs"],
+  quote_decimal: ["de-CH"],
   system: undefined,
 };
 const numberFormats = new Map<string, Intl.NumberFormat>();
@@ -139,7 +151,7 @@ const numberFormats = new Map<string, Intl.NumberFormat>();
  */
 export function formatNumber(hass: Pick<HomeAssistant, "locale" | "language">, value: number, max = 0, min = 0): string {
   const format = hass.locale?.number_format;
-  const locales = format === "none" ? "en-US" : format && format in NUMBER_LOCALES ? NUMBER_LOCALES[format] : language(hass);
+  const locales = format === "none" ? "en-US" : format && format in NUMBER_LOCALES ? NUMBER_LOCALES[format] : languageOf(hass);
   const key = `${format}|${String(locales)}|${min}|${max}`;
   let formatter = numberFormats.get(key);
   if (!formatter) {
@@ -192,7 +204,7 @@ function clockOptions(hass: HomeAssistant): Intl.DateTimeFormatOptions {
 
 function formatWith(hass: HomeAssistant, options: Intl.DateTimeFormatOptions, ms: number): string {
   try {
-    return new Intl.DateTimeFormat(language(hass), options).format(ms);
+    return new Intl.DateTimeFormat(languageOf(hass), options).format(ms);
   } catch {
     // An unknown language tag or zone throws; English still says when.
     return new Intl.DateTimeFormat("en", { ...options, timeZone: undefined }).format(ms);
@@ -274,6 +286,23 @@ export function withUnit(hass: HomeAssistant, entity: HassEntity | undefined): s
   return typeof unit === "string" && unit ? `${shown} ${unit}` : shown;
 }
 
+/**
+ * "Door open", and for how long once history says when it opened: "Door open · 4 min". Of
+ * several open doors, the one open longest counts. `wording` is the pill's unless given.
+ */
+export function doorOpenText(ctx: ApplianceContext, keys: readonly string[], wording = "pill.door_open"): string {
+  let opened: number | null = null;
+  for (const key of keys) {
+    if (isOn(ctx, key, "binary_sensor") !== true) continue;
+    const entityId = ctx.entityId(key, "binary_sensor");
+    const at = entityId ? ctx.since(entityId) : null;
+    if (at !== null && (opened === null || at < opened)) opened = at;
+  }
+  const minutes = opened === null ? 0 : Math.floor((ctx.now - opened) / 60_000);
+  // In its first minute, and until history answers, it's simply open.
+  return minutes < 1 ? ctx.t(wording) : ctx.t(`${wording}_for`, { time: formatDuration(ctx.t, minutes * 60) });
+}
+
 export function join(parts: ReadonlyArray<string | null | undefined | false>, separator = " · "): string | null {
   const kept = parts.filter((part): part is string => typeof part === "string" && part !== "");
   return kept.length ? kept.join(separator) : null;
@@ -344,13 +373,16 @@ export function base(
   return { id: options.id ?? key, label, hint: options.hint ?? null, ...gate(ctx, key, entity, options) };
 }
 
-/** Minutes from a number entity, with presets: kitchen timers and the hood's delayed shutoff. */
+/**
+ * Minutes from a number entity, with presets: kitchen timers and the hood's delayed shutoff.
+ * `remaining` says the entity counts down, as a kitchen timer's does while it runs.
+ */
 export function durationControl(
   ctx: ApplianceContext,
   key: string,
   label: string,
   presets: number[],
-  options: ControlOptions = {},
+  options: ControlOptions & { remaining?: boolean } = {},
 ): Control | null {
   const found = entityFor(ctx, key, "number");
   if (!found) return null;
@@ -364,6 +396,7 @@ export function durationControl(
     min: toNumber(attributes.min) ?? 0,
     max: toNumber(attributes.max) ?? 719,
     presets,
+    ...(options.remaining ? { remaining: true } : {}),
   };
 }
 
@@ -380,15 +413,18 @@ export function numberSetpoint(
   const found = entityFor(ctx, key, "number");
   if (!found) return null;
   const attributes = found.entity?.attributes ?? {};
+  const own = toNumber(stateValue(found.entity));
+  const sensor = ctx.state(key, "sensor");
   return {
     kind: "setpoint",
     ...base(ctx, key, label, found.entity, options),
     action: { type: "number", entity_id: found.entityId },
-    value: toNumber(stateValue(found.entity)) ?? numberOf(ctx, key, "sensor"),
+    value: own ?? toNumber(stateValue(sensor)),
     min: toNumber(attributes.min) ?? 0,
     max: toNumber(attributes.max) ?? 100,
     step: toNumber(attributes.step) ?? 1,
-    unit: temperatureUnit(ctx.hass),
+    // The unit of the entity the value comes from.
+    unit: temperatureUnit(ctx.hass, own === null && stateValue(sensor) !== null ? sensor : found.entity),
   };
 }
 
@@ -414,15 +450,18 @@ export function climateSetpoint(
   if (!found) return null;
   const attributes = found.entity?.attributes ?? {};
   const unavailable = !found.entity || found.entity.state === "unavailable";
+  const target = toNumber(attributes.temperature);
+  const sensor = target === null && unavailable ? ctx.state(key, "sensor") : undefined;
   return {
     kind: "setpoint",
     ...base(ctx, key, label, found.entity, options),
     action: { type: "climate_temperature", entity_id: found.entityId },
-    value: toNumber(attributes.temperature) ?? (unavailable ? numberOf(ctx, key, "sensor") : null),
+    value: target ?? toNumber(stateValue(sensor)),
     min: toNumber(attributes.min_temp) ?? 0,
     max: toNumber(attributes.max_temp) ?? 100,
     step: toNumber(attributes.target_temp_step) ?? (isCelsius(ctx.hass) ? 0.5 : 1),
-    unit: temperatureUnit(ctx.hass),
+    // A climate entity's own values are in the unit system's unit; the sensor's are in its own.
+    unit: temperatureUnit(ctx.hass, sensor),
   };
 }
 
@@ -491,11 +530,12 @@ export function buttonReady(ctx: ApplianceContext, key: string): boolean {
   return Boolean(found?.entity && found.entity.state !== "unavailable");
 }
 
+/** `entity_id` names the entity when the id isn't its property key (see controlEntity). */
 export function reading(
   id: string,
   label: string,
   value: string | null,
-  options: { tone?: "normal" | "warning" | "alert"; hint?: string | null } = {},
+  options: { tone?: "normal" | "warning" | "alert"; hint?: string | null; entity_id?: string } = {},
 ): Control {
   return {
     kind: "reading",
@@ -504,11 +544,40 @@ export function reading(
     value: value ?? "—",
     hint: options.hint ?? null,
     ...(options.tone ? { tone: options.tone } : {}),
+    ...(options.entity_id ? { entity_id: options.entity_id } : {}),
   };
 }
 
-export function countdown(id: string, label: string, end: string | null, hint: string | null = null): Control {
-  return { kind: "countdown", id, label, end, hint };
+/** Time left until `end`, an ISO timestamp; `hours` always shows the hours (see formatCountdown). */
+export function countdown(
+  id: string,
+  label: string,
+  end: string | null,
+  hint: string | null = null,
+  options: { entity_id?: string; hours?: boolean } = {},
+): Control {
+  return {
+    kind: "countdown",
+    id,
+    label,
+    end,
+    hint,
+    ...(options.entity_id ? { entity_id: options.entity_id } : {}),
+    ...(options.hours ? { hours: true } : {}),
+  };
+}
+
+/**
+ * The entity a control shows or changes, whose more-info dialog its label opens: the one its
+ * action targets, or for a value that's only read, the one it names, else the sensor or binary
+ * sensor whose property key is its id. Undefined when there's none, as for the appliance's model,
+ * and for a button: its dialog has nothing to show but a Press, which would start an oven or a
+ * wash, or cancel one, without the panel asking first.
+ */
+export function controlEntity(ctx: ApplianceContext, control: Control): string | undefined {
+  if (control.kind === "ice_delay" || control.kind === "action") return undefined;
+  if ("action" in control) return "entity_id" in control.action ? control.action.entity_id : undefined;
+  return control.entity_id ?? ctx.entityId(control.id, "sensor", "binary_sensor");
 }
 
 export function section(

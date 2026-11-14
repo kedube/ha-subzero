@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { controlEntity } from "../src/families/common";
 import { familyModel } from "../src/families/index";
 import { preheatProgress } from "../src/families/oven";
 import type { Control, Section } from "../src/families/types";
@@ -129,6 +130,20 @@ describe("range, cooking", () => {
     expect(model.drawingState(context(celsius, { unit: "°C" })).ovens?.cav?.progress).toBeCloseTo((99 - 21) / (177 - 21), 5);
   });
 
+  it("measures the preheat in one unit when the temperature and setpoint come in two", () => {
+    // The user set the temperature sensor to Celsius; the setpoint is still in Fahrenheit.
+    const mixed = withStates(baking(), { cav_temp: { sensor: ["99", { unit_of_measurement: "°C" }] } });
+    const setpoint = ((350 - 32) * 5) / 9;
+    expect(model.drawingState(context(mixed)).ovens?.cav?.progress).toBeCloseTo((99 - 21) / (setpoint - 21), 5);
+    expect(model.drawingState(context(mixed, { preheatStart: () => 30 })).ovens?.cav?.progress).toBeCloseTo((99 - 30) / (setpoint - 30), 5);
+    // The other way round, and a unit the panel can't convert leaves the progress unknown.
+    const reversed = withStates(baking(), { cav_set_temp: { sensor: ["177", { unit_of_measurement: "°C" }] } });
+    expect(model.drawingState(context(reversed)).ovens?.cav?.progress).toBeCloseTo((210 - 70) / (177 * 1.8 + 32 - 70), 5);
+    const odd = withStates(baking(), { cav_temp: { sensor: ["99", { unit_of_measurement: "°Ré" }] } });
+    expect(model.drawingState(context(odd)).ovens?.cav?.progress).toBeNull();
+    expect(model.status(context(odd))).toEqual({ text: "Cooking", tone: "warm" });
+  });
+
   it("is preheated once the oven says so", () => {
     const hot = baking("cav", { cav_at_set_temp: { binary_sensor: "on" }, cav_temp: { sensor: "351" } });
     const ctx = context(hot, fromSeventyFive);
@@ -144,6 +159,51 @@ describe("range, cooking", () => {
       cav2_temp: { sensor: "300" },
     });
     expect(model.display(context(both))).toEqual({ text: "300° · 210°", caption: "Roast · Bake" });
+  });
+
+  it("asks before the switch turns a running oven off", () => {
+    const list = sections(baking());
+    expect(control(list, "cav", "cav_power")).toMatchObject({
+      kind: "toggle",
+      value: true,
+      confirmOff: { text: "Turn off the right oven?", button: "Turn off" },
+    });
+    expect(control(sections(baking("cav2")), "cav2", "cav2_power")).toMatchObject({ confirmOff: { text: "Turn off the left oven?", button: "Turn off" } });
+    expect(control(sections(baking(), { language: "fr" }), "cav", "cav_power")).toMatchObject({
+      confirmOff: { text: "Éteindre le four droit ?", button: "Éteindre" },
+    });
+    // The other switches act at once, as before.
+    expect(control(list, "cav", "cav_light_on")).not.toHaveProperty("confirmOff");
+  });
+
+  it("says how long an oven door has been open", () => {
+    const open = withStates(range(), { cav2_door_ajar: { binary_sensor: "on" } });
+    const since = (entityId: string) => (entityId === "binary_sensor.range_cav2_door_ajar" ? Date.parse(inMinutes(-7)) : null);
+    expect(model.status(context(open, { since }))).toEqual({ text: "Door open · 7 min", tone: "amber" });
+    expect(model.status(context(open))).toEqual({ text: "Door open", tone: "amber" });
+  });
+
+  it("names the entity behind each control, for its more-info dialog", () => {
+    const probing = baking("cav", { cav_probe_on: { binary_sensor: "on" }, cav_probe_temp: { sensor: "131" } });
+    const list = sections(probing);
+    const entity = (id: string) => controlEntity(context(probing), control(list, "cav", id));
+    expect(entity("cav_power")).toBe("climate.range_cav_set_temp");
+    expect(entity("cav_set_temp")).toBe("climate.range_cav_set_temp");
+    expect(entity("cav_cook_mode")).toBe("select.range_cav_cook_mode");
+    expect(entity("cav_light_on")).toBe("switch.range_cav_light_on");
+    // Readings whose ids aren't property keys name their entities.
+    expect(entity("cav_probe")).toBe("sensor.range_cav_probe_temp");
+    expect(controlEntity(context(probing), control(list, "kitchen_timer", "kitchen_timer_duration"))).toBe("number.range_kitchen_timer_duration");
+    // A button has no dialog: Home Assistant's would press it without the panel asking first.
+    const start: Control = {
+      kind: "action",
+      id: "remote_start_cav_unit_on",
+      label: "Start oven",
+      action: { type: "button", entity_id: "button.range_remote_start_cav_unit_on" },
+      confirm: "Start the oven?",
+      button: "Start",
+    };
+    expect(controlEntity(context(probing), start)).toBeUndefined();
   });
 
   it("lets the switch turn a running oven off, with the temperature now in the hint", () => {
@@ -203,6 +263,16 @@ describe("range, cooking", () => {
     expect(control(list, "cav", "cav_set_temp")).toMatchObject({ disabled: true, value: 350 });
     expect(control(list, "cav", "cav_probe_set_temp")).toMatchObject({ disabled: true, value: 145 });
     expect(control(sections(range()), "cav", "cav_set_temp")).toMatchObject({ value: null });
+    // The sensor's value comes in the sensor's unit; the climate entity's own in the unit system's.
+    const fahrenheit = withStates(sabbath, { cav_set_temp: { sensor: ["350", { unit_of_measurement: "°F" }] } });
+    expect(control(sections(fahrenheit, { unit: "°C" }), "cav", "cav_set_temp")).toMatchObject({ value: 350, unit: "°F" });
+    expect(control(sections(baking(), { unit: "°C" }), "cav", "cav_set_temp")).toMatchObject({ value: 350, unit: "°C" });
+  });
+
+  it("doesn't draw an oven that's off as self-cleaning, whatever mode it last reported", () => {
+    const stale = withStates(range(), { cav_cook_mode: { select: "unavailable", sensor: "Self clean" } });
+    expect(model.drawingState(context(stale)).ovens?.cav).toMatchObject({ on: false, self_clean: false });
+    expect(model.status(context(stale))).toEqual({ text: "Off", tone: "neutral" });
   });
 
   it("follows the knob: no mode change unless the oven allows one", () => {
@@ -211,6 +281,20 @@ describe("range, cooking", () => {
       disabled: true,
       reason: "The oven isn't taking mode changes right now.",
     });
+    // Only where the integration says the oven has a mode knob; the others don't report it.
+    const touch = { ...fixed, appliance: { ...fixed.appliance, traits: { ...fixed.appliance.traits, knob_oven: false } } };
+    expect(control(sections(touch), "cav", "cav_cook_mode")).toMatchObject({ disabled: false, reason: null });
+  });
+
+  it("names two ovens the spec doesn't list as the integration says the app does", () => {
+    const bare = (left_right_ovens: boolean): Fixture => {
+      const fixture = range();
+      const spec = { family: "generic", form: "oven", width: null, generic: true } as const;
+      return { ...fixture, appliance: { ...fixture.appliance, spec, traits: { knob_oven: true, left_right_ovens } } };
+    };
+    const labels = (fixture: Fixture) => model.infoRows(context(fixture)).map((row) => row.label);
+    expect(labels(bare(true))).toEqual(["Left oven", "Right oven"]);
+    expect(labels(bare(false))).toEqual(["Upper oven", "Lower oven"]);
   });
 
   it("shows the probe and its target while it's in", () => {
@@ -329,6 +413,8 @@ describe("kitchen timers", () => {
       min: 0,
       max: 719,
       presets: [5, 10, 15, 30, 60],
+      // The number counts the minutes left, so the control sends even the number it reads.
+      remaining: true,
     });
     const done = withStates(range(), {
       kitchen_timer_complete: { binary_sensor: "on" },
@@ -390,6 +476,8 @@ describe("double wall oven (DO3050TE)", () => {
       label: "Cooking timer",
       end: inMinutes(0.5),
       hint: "Under a minute",
+      // Its id isn't a property key, so it names the entity its label opens.
+      entity_id: "sensor.wall_oven_cav_cook_timer_end_time",
     });
     const done = withStates(timing, { cav_cook_timer_complete: { binary_sensor: "on" } });
     expect(control(sections(done), "cav", "cav_cook_timer")).toMatchObject({ kind: "reading", value: "Done" });

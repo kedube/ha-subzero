@@ -1,3 +1,5 @@
+import { polyPath } from "../materials-core";
+
 /** Geometry shared by the refrigeration drawings. One drawing unit is 0.1 inch. */
 
 export const IN = 10;
@@ -45,8 +47,9 @@ export function projectRect(camera: Camera, r: Rect, z: number): Rect {
   return { x, y, w: r.w * s, h: r.h * s };
 }
 
+/** A closed outline through the points, to 0.1 unit like everything here. */
 export function pathOf(points: Point[]): string {
-  return `${points.map(([x, y], i) => `${i ? "L" : "M"}${n(x)} ${n(y)}`).join("")}Z`;
+  return polyPath(points, n);
 }
 
 export interface Bounds {

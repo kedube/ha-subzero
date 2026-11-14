@@ -1,15 +1,6 @@
 import { nothing, svg, type SVGTemplateResult } from "lit";
-import {
-  barHandle,
-  type BarStyle,
-  type Defs,
-  outline,
-  painted,
-  panelTone,
-  polyPath,
-  shade,
-  stainless,
-} from "../generic/materials";
+import { barHandle, type BarStyle, outline, painted, panelTone, stainless } from "../generic/materials";
+import { polyPath, tint, type Ids } from "../materials-core";
 
 /**
  * The Cove door: Cove's stainless door panel kit with a tubular or pro handle, or a custom
@@ -96,7 +87,7 @@ function edgeLight(view: DoorView, strength: number): SVGTemplateResult {
   `;
 }
 
-function handleOn(d: Defs, view: DoorView, style: BarStyle, v: number): SVGTemplateResult {
+function handleOn(d: Ids, view: DoorView, style: BarStyle, v: number): SVGTemplateResult {
   const length = Math.min(style === "pro" ? 195 : 212.5, view.width - 16);
   const inset = (view.width - length) / 2;
   // Pro brackets stand the bar about 2.4″ off the door, tubular standoffs about 1.8″.
@@ -111,7 +102,7 @@ function handleOn(d: Defs, view: DoorView, style: BarStyle, v: number): SVGTempl
  * A door tilted toward the viewer, as in Cove's photo of the open door: a narrow shadow under
  * the control strip's lip, the upper middle catching the most light, darker toward the hinge.
  */
-function tiltShade(d: Defs, view: DoorView): SVGTemplateResult | typeof nothing {
+function tiltShade(d: Ids, view: DoorView): SVGTemplateResult | typeof nothing {
   if (!view.lift) return nothing;
   return svg`
     <defs>
@@ -127,7 +118,7 @@ function tiltShade(d: Defs, view: DoorView): SVGTemplateResult | typeof nothing 
 }
 
 /** Cove's stainless door: a brushed slab with folded edges, and the chosen handle. */
-function stainlessDoor(d: Defs, view: DoorView, handle: BarStyle | null): SVGTemplateResult {
+function stainlessDoor(d: Ids, view: DoorView, handle: BarStyle | null): SVGTemplateResult {
   const { width: w, height: h } = view;
   return svg`
     ${stainless(d, quad(view, 0, 0, w, h), { dim: view.lift ? 0.1 * view.lift : 0 })}
@@ -143,7 +134,7 @@ function stainlessDoor(d: Defs, view: DoorView, handle: BarStyle | null): SVGTem
  * its top and left. The handle sits where Cove's stainless kit puts it.
  */
 function panelDoor(
-  d: Defs,
+  d: Ids,
   view: DoorView,
   color: [number, number, number],
   handle: BarStyle | null,
@@ -162,7 +153,7 @@ function panelDoor(
   `;
 }
 
-export function door(d: Defs, view: DoorView, front: Front): SVGTemplateResult {
+export function door(d: Ids, view: DoorView, front: Front): SVGTemplateResult {
   return front.kind === "stainless"
     ? stainlessDoor(d, view, front.handle)
     : panelDoor(d, view, front.color, front.handle);
@@ -173,7 +164,7 @@ export function door(d: Defs, view: DoorView, front: Front): SVGTemplateResult {
  * thin bright line along its top, or the cabinetry's own kick in a shadowed tone of the panel.
  * The line also keeps a black kick apart from a dark page.
  */
-export function toeKick(d: Defs, width: number, front: Front): SVGTemplateResult {
+export function toeKick(d: Ids, width: number, front: Front): SVGTemplateResult {
   const x = 6;
   const w = width - 12;
   const y = DOOR_BOTTOM;
@@ -182,7 +173,7 @@ export function toeKick(d: Defs, width: number, front: Front): SVGTemplateResult
   return svg`
     ${front.kind === "stainless"
       ? stainless(d, path, { dim: 0.08 })
-      : svg`<path d=${path} fill=${shade(panelTone(front.color), -0.22)} />`}
+      : svg`<path d=${path} fill=${tint(panelTone(front.color), -0.22)} />`}
     <rect x=${x} y=${y} width=${w} height="5" fill=${d.url("ao-down")} opacity="0.3" />
     <rect x=${x} y=${y + 0.1} width=${w} height="0.6" fill="#fff" opacity="0.5" />
     <rect x=${x} y=${y + h - 0.8} width=${w} height="0.8" fill="#000" opacity="0.35" />

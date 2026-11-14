@@ -1,5 +1,6 @@
 import { svg, type SVGTemplateResult } from "lit";
-import { type Defs, panelTone, polyPath, shade } from "../generic/materials";
+import { panelTone } from "../generic/materials";
+import { polyPath, round as n, tint, type Ids } from "../materials-core";
 import { type DoorView, type Front } from "./door";
 
 /**
@@ -15,8 +16,6 @@ export const OPEN_WIDEN = 0.09;
 /** Door thickness at the top edge: the 3/4″ panel plus the door's control surface. */
 const DOOR_DEPTH = 22;
 const PANEL_DEPTH = 7.5;
-
-const n = (value: number) => Math.round(value * 100) / 100;
 
 /** Where the door's top edge (its controls) begins on screen. */
 export function stripTop(view: DoorView): number {
@@ -67,7 +66,7 @@ function wires(x0: number, x1: number, step: number, y0: number, y1: number): st
  * The upper rack's load, as in Cove's photo: tumblers upside down on the left, plates standing
  * in the middle and bowls along the front.
  */
-function dishes(d: Defs, W: number, rail: number, trayRail: number): SVGTemplateResult {
+function dishes(d: Ids, W: number, rail: number, trayRail: number): SVGTemplateResult {
   const tumblers: SVGTemplateResult[] = [];
   const glassTop = trayRail + 7;
   for (let i = 0; i < 9; i++) {
@@ -149,7 +148,7 @@ function flatware(left: number, right: number, top: number, bottom: number): SVG
  * The tub opening, its dark frame, and what the LEDs light inside, down to `bottom`: dark
  * stainless walls with cool highlights, the cutlery tray and the loaded upper rack.
  */
-export function interior(d: Defs, width: number, bottom: number): SVGTemplateResult {
+export function interior(d: Ids, width: number, bottom: number): SVGTemplateResult {
   const W = width;
   const top = 8;
   const side = 12;
@@ -266,7 +265,7 @@ export function interior(d: Defs, width: number, bottom: number): SVGTemplateRes
  * Cove's control surface with its small display at the left and printed touch labels
  * (`controls` false leaves the surface plain, for a dishwasher with its controls in front).
  */
-export function controlStrip(d: Defs, view: DoorView, front: Front, controls: boolean): SVGTemplateResult {
+export function controlStrip(d: Ids, view: DoorView, front: Front, controls: boolean): SVGTemplateResult {
   const [xl, yFront] = view.at(0, 0);
   const [xr] = view.at(view.width, 0);
   const yPanel = yFront - PANEL_DEPTH * view.lift;
@@ -313,7 +312,7 @@ export function controlStrip(d: Defs, view: DoorView, front: Front, controls: bo
         <stop offset="1" stop-color="#cfd1d2" />
       </linearGradient>
     </defs>
-    <path d=${panelEdge} fill=${front.kind === "stainless" ? "#cfcecc" : shade(panelTone(front.color), 0.12)} />
+    <path d=${panelEdge} fill=${front.kind === "stainless" ? "#cfcecc" : tint(panelTone(front.color), 0.12)} />
     <path d=${panelEdge} fill="#000" opacity=${front.kind === "stainless" ? 0.04 : 0.02} />
     <path d=${polyPath([[xl, yFront - 0.8], [xr, yFront - 0.8], [xr, yFront], [xl, yFront]])}
       fill="#ffffff" opacity="0.75" />

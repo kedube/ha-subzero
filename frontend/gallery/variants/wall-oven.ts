@@ -31,6 +31,13 @@ const double = (style: WallOvenSpec["style"], series: WallOvenSpec["series"], kn
   ],
 });
 
+/** The same oven at another width: 24″ (steam and speed ovens) or 36″ (L Series). */
+const wide = (spec: WallOvenSpec, width: number): WallOvenSpec => ({
+  ...spec,
+  width,
+  ovens: spec.ovens.map((oven) => ({ ...oven, width })),
+});
+
 const off: OvenState = {
   on: false,
   preheated: false,
@@ -186,6 +193,29 @@ export const variants: GalleryVariant[] = [
         ...idle,
         ovens: { cav: { ...off, on: true, self_clean: true, temp: "880°", mode: "Self clean" }, cav2: off },
       },
+    },
+  },
+  {
+    id: "so36u",
+    title: "L Series 36″ single oven (drawn as an E Series), off",
+    input: { spec: wide(single(null, "l", false), 36), appearance, state: { ...idle, ovens: { cav: off } } },
+  },
+  {
+    id: "cso24te-baking",
+    title: "24″ convection steam oven (E Series Transitional), preheated at 350°",
+    input: {
+      spec: wide(single("transitional", "e", false), 24),
+      appearance,
+      state: { ...idle, ovens: { cav: { ...off, on: true, preheated: true, progress: 1, temp: "350°", mode: "Bake" } } },
+    },
+  },
+  {
+    id: "wall-oven-24-knobs",
+    title: "A 24″ Professional oven with knobs: they close up around the screen",
+    input: {
+      spec: wide(single("professional", "m", true), 24),
+      appearance,
+      state: { ...idle, ovens: { cav: { ...off, on: true, progress: 0.5, probe: true, temp: "350°", mode: "Bake" } }, display: "12:30" },
     },
   },
   {

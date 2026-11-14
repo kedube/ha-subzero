@@ -7,36 +7,12 @@
 import { describe, expect, it } from "vitest";
 import { optionKey, optionLabel } from "../src/families/options";
 import { LANGUAGES, TABLES, makeTranslate } from "../src/i18n";
-
-async function repoFile(path: string): Promise<string> {
-  // Typed loosely: the frontend's tsconfig has no Node types, and only this test reads files.
-  const fs = (await import(/* @vite-ignore */ "node:fs" as string)) as {
-    readFileSync(path: URL, encoding: "utf8"): string;
-  };
-  return fs.readFileSync(new URL(path, import.meta.url), "utf8");
-}
-
-/** The text of a Python `NAME = {...}` literal. */
-function block(source: string, name: string): string {
-  const start = source.indexOf(`${name} = {`);
-  if (start < 0) throw new Error(`${name} not found`);
-  let depth = 0;
-  for (let index = source.indexOf("{", start); index < source.length; index++) {
-    if (source[index] === "{") depth++;
-    if (source[index] === "}" && --depth === 0) return source.slice(start, index + 1);
-  }
-  throw new Error(`${name} isn't closed`);
-}
-
-const matches = (text: string, pattern: RegExp) => [...text.matchAll(pattern)].map((match) => match[1]);
-const keysWithNumbers = (text: string) => matches(text, /"([^"]+)":\s*-?\d+/g);
-const numberedNames = (text: string) => matches(text, /\d+:\s*"([^"]+)"/g);
-const keysWithStrings = (text: string) => matches(text, /"([^"]+)":\s*"/g);
+import { block, keysWithNumbers, keysWithStrings, matches, numberedNames, repoFile } from "./fixtures/python";
 
 async function integrationOptions(): Promise<Set<string>> {
-  const constants = await repoFile("../../custom_components/subzero/const.py");
-  const select = await repoFile("../../custom_components/subzero/select.py");
-  const sensor = await repoFile("../../custom_components/subzero/sensor.py");
+  const constants = await repoFile("custom_components/subzero/const.py");
+  const select = await repoFile("custom_components/subzero/select.py");
+  const sensor = await repoFile("custom_components/subzero/sensor.py");
   const options = new Set<string>([
     ...keysWithNumbers(block(constants, "COOK_MODES")),
     ...numberedNames(block(constants, "WASH_CYCLES")),
@@ -84,7 +60,7 @@ describe("families translations", () => {
   });
 
   it("has a reason for every lock code", async () => {
-    const types = await repoFile("../src/types.ts");
+    const types = await repoFile("frontend/src/types.ts");
     const union = types.slice(types.indexOf("export type LockCode"), types.indexOf(";", types.indexOf("export type LockCode")));
     const codes = matches(union, /"(\w+)"/g);
     expect(codes).toHaveLength(7);
@@ -94,7 +70,7 @@ describe("families translations", () => {
   });
 
   it("names every event type", async () => {
-    const constants = await repoFile("../../custom_components/subzero/const.py");
+    const constants = await repoFile("custom_components/subzero/const.py");
     const types = numberedNames(block(constants, "NOTIFICATION_TYPES"));
     expect(types.length).toBeGreaterThan(40);
     for (const language of LANGUAGES) {

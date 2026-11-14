@@ -3,8 +3,9 @@ import { renderGeneric } from "../drawings/generic";
 import { renderDrawing } from "../drawings/index";
 import type { DrawingInput, DrawingState } from "../drawings/types";
 import { translatorFor } from "../data/locale";
+import { eventName, liveEvent, ovenNames, type OvenNames } from "../families/events";
 import { familyModel, makeContext, type ContextHelpers } from "../families/index";
-import type { DisplayText, InfoRow, StatusPill } from "../families/types";
+import type { ApplianceContext, DisplayText, FamilyModel, InfoRow, StatusPill } from "../families/types";
 import type { HomeAssistant } from "../hass";
 import type { Translate } from "../i18n";
 import type { Appearance, ApplianceSpec, PanelAppliance } from "../types";
@@ -17,6 +18,8 @@ export interface CardView {
   /** The display has nothing live to show, so its digits are greyed (see displayIdle). */
   dim: boolean;
   state: DrawingState;
+  /** The appliance's latest event, from its event entity's live state: its name, and when, in ms. */
+  event: { name: string; time: number } | null;
 }
 
 /**
@@ -53,6 +56,61 @@ export function attempt<T>(what: string, run: () => T, fallback: T): T {
   }
 }
 
+/** What an appliance's family model says of it now, for whoever draws it. */
+export interface Evaluation {
+  ctx: ApplianceContext;
+  state: DrawingState;
+  status: StatusPill;
+  display: DisplayText | null;
+  /** The display has nothing live to show, so its digits are greyed (see displayIdle). */
+  dim: boolean;
+  /** Runs another piece of the model the same guarded way: info rows, sections. */
+  part<T>(name: string, run: (model: FamilyModel) => T, fallback: T): T;
+}
+
+/**
+ * Asks the appliance's family model for its drawing state, status and display, each on its own:
+ * a model that trips over an appliance's state shows less, never a broken card or page. The
+ * overview card, the full view and the Appearance editor's preview all read an appliance this way.
+ */
+export function evaluate(
+  appliance: PanelAppliance,
+  hass: HomeAssistant,
+  t: Translate,
+  now: number,
+  helpers: ContextHelpers,
+): Evaluation {
+  const model = familyModel(appliance);
+  const ctx = makeContext(appliance, hass, t, now, helpers);
+  const part = <T>(name: string, run: (model: FamilyModel) => T, fallback: T): T =>
+    attempt(`${appliance.spec?.family} ${name} for ${appliance.device_id}`, () => run(model), fallback);
+  const state = part<DrawingState>("drawing state", () => model.drawingState(ctx), {
+    available: appliance.available,
+    doors: {},
+    readouts: {},
+  });
+  if (!appliance.available) {
+    // Nothing it last reported can be trusted, so the display goes dark; info rows and controls
+    // show the entities' own unavailable values.
+    return {
+      ctx,
+      state: { ...state, available: false },
+      status: { text: t("pill.offline"), tone: "gray" },
+      display: null,
+      dim: true,
+      part,
+    };
+  }
+  return {
+    ctx,
+    state,
+    status: part<StatusPill>("status", () => model.status(ctx), { text: "", tone: "neutral" }),
+    display: part<DisplayText | null>("display", () => model.display(ctx), null),
+    dim: displayIdle(state),
+    part,
+  };
+}
+
 export function cardView(
   appliance: PanelAppliance,
   hass: HomeAssistant,
@@ -60,31 +118,17 @@ export function cardView(
   now: number,
   helpers: ContextHelpers,
 ): CardView {
-  const model = familyModel(appliance);
-  const ctx = makeContext(appliance, hass, t, now, helpers);
-  const what = (part: string) => `${appliance.spec.family} ${part} for ${appliance.device_id}`;
-  const state = attempt(what("drawing state"), () => model.drawingState(ctx), {
-    available: appliance.available,
-    doors: {},
-    readouts: {},
-  });
-  if (!appliance.available) {
-    // Nothing it last reported can be trusted, so the display goes dark; the info rows show the
-    // entities' own unavailable values.
-    return {
-      status: { text: t("status.offline"), tone: "gray" },
-      rows: attempt(what("info rows"), () => model.infoRows(ctx), []),
-      display: null,
-      dim: true,
-      state: { ...state, available: false },
-    };
-  }
+  const { state, status, display, dim, ctx, part } = evaluate(appliance, hass, t, now, helpers);
+  const eventId = appliance.entities?.appliance_event?.event;
+  const live = eventId ? liveEvent(hass.states[eventId]) : null;
   return {
-    status: attempt(what("status"), () => model.status(ctx), { text: "", tone: "neutral" }),
-    rows: attempt(what("info rows"), () => model.infoRows(ctx), []),
-    display: attempt(what("display"), () => model.display(ctx), null),
-    dim: displayIdle(state),
+    status,
+    rows: part("info rows", (model) => model.infoRows(ctx), []),
+    display,
+    dim,
     state,
+    // Named as the full view's list names it: a range's ovens are its Right and Left.
+    event: live && { name: eventName(t, live.type, part<OvenNames>("oven names", () => ovenNames(ctx), {})), time: live.time },
   };
 }
 

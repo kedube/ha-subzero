@@ -5,8 +5,9 @@
  * from `hass.states`, and routes between the overview and each appliance's full view.
  */
 import { LitElement, css, html, nothing, type PropertyValues } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import type { OpenApplianceDetail } from "./card/appliance-card";
-import { applianceName } from "./data/appliances";
+import { applianceName, uniqueDevices } from "./data/appliances";
 import { panelHelpers } from "./data/helpers";
 import { errorMessage, translatorFor } from "./data/locale";
 import { navigate, parseRoute, routePath, type PanelRoute } from "./data/route";
@@ -53,10 +54,12 @@ class SubZeroPanel extends LitElement {
 
   private readonly subscription = new PanelSubscription(
     (message) => {
-      this.appliances = Array.isArray(message?.appliances) ? message.appliances : [];
+      this.appliances = Array.isArray(message?.appliances) ? uniqueDevices(message.appliances) : [];
       this.error = null;
     },
     (error) => {
+      // Without a subscription a list would go stale unnoticed, so the error takes its place.
+      this.appliances = null;
       this.error = errorMessage(error);
     },
   );
@@ -211,15 +214,20 @@ class SubZeroPanel extends LitElement {
       </div>`;
     }
     // The full view takes the clock and helpers too, for countdowns and history, when it
-    // declares them; panelHelpers reaches it either way.
-    return html`<sz-appliance-view
-      .hass=${this.hass}
-      .appliance=${appliance}
-      .narrow=${this.narrow}
-      .isAdmin=${this.hass?.user?.is_admin === true}
-      .now=${this.now}
-      .helpers=${panelHelpers}
-    ></sz-appliance-view>`;
+    // declares them; panelHelpers reaches it either way. Each appliance gets a view of its own:
+    // two of a family have the same sections and controls, and going straight from one to the
+    // other would otherwise carry over an open confirmation or a setpoint not yet sent.
+    return keyed(
+      appliance.device_id,
+      html`<sz-appliance-view
+        .hass=${this.hass}
+        .appliance=${appliance}
+        .narrow=${this.narrow}
+        .isAdmin=${this.hass?.user?.is_admin === true}
+        .now=${this.now}
+        .helpers=${panelHelpers}
+      ></sz-appliance-view>`,
+    );
   }
 
   private readonly onOpen = (event: CustomEvent<OpenApplianceDetail>): void => {

@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
-import { partStyles, renderConfirmBar } from "../card/parts";
+import { Confirmation } from "../card/confirm";
+import { partStyles } from "../card/parts";
 import type { Control } from "../families/types";
 import { ControlElement, defineOnce } from "./base";
 
@@ -10,74 +11,51 @@ type Action = Extract<Control, { kind: "action" }>;
  * question, Not now, and the action); the others act at once.
  */
 export class SzAction extends ControlElement<Action> {
-  static override properties = { asking: { state: true } };
   static override styles = [...ControlElement.styles, partStyles];
 
-  declare asking: boolean;
+  private readonly confirmation = new Confirmation(this, ".row .sz-button");
 
-  constructor() {
-    super();
-    this.asking = false;
-  }
-
-  private async press(): Promise<void> {
+  private press(): void {
     if (this.disabled || this.pending) return;
-    if (!this.control?.confirm) {
-      this.emit(undefined);
-      return;
-    }
-    this.asking = true;
-    await this.updateComplete;
-    // Focus the safe choice, so Enter or Space doesn't start anything by accident.
-    this.renderRoot.querySelector<HTMLButtonElement>(".confirm .sz-button")?.focus();
+    if (this.control?.confirm) void this.confirmation.ask();
+    else this.emit(undefined);
   }
-
-  private answer(go: boolean): void {
-    this.asking = false;
-    if (go && !this.disabled) this.emit(undefined);
-    void this.updateComplete.then(() => this.renderRoot.querySelector<HTMLButtonElement>(".row .sz-button")?.focus());
-  }
-
-  private readonly onKey = (event: KeyboardEvent): void => {
-    if (event.key === "Escape" && this.asking) {
-      event.stopPropagation();
-      this.answer(false);
-    }
-  };
 
   override render() {
     const control = this.control;
     if (!control) return nothing;
     const tone = control.tone === "danger" ? "danger" : control.tone === "primary" ? "primary" : "";
+    const asking = this.confirmation.asking && control.confirm !== null;
     // Locked, or while the call is in flight, the button is only marked unavailable: it stays
     // focusable, so its reason is read out and focus can come back to it from the bar.
-    return html`<div @keydown=${this.onKey}>
+    return html`
       ${this.head(html`<button
         type="button"
-        class="sz-button ${this.asking ? "" : tone}"
-        aria-expanded=${control.confirm ? (this.asking ? "true" : "false") : nothing}
-        aria-disabled=${(this.disabled || this.pending) && !this.asking ? "true" : nothing}
+        class="sz-button ${asking ? "" : tone}"
+        aria-expanded=${control.confirm ? (asking ? "true" : "false") : nothing}
+        aria-disabled=${(this.disabled || this.pending) && !asking ? "true" : nothing}
         aria-describedby=${this.describedBy()}
-        ?disabled=${this.asking}
+        ?disabled=${asking}
         @click=${() => this.press()}
       >
         ${control.button}
       </button>`)}
-      ${this.asking && control.confirm
-        ? html`<div class="ask">
-            ${renderConfirmBar({
+      ${control.confirm
+        ? this.confirmation.bar(
+            {
               text: control.confirm,
               confirm: control.button,
               cancel: this.t("ctl.not_now"),
               tone: control.tone === "danger" ? "danger" : "primary",
               busy: this.pending,
-              onConfirm: () => this.answer(true),
-              onCancel: () => this.answer(false),
-            })}
-          </div>`
+            },
+            () => {
+              if (!this.disabled) this.emit(undefined);
+            },
+          )
         : nothing}
       ${this.errorLine()}
-    </div>`;
+    `;
   }
 }
 

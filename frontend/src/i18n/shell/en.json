@@ -2,7 +2,6 @@
   "panel.title": "Sub-Zero",
   "panel.menu": "Open the sidebar",
   "panel.back": "Back",
-  "status.offline": "Offline",
   "overview.no_area": "No area",
   "overview.loading": "Loading appliances…",
   "overview.error_title": "Couldn't load the appliances",

@@ -109,7 +109,8 @@ Things that apply to every appliance:
 
 - **Temperatures** work in Celsius and Fahrenheit. Home Assistant shows temperatures and accepts setpoints in your preferred unit. Appliances store setpoints in whole degrees Fahrenheit, so a Celsius setpoint may be rounded.
 - **Sabbath mode** blocks every change except turning it off, as the appliance does. While it's on, climate entities, setpoints, switches, buttons, and selects are unavailable. The **Mode** control stays available, so choosing **Normal** (or **Off** on a dishwasher) turns Sabbath mode off. Sensors keep reporting.
-- **Active faults** shows the number of active faults, with their codes, severity, and any title and resolution steps Sub-Zero provides. It refreshes every 30 minutes. Faults are cleared at the appliance.
+- **Active faults** shows the number of active faults, with their codes, severity, and any title and resolution steps Sub-Zero provides. It refreshes every 30 minutes. Faults are cleared at the appliance. The history keeps the count, not the fault details.
+- **Statistics.** Display temperatures, oven and probe temperatures, filter life remaining, and Wi-Fi signal keep long-term statistics, so their graphs go back further than the recorder's history.
 - **Times** keep the offset the appliance reports. A time without an offset is read in the appliance clock's time zone, learned from the clock time it pushes, or in Home Assistant's time zone until it has pushed one.
 
 ### Refrigerators, freezers, and wine storage
@@ -172,7 +173,7 @@ Each oven cavity has its own entities. A second cavity's entities start with **L
 
 | Control | What it does |
 | --- | --- |
-| Climate entity | Sets the temperature and turns the cavity on or off. The temperature can change only while the oven is on or in Remote Ready, within the limits of the selected mode, such as 85–110 °F for Proof. |
+| Climate entity | Sets the temperature and turns the cavity on or off, and shows whether the cavity is off, preheating, or heating at its temperature. The temperature can change only while the oven is on or in Remote Ready, within the limits of the selected mode, such as 85–110 °F for Proof. |
 | Cooking mode | Lists the modes the app offers for that oven and cavity, so some modes appear only on some ovens. Choosing Off turns the cavity off. |
 | Start oven | Starts the cavity with the selected mode and temperature. Available only in Remote Ready. |
 | Interior light | Turns the cavity light on or off. |
@@ -341,6 +342,8 @@ Each appliance's download shows its state, how the panel draws it (the layout re
 | `recent_checks` | The last 20 checks: time, reason, result, how long the answer took, whether it reconnected, and how late an answer came after the check stopped waiting |
 | `recent_silent_channels`, `recent_connection_renewals` | The times of the last 10 of each. The same times on several appliances mean the whole connection went quiet. |
 
+**Repairs.** Home Assistant raises a repair when an appliance you selected is no longer on your Sub-Zero account, which is why it stopped reporting, and when Firebase appliance alerts can't be set up after several tries. Each says what to do and clears itself once the cause is gone.
+
 **Debug logging.** Turn on debug logging for `custom_components.subzero` to record connection attempts, message types, state changes, door changes that updates missed, and checks and reconnects. Logged values leave out network identifiers.
 
 ## Compatibility
@@ -357,7 +360,7 @@ Wolf wall ovens, ventilation hoods, and dedicated ice makers are supported from 
 
 Some appliances [can't connect to Sub-Zero's cloud](https://www.subzero-wolf.com/assistance/answers/multi-brand/sub-zero-group-owners-app-cannot-find-appliance), including Wolf convection steam ovens, speed ovens, microwaves, and cooktops. The Owner's App can list them for guides and recipes, but they don't appear in Home Assistant.
 
-Setup, Configure, the actions, event names, and the sidebar panel are translated into German, French, Dutch, Spanish, Simplified Chinese, Italian, Polish, and Swedish. Entity names are in English. The translations were machine-assisted, and corrections from native speakers are welcome.
+Setup, Configure, the actions, entity and event names, repairs, and the sidebar panel are translated into German, French, Dutch, Spanish, Simplified Chinese, Italian, Polish, and Swedish. Entity names follow Home Assistant's language. The entity IDs you already have don't change; in some languages Home Assistant builds the IDs of new entities from the translated names. States and option names, such as **Bake** or **Max ice**, stay in English, so automations that use them keep working. The translations were machine-assisted, and corrections from native speakers are welcome.
 
 Not supported: local network control, multi-factor methods other than text message or phone call, and accounts that sign in through another provider.
 

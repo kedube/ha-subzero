@@ -246,6 +246,57 @@ describe("subzero-panel", () => {
     expect(deepAll(panel, "sz-overview", "sz-appliance-card")).toHaveLength(1);
   });
 
+  it("keeps the appliances while it subscribes again after a reconnect, and shows a failure with a retry", async () => {
+    const { panel, connection } = await mount();
+    connection.fire("disconnected");
+    connection.fire("ready");
+    await settle(panel);
+    expect(connection.subscribeMessage).toHaveBeenCalledTimes(2);
+    expect(deepAll(panel, "sz-overview", "sz-appliance-card")).toHaveLength(3);
+    connection.send({ appliances: [FRIDGE, RANGE] });
+    await settle(panel);
+    expect(deepAll(panel, "sz-overview", "sz-appliance-card")).toHaveLength(2);
+
+    // After a restart the integration may not be there yet. A list nothing updates would go stale.
+    connection.subscribeMessage.mockRejectedValueOnce({ code: "unknown_command", message: "Unknown command." });
+    connection.fire("disconnected");
+    connection.fire("ready");
+    await settle(panel);
+    expect(deep(panel, "sz-overview")).toBeNull();
+    expect(text(deep(panel, ".state h2"))).toBe("Couldn't load the appliances");
+    expect(text(deep(panel, ".state p"))).toBe("Unknown command.");
+    deep(panel, ".state button")!.click();
+    await settle(panel);
+    connection.send({ appliances: [FRIDGE] });
+    await settle(panel);
+    expect(deepAll(panel, "sz-overview", "sz-appliance-card")).toHaveLength(1);
+  });
+
+  it("gives each appliance a full view of its own, kept through that appliance's updates", async () => {
+    const { panel, connection } = await mount({ path: "/dev-range" });
+    const first = deep(panel, "sz-appliance-view")!;
+    const offline = { ...RANGE, available: false };
+    connection.send({ appliances: [DISHWASHER, offline, FRIDGE] });
+    await settle(panel);
+    expect(deep(panel, "sz-appliance-view")).toBe(first);
+    expect((first as HTMLElement & { appliance: PanelAppliance }).appliance).toBe(offline);
+    // Straight to another appliance: a new view, so nothing the first held carries over.
+    await route(panel, "/dev-fridge");
+    const second = deep(panel, "sz-appliance-view") as HTMLElement & { appliance: PanelAppliance };
+    expect(second).not.toBe(first);
+    expect(second.appliance).toBe(FRIDGE);
+    expect(first.isConnected).toBe(false);
+  });
+
+  it("lists an appliance once when the integration sends its device twice", async () => {
+    // One appliance on two accounts is one device in Home Assistant.
+    const twin = { ...FRIDGE, appliance_id: "app-fridge-again", entry_id: "entry-2", name: "Twin" };
+    const { panel } = await mount({ appliances: [FRIDGE, twin, RANGE], path: "/dev-fridge" });
+    expect((deep(panel, "sz-appliance-view") as HTMLElement & { appliance: PanelAppliance }).appliance).toBe(FRIDGE);
+    await route(panel, "");
+    expect(deepAll(panel, "sz-overview", "sz-appliance-card")).toHaveLength(2);
+  });
+
   it("links admins to the integration when there are no appliances", async () => {
     const { panel } = await mount({ appliances: [] });
     const link = deep<HTMLAnchorElement>(panel, "sz-overview", ".empty a")!;

@@ -55,7 +55,16 @@ describe("previewSpec", () => {
     expect(previewSpec(fridge, DEFAULT_APPEARANCE)).toBe(fridge.spec);
   });
 
-  it("draws a pending form", () => {
+  it("draws a pending form with the spec the integration worked out for it", () => {
+    // A wine column drawn as a refrigerator column loses its glass door, as it will once saved.
+    const wine = { ...SPECS.sideBySide, form: "column_wine" as const, glass: true, ice: false, dispenser: "none" as const };
+    const solid = { ...wine, form: "column_refrigerator" as const, glass: false };
+    const column = makeAppliance("wine", wine, { form_specs: { column_wine: wine, column_refrigerator: solid } });
+    expect(previewSpec(column, { ...DEFAULT_APPEARANCE, form: "column_refrigerator" })).toBe(solid);
+    expect(previewSpec(column, DEFAULT_APPEARANCE)).toBe(wine);
+  });
+
+  it("changes the form alone when the integration sent no spec for it", () => {
     expect(previewSpec(fridge, { ...DEFAULT_APPEARANCE, form: "french_door" })).toEqual({
       ...SPECS.sideBySide,
       form: "french_door",
@@ -63,8 +72,10 @@ describe("previewSpec", () => {
   });
 
   it("goes back to the detected form when the override is cleared", () => {
-    const overridden = { ...fridge, spec: { ...SPECS.sideBySide, form: "french_door" as const } };
-    expect(previewSpec(overridden, DEFAULT_APPEARANCE).form).toBe("side_by_side");
+    const french = { ...SPECS.sideBySide, form: "french_door" as const, dispenser: "none" as const };
+    const overridden = { ...fridge, spec: french, form_specs: { side_by_side: SPECS.sideBySide, french_door: french } };
+    expect(previewSpec(overridden, DEFAULT_APPEARANCE)).toBe(SPECS.sideBySide);
+    expect(previewSpec({ ...overridden, form_specs: {} }, DEFAULT_APPEARANCE).form).toBe("side_by_side");
   });
 
   it("gives a wall oven the cavities of its form", () => {
@@ -74,7 +85,7 @@ describe("previewSpec", () => {
       { prefix: "cav", position: "upper", width: 30 },
       { prefix: "cav2", position: "lower", width: 30 },
     ]);
-    const back = previewSpec({ ...single, spec: double, detected_form: "double" }, { ...DEFAULT_APPEARANCE, form: "single" });
+    const back = previewSpec({ ...single, spec: double, detected_form: "double", form_specs: {} }, { ...DEFAULT_APPEARANCE, form: "single" });
     expect((back as WallOvenSpec).ovens).toEqual([{ prefix: "cav", position: "single", width: 30 }]);
   });
 });

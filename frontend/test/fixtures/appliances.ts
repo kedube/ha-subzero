@@ -201,6 +201,8 @@ export function range(): Fixture {
     brand: "Wolf",
     model: "DF48850SP",
     type: "17.8.2.0",
+    // 8.2.0 is one of the integration's knob ovens, and a range's two ovens are right and left.
+    traits: { knob_oven: true, left_right_ovens: true },
     spec: {
       family: "range",
       form: "range",

@@ -15,37 +15,63 @@ from .controls import control_lock, excluded_entity_keys, has_left_and_right_ove
 from .coordinator import SubZeroCoordinator
 
 
-def zone_name(data: dict, key: str, names: dict[str, str | None]) -> str | None:
-    """The app's name for a cavity or zone entity, when the appliance's layout changes it.
+def zone_variant(data: dict, key: str) -> str | None:
+    """Which layout names a cavity or zone entity on this appliance, if one does.
 
     Ranges call two cavities right and left ovens, two wine zones are upper and lower, and
-    a second kitchen timer numbers the first.
+    a second kitchen timer makes the other the first.
     """
     cavity = key.removeprefix("remote_start_")
-    if cavity.startswith(("cav_", "cav2_")) and has_left_and_right_ovens(data):
-        second = cavity.startswith("cav2_")
-        name = names.get(key if second else key.replace("cav_", "cav2_", 1))
-        side = "left" if second else "right"
-        if name and "ower oven" in name:
-            return name.replace("Lower oven", f"{side.title()} oven").replace(
-                "lower oven", f"{side} oven"
-            )
-        return None
+    if cavity.startswith(("cav_", "cav2_")):
+        if not has_left_and_right_ovens(data):
+            return None
+        return "left" if cavity.startswith("cav2_") else "right"
     if cavity.startswith(("wine_", "wine2_")) and cavity != "wine_temp_alert_on":
         door = cavity.endswith("_door_ajar")
         if ("wine2_door_ajar" if door else "wine2_set_temp") not in data:
             return None
-        base = (names.get(key) or "").removesuffix(" 2")
-        zone = "Lower" if cavity.startswith("wine2_") else "Upper"
-        return f"{zone} {base[0].lower()}{base[1:]}" if base else None
+        return "lower" if cavity.startswith("wine2_") else "upper"
     if key == "dismiss_kitchen_timer" or key.startswith("kitchen_timer_"):
         if "kitchen_timer2_active" not in data or "kitchen_timer2_active" in excluded_entity_keys(
             data
         ):
             return None
-        name = names.get(key)
-        return name.replace("itchen timer", "itchen timer 1", 1) if name else None
+        return "first"
     return None
+
+
+def zone_variants(key: str, names: dict[str, str | None]) -> dict[str, str]:
+    """The app's names for a cavity or zone entity, by the layout that gives each.
+
+    Each is also a name to translate, under the entity's key with the layout after it,
+    such as `cav_temp_right`.
+    """
+    cavity = key.removeprefix("remote_start_")
+    if cavity.startswith(("cav_", "cav2_")):
+        second = cavity.startswith("cav2_")
+        name = names.get(key if second else key.replace("cav_", "cav2_", 1))
+        side = "left" if second else "right"
+        if name and "ower oven" in name:
+            return {
+                side: name.replace("Lower oven", f"{side.title()} oven").replace(
+                    "lower oven", f"{side} oven"
+                )
+            }
+        return {}
+    if cavity.startswith(("wine_", "wine2_")) and cavity != "wine_temp_alert_on":
+        base = (names.get(key) or "").removesuffix(" 2")
+        zone = "lower" if cavity.startswith("wine2_") else "upper"
+        return {zone: f"{zone.title()} {base[0].lower()}{base[1:]}"} if base else {}
+    if key == "dismiss_kitchen_timer" or key.startswith("kitchen_timer_"):
+        name = names.get(key)
+        return {"first": name.replace("itchen timer", "itchen timer 1", 1)} if name else {}
+    return {}
+
+
+def zone_name(data: dict, key: str, names: dict[str, str | None]) -> str | None:
+    """The app's name for a cavity or zone entity, when the appliance's layout changes it."""
+    variant = zone_variant(data, key)
+    return zone_variants(key, names).get(variant) if variant else None
 
 
 class SubZeroEntity(CoordinatorEntity[SubZeroCoordinator]):
@@ -99,8 +125,16 @@ def async_setup_entities(
                 and supported(coordinator, description)
             ):
                 discovered.add(key)
-                if name := zone_name(coordinator.data, description.key, names):
-                    description = replace(description, name=name)
+                # Names are translated by the entity's key. The description's own name
+                # stands in for a language without a translation.
+                translation_key = description.translation_key or description.key
+                variant = zone_variant(coordinator.data, description.key)
+                if variant and (name := zone_variants(description.key, names).get(variant)):
+                    description = replace(
+                        description, name=name, translation_key=f"{translation_key}_{variant}"
+                    )
+                else:
+                    description = replace(description, translation_key=translation_key)
                 entities.append(entity_class(coordinator, description))
         if entities:
             async_add_entities(entities)

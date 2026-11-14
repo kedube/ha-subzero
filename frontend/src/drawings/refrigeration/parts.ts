@@ -1,4 +1,16 @@
 import { nothing, svg, type SVGTemplateResult } from "lit";
+import {
+  frost,
+  ICON,
+  icon,
+  LABEL_H,
+  scaleFactor,
+  TEXT_SIZE,
+  TEXT_STYLE,
+  textWidth,
+  type FrostPaint,
+  type OverlayIcon,
+} from "../overlay";
 import type { DrawingState } from "../types";
 import { n, type Rect } from "./geometry";
 import { cavity } from "./interior";
@@ -391,78 +403,50 @@ export function floorShadow(s: Scene, viewHeight: number): SVGTemplateResult {
     <rect x="3" y=${n(h - 1.5)} width=${n(w - 6)} height="3" rx="1.5" fill="#000" opacity=${dark ? 0.6 : 0.32} filter=${s.ref("blur")} />`;
 }
 
-// UI over the drawing (zone readouts, the ice maker's badge) is laid out in CSS pixels, the
-// same in every drawing module: a 20 px pill with 12 px text, scaled into the drawing by the
-// caller's units-per-pixel so it shows at one size on a small card and in the full view.
-export const LABEL_H = 20;
-const TEXT_SIZE = 12;
+// UI over the drawing (zone readouts, the ice maker's badge) is laid out in CSS pixels as in
+// every drawing module (see ../overlay.ts) and scaled into the drawing by the caller's
+// units-per-pixel. A zone readout is its own shape: the reading, then the ice mark after it.
 const PAD = 8.5;
-const ICON = 13;
-const TEXT_STYLE = "font-family:var(--ha-font-family-body, Roboto, system-ui);font-variant-numeric:tabular-nums";
+/** Readings such as "-2°" are measured a little wider around their signs and punctuation. */
+const READING = { narrow: /[-°.,: ]/, narrowEm: 0.38 };
 
-/** Rough text width: the panel's own font draws it, so leave room for a wide one. */
-function textWidth(text: string): number {
-  let em = 0;
-  for (const char of text) em += /[0-9]/.test(char) ? 0.6 : /[-°.,: ]/.test(char) ? 0.38 : 0.64;
-  return em * TEXT_SIZE;
-}
+/** A label's group: centered on (cx, cy), `ui` drawing units per CSS pixel. */
+const scaled = (cx: number, cy: number, ui: number) => `translate(${n(cx)} ${n(cy)}) scale(${scaleFactor(ui)})`;
 
-/** The frosted backing every label shares, centered on (0, 0): a hairline edge and a soft shadow. */
-function frost(s: Scene, w: number): SVGTemplateResult {
-  const h = LABEL_H;
-  return svg`<rect x=${n(-w / 2 + 0.5)} y=${-h / 2 + 1.2} width=${n(w - 1)} height=${h} rx=${h / 2} fill="#000" opacity="0.28" filter=${s.ref("pill")} />
-    <rect x=${n(-w / 2)} y=${-h / 2} width=${n(w)} height=${h} rx=${h / 2} fill="rgb(20,22,25)" fill-opacity="0.6" stroke="#fff" stroke-opacity="0.22" stroke-width="1" />`;
-}
+/** The frost as these drawings have always written it: its alpha as opacity attributes. */
+const FROST: FrostPaint = { fill: "rgb(20,22,25)", fillOpacity: 0.6, stroke: "#fff", strokeOpacity: 0.22 };
 
-const scaled = (cx: number, cy: number, ui: number) => `translate(${n(cx)} ${n(cy)}) scale(${Math.round(ui * 1000) / 1000})`;
+/** The frosted backing, centered on (0, 0), its sides rounded like the rest of the drawing. */
+const backing = (s: Scene, w: number) => frost(s.ref("pill"), -w / 2, -LABEL_H / 2, w, n, FROST);
 
 /** Ice states shown as a small mark beside the freezer readout. */
 export type IceMark = "on" | "max" | "night" | null;
 
-/** An ice cube, drawn on a 20-unit grid centered on (0, 0). */
-const CUBE = svg`<path d="M0 -8 7 -4V4L0 8-7 4V-4Z M-7 -4 0 0 7 -4M0 0V8" fill="#fff" fill-opacity="0.16" stroke="#fff" stroke-width="1.7" stroke-linejoin="round" />`;
+const ICE_ICONS: Record<Exclude<IceMark, null>, OverlayIcon> = { on: "ice", max: "ice-max", night: "ice-night" };
 
-/** The ice mark in white at 85%, ICON px tall with its left edge at x (in the label's pixels). */
-function iceGlyph(x: number, mark: Exclude<IceMark, null>): SVGTemplateResult {
-  const k = ICON / 20;
-  const extra =
-    mark === "max"
-      ? svg`<path d="M11 -9V-3M8 -6H14" stroke="#fff" stroke-width="2" stroke-linecap="round" />`
-      : mark === "night"
-        ? svg`<path d="M12.6 -10.4A3.6 3.6 0 1 0 14.4 -4.2 2.9 2.9 0 1 1 12.6 -10.4Z" fill="#fff" />`
-        : nothing;
-  return svg`<g transform=${`translate(${n(x + ICON / 2)} 0) scale(${k})`} opacity="0.85">${CUBE}${extra}</g>`;
-}
-
-/** Width of the ice mark in the label's pixels. */
+/** Width of the ice mark in the label's pixels: the plus and the moon stand out past the cube. */
 const iceWidth = (mark: IceMark) => (mark ? ICON + (mark === "on" ? 0 : 5) : 0);
 
 /** A zone readout: a frosted label centered on (cx, cy), `ui` drawing units per CSS pixel. */
 export function readout(s: Scene, cx: number, cy: number, text: string, ui: number, mark: IceMark): SVGTemplateResult {
-  const textW = textWidth(text);
+  const textW = textWidth(text, READING);
   const gap = mark ? 4 : 0;
   const w = PAD * 2 + textW + gap + iceWidth(mark);
   const x0 = -w / 2 + PAD;
   return svg`<g class=${s.id("readout")} transform=${scaled(cx, cy, ui)}>
-    ${frost(s, w)}
+    ${backing(s, w)}
     <text x=${n(x0 + textW / 2)} y="0" dominant-baseline="central" text-anchor="middle" font-size=${TEXT_SIZE} font-weight="600" fill="#fff" style=${TEXT_STYLE}>${text}</text>
-    ${mark ? iceGlyph(x0 + textW + gap, mark) : nothing}
+    ${mark ? icon(ICE_ICONS[mark], n(x0 + textW + gap + ICON / 2), 0) : nothing}
   </g>`;
 }
 
+const BADGE_ICONS: Record<"making" | "paused" | "cleaning", OverlayIcon> = { making: "ice", paused: "pause", cleaning: "cleaning" };
+
 /** A round frosted chip with the ice maker's production state: making, paused or cleaning. */
-export function badge(s: Scene, cx: number, cy: number, ui: number, icon: "making" | "paused" | "cleaning"): SVGTemplateResult {
-  const glyph =
-    icon === "paused"
-      ? svg`<rect x="-4.6" y="-5.5" width="3.2" height="11" rx="1" fill="#fff" />
-          <rect x="1.4" y="-5.5" width="3.2" height="11" rx="1" fill="#fff" />`
-      : icon === "cleaning"
-        ? svg`<path d="M-1 -7.5C2.4 -2.8 4.6 0 4.6 2.8A5.6 5.6 0 0 1 -6.6 2.8C-6.6 0 -4.4 -2.8 -1 -7.5Z" fill="#fff" fill-opacity="0.2" stroke="#fff" stroke-width="1.7" stroke-linejoin="round" />
-            <path d="M6.2 -8.6 6.9 -6.9 8.6 -6.2 6.9 -5.5 6.2 -3.8 5.5 -5.5 3.8 -6.2 5.5 -6.9Z" fill="#fff" />`
-        : CUBE;
+export function badge(s: Scene, cx: number, cy: number, ui: number, state: "making" | "paused" | "cleaning"): SVGTemplateResult {
   return svg`<g class=${s.id("readout")} transform=${scaled(cx, cy, ui)}>
-    ${frost(s, LABEL_H)}
-    <g transform=${`scale(${ICON / 20})`} opacity="0.85">${glyph}</g>
+    ${backing(s, LABEL_H)}
+    ${icon(BADGE_ICONS[state], 0, 0)}
   </g>`;
 }
 

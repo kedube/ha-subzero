@@ -2,13 +2,13 @@ import { nothing, svg, type SVGTemplateResult } from "lit";
 import {
   DOOR_THICKNESS,
   HANDLE_STANDOFF,
-  WIDTH,
   type DoorDesign,
   type DoorRect,
   type Handle,
   type OvenStyle,
 } from "./layout";
-import { clamp, mix, points, round, url, type Materials, type Pt } from "./materials";
+import { clamp, mix, pointList, round, type Point } from "../materials-core";
+import { url, type Materials } from "./materials";
 
 /** A pinhole camera in front of the appliance; z points out of its face toward the viewer. */
 export interface Camera {
@@ -18,7 +18,7 @@ export interface Camera {
   d: number;
 }
 
-export function project(camera: Camera, x: number, y: number, z: number): Pt {
+export function project(camera: Camera, x: number, y: number, z: number): Point {
   const scale = camera.d / (camera.d - z);
   return [camera.cx + (x - camera.cx) * scale, camera.cy + (y - camera.cy) * scale];
 }
@@ -30,7 +30,7 @@ export function project(camera: Camera, x: number, y: number, z: number): Pt {
  */
 export interface DoorMap {
   shut: boolean;
-  at(u: number, v: number, n?: number): Pt;
+  at(u: number, v: number, n?: number): Point;
 }
 
 export function shutDoor(left: number, top: number): DoorMap {
@@ -62,8 +62,8 @@ export function openDoor(
  * from a third of the way down; with the door dropped it looks in from just above the top rack.
  * The door itself is seen from farther away, so a dropped door doesn't sprawl past the oven.
  */
-export function interiorCamera(doorTop: number, doorHeight: number, open = false): Camera {
-  return { cx: WIDTH / 2, cy: doorTop + doorHeight * (open ? 0.2 : 0.3), d: 850 };
+export function interiorCamera(width: number, doorTop: number, doorHeight: number, open = false): Camera {
+  return { cx: width / 2, cy: doorTop + doorHeight * (open ? 0.2 : 0.3), d: 850 };
 }
 
 /** How the cavity is lit: the interior light and the heating glow, each 0 to 1. */
@@ -78,7 +78,7 @@ export interface CavityLook {
 const isLit = (look: CavityLook): boolean => look.lamp > 0 || look.heat > 0;
 
 /** A quadrilateral on the door, in drawing coordinates. */
-function quad(map: DoorMap, r: DoorRect, n = 0): Pt[] {
+function quad(map: DoorMap, r: DoorRect, n = 0): Point[] {
   return [
     map.at(r.u0, r.v0, n),
     map.at(r.u1, r.v0, n),
@@ -94,7 +94,7 @@ function area(map: DoorMap, r: DoorRect, fill: string, opacity = 1, n = 0): SVGT
     return svg`<rect x=${round(x)} y=${round(y)} width=${round(r.u1 - r.u0)} height=${round(r.v1 - r.v0)}
       fill=${fill} opacity=${opacity} />`;
   }
-  return svg`<polygon points=${points(quad(map, r, n))} fill=${fill} opacity=${opacity} />`;
+  return svg`<polygon points=${pointList(quad(map, r, n))} fill=${fill} opacity=${opacity} />`;
 }
 
 function line(
@@ -119,6 +119,8 @@ export interface DoorOptions {
   map: DoorMap;
   design: DoorDesign;
   style: OvenStyle;
+  /** The door is as wide as the oven. */
+  width: number;
   height: number;
   look: CavityLook;
   /** The door's top in the drawing, to place the cavity behind it. */
@@ -129,7 +131,7 @@ export interface DoorOptions {
 
 /** A shut door's brushed face, to be grained along with the panels. */
 export function doorBase(o: DoorOptions): SVGTemplateResult {
-  const face = { u0: 0, u1: WIDTH, v0: 0, v1: o.height };
+  const face = { u0: 0, u1: o.width, v0: 0, v1: o.height };
   return svg`${area(o.map, face, url(o.m.metal))}${area(o.map, face, url(o.m.sheen))}`;
 }
 
@@ -145,8 +147,8 @@ export function doorDetails(o: DoorOptions): SVGTemplateResult {
     ${design.bevel ? bevel(m, map, design.window, design.bevel) : nothing}
     ${design.recess ? recess(m, map, design.window, design.recess) : nothing}
     ${handle(m, map, design.handle)}
-    ${line(map, 0.5, 0.4, WIDTH - 0.5, 0.4, "#fff", 0.8, 0.55)}
-    ${line(map, 0.5, o.height - 0.4, WIDTH - 0.5, o.height - 0.4, "#000", 0.8, 0.3)}
+    ${line(map, 0.5, 0.4, o.width - 0.5, 0.4, "#fff", 0.8, 0.55)}
+    ${line(map, 0.5, o.height - 0.4, o.width - 0.5, o.height - 0.4, "#000", 0.8, 0.3)}
   `;
 }
 
@@ -180,8 +182,8 @@ function windowPane(o: DoorOptions): SVGTemplateResult {
   const { m, map, design } = o;
   const r = design.window;
   const black = o.style !== "professional";
-  const clipId = `${m.uid}-win-${o.key}`;
-  const vignetteId = `${m.uid}-vignette-${o.key}`;
+  const clipId = m.ids.id(`win-${o.key}`);
+  const vignetteId = m.ids.id(`vignette-${o.key}`);
   const [x0, y0] = map.at(r.u0, r.v0);
   return svg`
     <clipPath id=${clipId}>
@@ -190,7 +192,7 @@ function windowPane(o: DoorOptions): SVGTemplateResult {
     <g clip-path=${url(clipId)}>
       ${black ? nothing : area(map, r, url(m.glass))}
       ${isLit(o.look)
-        ? svg`${cavityScene(m, interiorCamera(o.top, o.height), cavityBox(o.top, o.height), o.look, o.key)}
+        ? svg`${cavityScene(m, interiorCamera(o.width, o.top, o.height), cavityBox(o.width, o.top, o.height), o.look, o.key)}
             <radialGradient id=${vignetteId} cx="0.5" cy="0.45" r="0.72">
               <stop offset="0.55" stop-color="#000" stop-opacity="0" />
               <stop offset="1" stop-color="#000" stop-opacity="0.7" />
@@ -211,7 +213,7 @@ function windowPane(o: DoorOptions): SVGTemplateResult {
 function bevel(m: Materials, map: DoorMap, r: DoorRect, width: number): SVGTemplateResult {
   const o = { u0: r.u0 - width, u1: r.u1 + width, v0: r.v0 - width, v1: r.v1 + width };
   const face = (pts: Array<[number, number]>, fill: string) =>
-    svg`<polygon points=${points(pts.map(([u, v]) => map.at(u, v)))} fill=${fill} />`;
+    svg`<polygon points=${pointList(pts.map(([u, v]) => map.at(u, v)))} fill=${fill} />`;
   return svg`
     ${face([[o.u0, o.v0], [o.u1, o.v0], [r.u1, r.v0], [r.u0, r.v0]], url(m.bevelTop))}
     ${face([[o.u0, o.v0], [r.u0, r.v0], [r.u0, r.v1], [o.u0, o.v1]], url(m.bevelLeft))}
@@ -231,7 +233,7 @@ function bevel(m: Materials, map: DoorMap, r: DoorRect, width: number): SVGTempl
  */
 function recess(m: Materials, map: DoorMap, r: DoorRect, width: number): SVGTemplateResult {
   const poly = (pts: Array<[number, number]>, fill: string) =>
-    svg`<polygon points=${points(pts.map(([u, v]) => map.at(u, v)))} fill=${fill} />`;
+    svg`<polygon points=${pointList(pts.map(([u, v]) => map.at(u, v)))} fill=${fill} />`;
   return svg`
     ${poly([[r.u1, r.v0], [r.u1 + width, r.v0], [r.u1 + width, r.v1 + width], [r.u1, r.v1]], url(m.recessRight))}
     ${poly([[r.u0, r.v1], [r.u1, r.v1], [r.u1 + width, r.v1 + width], [r.u0, r.v1 + width]], url(m.recessBottom))}
@@ -301,9 +303,9 @@ function stripHandle(m: Materials, map: DoorMap, h: Handle): SVGTemplateResult {
   const r = { u0: h.u0, u1: h.u1, v0: 0, v1: h.size };
   return svg`
     ${area(map, r, url(m.metal))}
-    ${line(map, 0, 0.6, WIDTH, 0.6, "#fff", 1.1, 0.7)}
-    ${line(map, 0, 2.2, WIDTH, 2.2, "#fff", 0.6, 0.25)}
-    ${line(map, 0, h.size - 0.5, WIDTH, h.size - 0.5, "#000", 1, 0.55)}
+    ${line(map, h.u0, 0.6, h.u1, 0.6, "#fff", 1.1, 0.7)}
+    ${line(map, h.u0, 2.2, h.u1, 2.2, "#fff", 0.6, 0.25)}
+    ${line(map, h.u0, h.size - 0.5, h.u1, h.size - 0.5, "#000", 1, 0.55)}
   `;
 }
 
@@ -323,10 +325,10 @@ export interface CavityBox {
 }
 
 /** The cavity behind a door: about 25 1/2″ wide and 18 1/2″ deep, opening 2″ in from the sides. */
-export function cavityBox(doorTop: number, doorHeight: number): CavityBox {
+export function cavityBox(width: number, doorTop: number, doorHeight: number): CavityBox {
   return {
     x0: 20,
-    x1: WIDTH - 20,
+    x1: width - 20,
     y0: doorTop + 20,
     y1: doorTop + doorHeight - 7,
     zFront: -DOOR_THICKNESS,
@@ -388,7 +390,7 @@ function cavityColors(look: CavityLook, open = false): CavityColors {
   };
 }
 
-type Projector = (x: number, y: number, z: number) => Pt;
+type Projector = (x: number, y: number, z: number) => Point;
 
 const segment = (P: Projector, a: readonly [number, number, number], b: readonly [number, number, number]) => {
   const [ax, ay] = P(a[0], a[1], a[2]);
@@ -415,7 +417,7 @@ export function cavityScene(
   const bTR = P(x1, y0, zb);
   const bBR = P(x1, y1, zb);
   const bBL = P(x0, y1, zb);
-  const id = (name: string) => `${m.uid}-${name}-${key}`;
+  const id = (name: string) => m.ids.id(`${name}-${key}`);
   const height = y1 - y0;
   const heat = look.selfClean ? 1 : look.heat;
   const ledges = [0.16, 0.3, 0.44, 0.58, 0.72, 0.86].map((t) => y0 + height * t);
@@ -424,7 +426,7 @@ export function cavityScene(
   const lampY = y0 + height * 0.14;
   const lampZ = zf - 38;
   // Side walls: lit near the front, where the lamps are, fading into the back corners.
-  const sideGradient = (gid: string, front: Pt, back: Pt) => svg`
+  const sideGradient = (gid: string, front: Point, back: Point) => svg`
     <linearGradient id=${gid} gradientUnits="userSpaceOnUse" x1=${round(front[0])} y1="0" x2=${round(back[0])} y2="0">
       <stop offset="0" stop-color=${c.wallLit} />
       <stop offset="0.45" stop-color=${c.wall} />
@@ -444,11 +446,11 @@ export function cavityScene(
       <stop offset="0" stop-color=${mix(c.floor, "#000000", 0.5)} />
       <stop offset="1" stop-color=${c.floor} />
     </linearGradient>
-    <polygon points=${points([bTL, bTR, bBR, bBL])} fill=${url(id("back"))} />
-    <polygon points=${points([fTL, bTL, bBL, fBL])} fill=${url(id("side"))} />
-    <polygon points=${points([bTR, fTR, fBR, bBR])} fill=${url(id("side-r"))} />
-    ${y0 < camera.cy ? svg`<polygon points=${points([fTL, fTR, bTR, bTL])} fill=${mix(c.wall, "#000000", 0.3)} />` : nothing}
-    ${y1 > camera.cy ? svg`<polygon points=${points([bBL, bBR, fBR, fBL])} fill=${url(id("floor"))} />` : nothing}
+    <polygon points=${pointList([bTL, bTR, bBR, bBL])} fill=${url(id("back"))} />
+    <polygon points=${pointList([fTL, bTL, bBL, fBL])} fill=${url(id("side"))} />
+    <polygon points=${pointList([bTR, fTR, fBR, bBR])} fill=${url(id("side-r"))} />
+    ${y0 < camera.cy ? svg`<polygon points=${pointList([fTL, fTR, bTR, bTL])} fill=${mix(c.wall, "#000000", 0.3)} />` : nothing}
+    ${y1 > camera.cy ? svg`<polygon points=${pointList([bBL, bBR, fBR, fBL])} fill=${url(id("floor"))} />` : nothing}
   `;
   // The convection fan's cover: a broad panel standing off the back wall, barely a shade darker,
   // with its intake slots; in the photos it all but disappears into the porcelain.
@@ -535,7 +537,7 @@ function element(m: Materials, P: Projector, box: CavityBox, heat: number, selfC
   const xa = box.x0 + 26;
   const xb = box.x1 - 26;
   const passes = [box.zFront - 34, (box.zFront + box.zBack) / 2, box.zBack + 30];
-  const route: Pt[] = [];
+  const route: Point[] = [];
   passes.forEach((z, index) => {
     const [from, to] = index % 2 ? [xb, xa] : [xa, xb];
     route.push(P(from, y, z), P(to, y, z));
@@ -543,10 +545,10 @@ function element(m: Materials, P: Projector, box: CavityBox, heat: number, selfC
   const hot = mix("#3a1609", selfClean ? "#ff6326" : "#ff7d22", heat);
   const core = mix("#4a1c0b", selfClean ? "#ffb070" : "#ffc06a", heat);
   return svg`
-    <polyline points=${points(route)} fill="none" stroke=${hot} stroke-width="5" stroke-linejoin="round"
+    <polyline points=${pointList(route)} fill="none" stroke=${hot} stroke-width="5" stroke-linejoin="round"
       opacity=${round(0.75 * heat)} filter=${url(m.blur)} />
-    <polyline points=${points(route)} fill="none" stroke=${hot} stroke-width="1.9" stroke-linejoin="round" />
-    <polyline points=${points(route)} fill="none" stroke=${core} stroke-width="0.6" stroke-linejoin="round" />
+    <polyline points=${pointList(route)} fill="none" stroke=${hot} stroke-width="1.9" stroke-linejoin="round" />
+    <polyline points=${pointList(route)} fill="none" stroke=${core} stroke-width="0.6" stroke-linejoin="round" />
   `;
 }
 
@@ -605,9 +607,9 @@ function probeCable(P: Projector, box: CavityBox, rackY: number, c: CavityColors
 }
 
 /** The opening an open door leaves, in drawing coordinates: the cavity's front edge. */
-export function openingRect(top: number, height: number): { x0: number; y0: number; x1: number; y1: number } {
-  const box = cavityBox(top, height);
-  const camera = interiorCamera(top, height, true);
+export function openingRect(top: number, height: number, width: number): { x0: number; y0: number; x1: number; y1: number } {
+  const box = cavityBox(width, top, height);
+  const camera = interiorCamera(width, top, height, true);
   const [x0, y0] = project(camera, box.x0, box.y0, box.zFront);
   const [x1, y1] = project(camera, box.x1, box.y1, box.zFront);
   return { x0, y0, x1, y1 };
@@ -617,11 +619,12 @@ export function openingRect(top: number, height: number): { x0: number; y0: numb
  * The view into an open oven: the oven's stainless face around the opening, in the door's shadow,
  * the lit cavity, and the woven gray gasket lining the opening's rounded edge.
  */
-export function openCavity(m: Materials, top: number, height: number, look: CavityLook, key: string): SVGTemplateResult {
-  const box = cavityBox(top, height);
-  const camera = interiorCamera(top, height, true);
-  const clipId = `${m.uid}-opening-${key}`;
-  const { x0: ox0, y0: oy0, x1: ox1, y1: oy1 } = openingRect(top, height);
+export function openCavity(o: DoorOptions): SVGTemplateResult {
+  const { m, top, height, look, key, width } = o;
+  const box = cavityBox(width, top, height);
+  const camera = interiorCamera(width, top, height, true);
+  const clipId = m.ids.id(`opening-${key}`);
+  const { x0: ox0, y0: oy0, x1: ox1, y1: oy1 } = openingRect(top, height, width);
   const radius = 22;
   const w = ox1 - ox0;
   const h = oy1 - oy0;
@@ -630,9 +633,9 @@ export function openCavity(m: Materials, top: number, height: number, look: Cavi
       rx=${round(radius - inset)} fill="none" stroke=${stroke} stroke-width=${width} opacity=${opacity}
       stroke-dasharray=${dash ?? nothing} />`;
   return svg`
-    <rect x="0" y=${round(top)} width=${WIDTH} height=${round(height)} fill=${url(m.metal)} />
-    <rect x="0" y=${round(top)} width=${WIDTH} height=${round(height)} fill="#000" opacity="0.2" />
-    <rect x="0" y=${round(top)} width=${WIDTH} height="5" fill=${url(m.dropShadow)} />
+    <rect x="0" y=${round(top)} width=${width} height=${round(height)} fill=${url(m.metal)} />
+    <rect x="0" y=${round(top)} width=${width} height=${round(height)} fill="#000" opacity="0.2" />
+    <rect x="0" y=${round(top)} width=${width} height="5" fill=${url(m.dropShadow)} />
     <clipPath id=${clipId}>
       <rect x=${round(ox0)} y=${round(oy0)} width=${round(w)} height=${round(h)} rx=${radius} />
     </clipPath>
@@ -653,11 +656,12 @@ export function droppedDoor(o: DoorOptions): SVGTemplateResult {
   const { m, map } = o;
   const t = DOOR_THICKNESS;
   const H = o.height;
+  const W = o.width;
   const c = cavityColors(o.look, true);
-  const glass: DoorRect = { u0: 26, u1: WIDTH - 26, v0: 16, v1: H - 24 };
-  const glassId = `${m.uid}-inner-glass-${o.key}`;
-  const slotId = `${m.uid}-slot-${o.key}`;
-  const band: Pt[] = [map.at(0, 0, -t), map.at(WIDTH, 0, -t), map.at(WIDTH, 0, 0), map.at(0, 0, 0)];
+  const glass: DoorRect = { u0: 26, u1: W - 26, v0: 16, v1: H - 24 };
+  const glassId = m.ids.id(`inner-glass-${o.key}`);
+  const slotId = m.ids.id(`slot-${o.key}`);
+  const band: Point[] = [map.at(0, 0, -t), map.at(W, 0, -t), map.at(W, 0, 0), map.at(0, 0, 0)];
   const [, gy0] = map.at(0, glass.v1, -t);
   const [, gy1] = map.at(0, glass.v0, -t);
   // The glass mirrors the lit cavity above it: its racks, brightest by the hinge.
@@ -676,16 +680,16 @@ export function droppedDoor(o: DoorOptions): SVGTemplateResult {
       <stop offset="1" stop-color="#3d3e40" />
     </linearGradient>
     <g filter=${url(m.grain)}>
-      <polygon points=${points(quad(map, { u0: 0, u1: WIDTH, v0: 0, v1: H }, -t))} fill=${url(m.metal)} />
-      <polygon points=${points(band)} fill=${url(m.metal)} />
+      <polygon points=${pointList(quad(map, { u0: 0, u1: W, v0: 0, v1: H }, -t))} fill=${url(m.metal)} />
+      <polygon points=${pointList(band)} fill=${url(m.metal)} />
     </g>
-    ${area(map, { u0: 0, u1: WIDTH, v0: 0, v1: H }, "#fff", 0.1, -t)}
+    ${area(map, { u0: 0, u1: W, v0: 0, v1: H }, "#fff", 0.1, -t)}
     ${area(map, glass, url(glassId), 1, -t)}
     ${reflections}
     ${line(map, glass.u0, glass.v0, glass.u1, glass.v0, "#fff", 0.5, 0.35, -t)}
-    ${line(map, 0, H, WIDTH, H, "#000", 0.8, 0.45, -t)}
-    <polygon points=${points(band)} fill="#000" opacity="0.28" />
-    ${doorEdge(map, slotId)}
+    ${line(map, 0, H, W, H, "#000", 0.8, 0.45, -t)}
+    <polygon points=${pointList(band)} fill="#000" opacity="0.28" />
+    ${doorEdge(map, slotId, W)}
     ${droppedHandle(m, map, o.design.handle)}
   `;
 }
@@ -694,13 +698,13 @@ export function droppedDoor(o: DoorOptions): SVGTemplateResult {
  * A dropped door's top edge, facing you: the door's thickness, with the five cooling slots the
  * photos show along it.
  */
-function doorEdge(map: DoorMap, slotFill: string): SVGTemplateResult {
+function doorEdge(map: DoorMap, slotFill: string, width: number): SVGTemplateResult {
   const t = DOOR_THICKNESS;
   const slots: SVGTemplateResult[] = [];
   const count = 5;
   const margin = 14;
   const gap = 7;
-  const slotWidth = (WIDTH - margin * 2 - gap * (count - 1)) / count;
+  const slotWidth = (width - margin * 2 - gap * (count - 1)) / count;
   const [, top] = map.at(0, 0, -t * 0.73);
   const [, bottom] = map.at(0, 0, -t * 0.27);
   const h = bottom - top;
@@ -717,8 +721,8 @@ function doorEdge(map: DoorMap, slotFill: string): SVGTemplateResult {
   }
   return svg`
     ${slots}
-    <polyline points=${points([map.at(0, 0, -t), map.at(WIDTH, 0, -t)])} stroke="#fff" stroke-width="0.9" opacity="0.75" />
-    <polyline points=${points([map.at(0, 0, 0), map.at(WIDTH, 0, 0)])} stroke="#000" stroke-width="0.8" opacity="0.35" />
+    <polyline points=${pointList([map.at(0, 0, -t), map.at(width, 0, -t)])} stroke="#fff" stroke-width="0.9" opacity="0.75" />
+    <polyline points=${pointList([map.at(0, 0, 0), map.at(width, 0, 0)])} stroke="#000" stroke-width="0.8" opacity="0.35" />
   `;
 }
 
@@ -754,16 +758,16 @@ function droppedHandle(m: Materials, map: DoorMap, h: Handle): SVGTemplateResult
   }
   // Each cap's face toward you runs from the door's face down past the bar.
   const caps = [h.u0, h.u1 - capWidth].map((u, index) => {
-    const face: Pt[] = [
+    const face: Point[] = [
       map.at(u, h.v - CAP_HALF, 0),
       map.at(u + capWidth, h.v - CAP_HALF, 0),
       map.at(u + capWidth, h.v - CAP_HALF, n + r),
       map.at(u, h.v - CAP_HALF, n + r),
     ];
     return svg`
-      <polygon points=${points(face)} fill=${url(m.chrome)} />
-      <polygon points=${points(face)} fill=${url(index ? m.capEndRight : m.capEndLeft)} />
-      <polygon points=${points(face)} fill="#000" opacity="0.42" />`;
+      <polygon points=${pointList(face)} fill=${url(m.chrome)} />
+      <polygon points=${pointList(face)} fill=${url(index ? m.capEndRight : m.capEndLeft)} />
+      <polygon points=${pointList(face)} fill="#000" opacity="0.42" />`;
   });
   return svg`${bar}${caps}`;
 }

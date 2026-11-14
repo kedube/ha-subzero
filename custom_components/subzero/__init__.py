@@ -11,6 +11,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import DeviceInfo
 
@@ -22,7 +23,9 @@ from .controls import excluded_entity_keys
 from .coordinator import (
     SubZeroAccount,
     SubZeroCoordinator,
+    async_delete_entry_issues,
     firebase_alerts_enabled,
+    firebase_alerts_issue,
     selected_devices,
 )
 from .fcm import FcmAlerts, async_remove_alert_subscriptions
@@ -105,6 +108,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: SubZeroConfigEntry) -> b
         if entity.unique_id in excluded:
             entities.async_remove(entity.entity_id)
     enabled = firebase_alerts_enabled(entry)
+    if not enabled:
+        # Alerts were turned off, so a repair about them no longer applies.
+        ir.async_delete_issue(hass, DOMAIN, firebase_alerts_issue(entry.entry_id))
     if (enabled and account.coordinators) or entry.data.get("fcm_registration_ids"):
         account.alerts = FcmAlerts(hass, entry, client, account.coordinators)
         if enabled and account.coordinators:
@@ -132,9 +138,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: SubZeroConfigEntry) -> 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Clean up after an integration entry that was removed.
 
-    The panel lets the removed appliances go, with their Appearance settings, and Sub-Zero
-    stops sending Firebase alerts to the entry.
+    The panel lets the removed appliances go, with their Appearance settings, the entry's
+    repairs go, and Sub-Zero stops sending Firebase alerts to the entry.
     """
+    async_delete_entry_issues(hass, entry.entry_id)
     async_panel_entry_removed(hass, entry.entry_id)
     await async_forget_entry_panel(hass, entry.entry_id)
     await async_remove_unused_appearance(hass)

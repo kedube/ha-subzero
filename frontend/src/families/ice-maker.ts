@@ -6,6 +6,7 @@ import {
   compact,
   countdown,
   detailsSection,
+  doorOpenText,
   doors,
   durationSeconds,
   formatClock,
@@ -88,7 +89,7 @@ function delaySection(ctx: ApplianceContext): Section | null {
   };
   return section("ice_delay", t("section.ice_delay"), [
     end ? countdown("delay_end_time", t("control.delay_left"), end) : null,
-    planned ? reading("delay_schedule", t("control.delay_schedule"), planned) : null,
+    planned ? reading("delay_schedule", t("control.delay_schedule"), planned, { entity_id: ctx.entityId("delay_duration", "sensor") }) : null,
     form,
     // These only mean something while there's a delay or a schedule to end.
     buttonReady(ctx, "end_ice_delay") ? buttonAction(ctx, "end_ice_delay", t("control.end_delay"), t("action.end")) : null,
@@ -111,7 +112,11 @@ function cleaningSection(ctx: ApplianceContext): Section | null {
       ? reading("ice_maker_clean_stage", t("control.clean_stage"), stage === null ? null : optionLabel(t, stage))
       : null,
     has(ctx, "clean_now_on", "binary_sensor") || has(ctx, "clean_soon_on", "binary_sensor")
-      ? reading("clean_due", t("control.clean_due"), due, { tone: now ? "alert" : soon ? "warning" : "normal" })
+      ? reading("clean_due", t("control.clean_due"), due, {
+          tone: now ? "alert" : soon ? "warning" : "normal",
+          // The sensor that says so: due soon while that's the word, else due now.
+          entity_id: ctx.entityId(soon && !now ? "clean_soon_on" : "clean_now_on", "binary_sensor") ?? ctx.entityId("clean_soon_on", "binary_sensor"),
+        })
       : null,
     has(ctx, "next_clean_time", "sensor")
       ? reading("next_clean_time", t("control.next_cleaning"), next === null ? null : formatDateTime(ctx.hass, next, ctx.now))
@@ -182,7 +187,7 @@ export const iceMaker: FamilyModel = {
   status(ctx): StatusPill {
     const t = ctx.t;
     if (!ctx.appliance.available) return { text: t("pill.offline"), tone: "gray" };
-    if (isOn(ctx, "ice_door_ajar", "binary_sensor")) return { text: t("pill.door_open"), tone: "amber" };
+    if (isOn(ctx, "ice_door_ajar", "binary_sensor")) return { text: doorOpenText(ctx, DOORS), tone: "amber" };
     if (needsService(ctx) || isOn(ctx, "failsafe_on", "binary_sensor")) return { text: t("pill.service"), tone: "red" };
     if (cleaning(ctx)) return { text: t("pill.cleaning"), tone: "accent" };
     if (isOn(ctx, "clean_now_on", "binary_sensor")) return { text: t("pill.cleaning_due"), tone: "amber" };

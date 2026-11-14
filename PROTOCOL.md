@@ -52,7 +52,7 @@ Non-production app builds use `https://dev.iot.subzero.com` and `https://test.io
 2. **List appliances**: `GET /consumerapp/user/devices` returns each appliance's ID, name, and temperature unit (§3.3). [I][A]
 3. **Open the live connection**: `POST /signal-r/negotiateUser` returns a SignalR address and token; then SignalR's own negotiate, the WebSocket, and the handshake (§5). [I][A]
 4. **Open each appliance's channel**: the direct method `open_cloud_async`. The appliance pushes its full state, then each change. [I][A][O]
-5. **Read what's missing**: an appliance that hasn't pushed its state within 16 s is read with the `get` direct method (`coordinator.py: INITIAL_STATE_TIMEOUT`). [I]
+5. **Read what's missing**: the appliances that haven't pushed their state within 16 s are read with the `get` direct method, all at once (`coordinator.py: INITIAL_STATE_TIMEOUT`). [I]
 6. **Write**: the direct method `set`, one property at a time, each confirmed from the appliance's reported state (§10.4). [I]
 7. **Keep it current**: renew the connection at least every 50 minutes, check channels after events and while a door is open (§13), refresh faults every 30 minutes (§11), and optionally receive Firebase alerts (§6). [I]
 
@@ -321,6 +321,7 @@ No `Userid` or subscription key is sent. The answer must be JSON with HTTP 200; 
 1. Connect to `wss://<signalr-host>/client/?hub=connectedappliances&id=<connectionToken>` with `Authorization: Bearer <accessToken>` and `APP_HEADERS`. Messages can be up to 262144 bytes. [I]
 2. Send `{"protocol":"json","version":1}` followed by the record separator `\x1e`. [I]
 3. The first text frame must arrive within 20 s and contain `\x1e`, and the record before it must be exactly `{}`. Anything after it is kept as further messages. [I]
+4. Connecting and the handshake together get 30 s (`api.py: CONNECT_TIMEOUT`), so a server that accepts the connection and then says nothing counts as a failed attempt. [I]
 
 ### 5.4 Framing
 
@@ -389,7 +390,7 @@ How the integration applies them (`coordinator.py: apply_update`) [I]:
 ### 5.7 Appliance channels
 
 - `open_cloud_async` takes no parameters, such as a duration. [I][A] The appliance answers on the live connection with a `resp` full state, then pushes changes. [O]
-- After the handshake, the integration opens every selected appliance's channel. A failed open makes that appliance unavailable and is retried after 30 s, doubling to 900 s, plus 0–5 s of jitter. A 429 ends the connection (§12). [I]
+- After the handshake, the integration opens every selected appliance's channel, and acts on each result as it comes, without waiting for a message or the next ping. A failed open makes that appliance unavailable and is retried after 30 s, doubling to 900 s, plus 0–5 s of jitter. A 429 on a connection's first round of opens ends the connection. On a retry, where only appliances that already failed are left, it postpones the retry by at least `Retry-After` and the connection stays, since the channels that opened keep delivering (§12). [I]
 - Any state from an appliance also counts as its channel being open. [I]
 - An idle appliance sends nothing on its channel, not even a heartbeat (§14). So silence alone can't tell a quiet appliance from a stopped channel. [O]
 
@@ -963,7 +964,7 @@ Active faults come from this endpoint, not from the `active_faults` property, wh
 | HTTP 429 | Reads `Retry-After` as seconds or an HTTP date (at least 1 s; 600 s if missing or unreadable). Until then, every request from that account fails at once with `RateLimited` | [I] (`retry_delay`, `_json`) |
 | 429 during a check's read | The read is skipped and the appliance keeps its state; updates continue | [I] |
 | 429 during setup | Setup is retried later (`ConfigEntryNotReady`) | [I] |
-| 429 while opening channels | The connection ends; the reconnect waits at least `Retry-After` | [I] |
+| 429 while opening channels | On a new connection's first round of opens, the connection ends and the reconnect waits at least `Retry-After`. On a retry of a channel that already failed, the connection stays and the retry waits at least `Retry-After` | [I] |
 | 401 or 403 from APIM | Refresh the token and retry once, then ask to sign in again | [I] |
 | 400, 401, or 403 from `TOKEN_URL` | Ask to sign in again | [I] |
 | 404 for the fault list | No faults | [I][A] |

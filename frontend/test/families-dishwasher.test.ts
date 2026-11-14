@@ -105,6 +105,9 @@ describe("dishwasher (DW2450), idle", () => {
 
   it("shows the door, child lock and Sabbath in the pill", () => {
     expect(model.status(context(withStates(dishwasher(), { door_ajar: { binary_sensor: "on" } })))).toEqual({ text: "Door open", tone: "amber" });
+    // With how long it's been open, once history knows.
+    const opened = (entityId: string) => (entityId === "binary_sensor.dishwasher_door_ajar" ? NOW - 3 * 60_000 : null);
+    expect(model.status(context(withStates(dishwasher(), { door_ajar: { binary_sensor: "on" } }), { since: opened })).text).toBe("Door open · 3 min");
     expect(model.status(context(withStates(dishwasher(), { mode: { select: "Child lock" } })))).toEqual({ text: "Child lock", tone: "neutral" });
     expect(model.status(context(withStates(dishwasher(), { sabbath_on: { binary_sensor: "on" }, mode: { select: "Sabbath" } })))).toEqual({
       text: "Sabbath",
@@ -167,10 +170,15 @@ describe("dishwasher, running", () => {
       tone: "danger",
       disabled: false,
     });
-    // In hours and seconds like the display, ticking with the view's clock.
-    expect(control(list, "wash_cycle_end_time")).toMatchObject({ kind: "reading", value: "1:00:00", hint: "Ends at 15:00" });
-    const later = model.sections(context(running(), { since, now: NOW + 10 * 60_000 + 27_000 }));
-    expect(control(later, "wash_cycle_end_time")).toMatchObject({ value: "0:49:33" });
+    // A countdown like an oven timer's, on the view's clock, in hours and seconds like the display.
+    expect(control(list, "wash_cycle_end_time")).toEqual({
+      kind: "countdown",
+      id: "wash_cycle_end_time",
+      label: "Time left",
+      end: inMinutes(60),
+      hint: "Ends at 15:00",
+      hours: true,
+    });
   });
 
   it("dries, then finishes", () => {
@@ -199,7 +207,7 @@ describe("dishwasher, delayed start", () => {
     expect(model.drawingState(ctx).dishwasher).toMatchObject({ status: "delayed", display: "2:05:00", progress: null });
     expect(model.infoRows(ctx)[1]).toEqual({ label: "Starts", value: "16:05" });
     const list = sections(delayed);
-    expect(control(list, "delay_start_timer_end_time")).toMatchObject({ kind: "reading", label: "Starts in", value: "2:05:00" });
+    expect(control(list, "delay_start_timer_end_time")).toMatchObject({ kind: "countdown", label: "Starts in", end: inMinutes(125), hours: true });
     expect(control(list, "cancel_wash_cycle")).toMatchObject({ disabled: false });
   });
 

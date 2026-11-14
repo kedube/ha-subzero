@@ -18,6 +18,7 @@ from homeassistant.exceptions import (
     HomeAssistantError,
     ServiceValidationError,
 )
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -159,6 +160,25 @@ def shared_connection_check_minutes(entry: ConfigEntry) -> int:
 def firebase_alerts_enabled(entry: ConfigEntry) -> bool:
     """Firebase alerts are used only when the owner turns them on."""
     return entry.options.get(CONF_FIREBASE_ALERTS) is True
+
+
+def removed_appliance_issue(entry_id: str, device_id: str) -> str:
+    """The id of the repair for an appliance its account no longer lists."""
+    return f"appliance_removed_{entry_id}_{device_id}"
+
+
+def firebase_alerts_issue(entry_id: str) -> str:
+    """The id of the repair for Firebase alerts that can't be set up."""
+    return f"firebase_alerts_{entry_id}"
+
+
+@callback
+def async_delete_entry_issues(hass: HomeAssistant, entry_id: str) -> None:
+    """Drop every repair raised for an entry, once it is removed."""
+    prefixes = (removed_appliance_issue(entry_id, ""), firebase_alerts_issue(entry_id))
+    for domain, issue_id in list(ir.async_get(hass).issues):
+        if domain == DOMAIN and issue_id.startswith(prefixes):
+            ir.async_delete_issue(hass, DOMAIN, issue_id)
 
 
 class SubZeroCoordinator(DataUpdateCoordinator[dict]):
@@ -307,11 +327,50 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         self._check_due = None
         if self.hass.is_stopping:
             return
-        if self._check_task is not None and not self._check_task.done():
+        if self.check_running:
             # A push restarted the timer during a check that outlasted the interval.
             self._schedule_check()
             return
         self._start_check_task("watch")
+
+    @property
+    def check_running(self) -> bool:
+        """Whether a channel check is under way."""
+        return self._check_task is not None and not self._check_task.done()
+
+    @property
+    def last_check(self) -> datetime | None:
+        """When the latest channel check started."""
+        return self._last_check
+
+    @property
+    def channel_error(self) -> ApiError | None:
+        """Why the appliance's update channel is closed, while it is."""
+        return self._channel_error
+
+    @callback
+    def async_start_check(self, reason: str) -> asyncio.Task:
+        """Start a channel check for `reason`, as `_async_check_and_read` lists them."""
+        return self._start_check_task(reason)
+
+    @callback
+    def async_channel_failed(self, error: ApiError) -> None:
+        """The appliance did not open its update channel, so it can't report."""
+        self._read_error = error
+        self._channel_error = error
+        self.async_set_update_error(error)
+
+    @callback
+    def async_channel_opened(self) -> None:
+        """The appliance accepted its update channel."""
+        self._read_error = None
+        self._channel_error = None
+
+    @callback
+    def async_push_failed(self, error: Exception) -> None:
+        """Push stopped for every appliance, which also fails a status read under way."""
+        self._read_error = error
+        self.async_set_update_error(error)
 
     @callback
     def _start_check_task(self, reason: str) -> asyncio.Task:
@@ -363,9 +422,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         Joins a check that is already running. The check finishes even if the
         caller is cancelled.
         """
-        task = self._check_task
-        if task is None or task.done():
-            task = self._start_check_task("manual")
+        task = self._check_task if self.check_running else self._start_check_task("manual")
         await asyncio.shield(task)
 
     async def async_shutdown(self) -> None:
@@ -1235,10 +1292,7 @@ class SubZeroAccount:
             # Reconnecting reopens every channel.
             return
         coordinators = list(self.coordinators.values())
-        if any(
-            coordinator._check_task is not None and not coordinator._check_task.done()
-            for coordinator in coordinators
-        ):
+        if any(coordinator.check_running for coordinator in coordinators):
             # A check that is already running shows the same.
             return
         available = [coordinator for coordinator in coordinators if coordinator.last_update_success]
@@ -1246,10 +1300,10 @@ class SubZeroAccount:
             coordinator = min(
                 available,
                 key=lambda coordinator: (
-                    coordinator._last_check or datetime.min.replace(tzinfo=dt_util.UTC)
+                    coordinator.last_check or datetime.min.replace(tzinfo=dt_util.UTC)
                 ),
             )
-            coordinator._start_check_task("connection")
+            coordinator.async_start_check("connection")
 
     async def async_setup(self) -> None:
         if not self.coordinators:
@@ -1264,6 +1318,7 @@ class SubZeroAccount:
         except ApiError as error:
             metadata_error = error
         else:
+            self._report_removed_appliances({appliance.id for appliance in appliances})
             units = {appliance.id: appliance.temperature_unit for appliance in appliances}
             for coordinator in self.coordinators.values():
                 if coordinator.device_id in units:
@@ -1288,17 +1343,27 @@ class SubZeroAccount:
                     await asyncio.gather(*(ready.wait() for ready in self._initial_states.values()))
             except TimeoutError:
                 pass
-            errors = []
-            for coordinator in self.coordinators.values():
-                if coordinator.last_update_success and coordinator.data.get("appliance_model"):
-                    continue
+            # The appliances that pushed no snapshot are read instead, all at once, so
+            # several that don't answer take no longer than one.
+            unread = [
+                coordinator
+                for coordinator in self.coordinators.values()
+                if not (coordinator.last_update_success and coordinator.data.get("appliance_model"))
+            ]
+            for coordinator in unread:
                 if isinstance(coordinator.last_exception, InvalidAuth):
                     raise ConfigEntryAuthFailed(str(coordinator.last_exception))
-                try:
-                    await coordinator.async_config_entry_first_refresh()
-                except ConfigEntryNotReady as error:
+            results = await asyncio.gather(
+                *(coordinator.async_config_entry_first_refresh() for coordinator in unread),
+                return_exceptions=True,
+            )
+            errors = []
+            for coordinator, result in zip(unread, results, strict=True):
+                if isinstance(result, ConfigEntryNotReady):
                     coordinator.data = {}
-                    errors.append(error)
+                    errors.append(result)
+                elif isinstance(result, BaseException):
+                    raise result
             if errors and len(errors) == len(self.coordinators):
                 raise errors[0]
         finally:
@@ -1306,7 +1371,7 @@ class SubZeroAccount:
         for coordinator in self.coordinators.values():
             if (
                 not coordinator.last_update_success
-                and coordinator._channel_error is None
+                and coordinator.channel_error is None
                 and self.client.push_connected
             ):
                 self._start_recovery(coordinator)
@@ -1324,10 +1389,36 @@ class SubZeroAccount:
             self.entry.async_on_unload(self._cancel_connection_check)
 
     @callback
+    def _report_removed_appliances(self, account: set[str]) -> None:
+        """Raise a repair for each selected appliance the account no longer lists.
+
+        Such an appliance never reports again, and nothing else says why. The repair
+        goes once the appliance is back on the account or is deselected in Configure.
+        """
+        prefix = removed_appliance_issue(self.entry.entry_id, "")
+        current = {
+            removed_appliance_issue(self.entry.entry_id, device_id): coordinator
+            for device_id, coordinator in self.coordinators.items()
+            if device_id not in account
+        }
+        for domain, issue_id in list(ir.async_get(self.hass).issues):
+            if domain == DOMAIN and issue_id.startswith(prefix) and issue_id not in current:
+                ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+        for issue_id, coordinator in current.items():
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                issue_id,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="appliance_removed",
+                translation_placeholders={"name": coordinator.device["name"]},
+            )
+
+    @callback
     def set_error(self, error: Exception) -> None:
         for coordinator in self.coordinators.values():
-            coordinator._read_error = error
-            coordinator.async_set_update_error(error)
+            coordinator.async_push_failed(error)
         for ready in self._initial_states.values():
             ready.set()
 
@@ -1403,7 +1494,7 @@ class SubZeroAccount:
     def _read_failed(self, coordinator: SubZeroCoordinator) -> None:
         # With the channel open, no reconnect will prompt a recovery read.
         if (
-            coordinator._channel_error is None
+            coordinator.channel_error is None
             and self.client.push_connected
             and self.entry.state is ConfigEntryState.LOADED
             and not isinstance(coordinator.last_exception, ConfigEntryAuthFailed)
@@ -1440,12 +1531,9 @@ class SubZeroAccount:
                         if ready := self._initial_states.get(device_id):
                             ready.set()
                     if isinstance(update, ApiError):
-                        coordinator._read_error = update
-                        coordinator._channel_error = update
-                        coordinator.async_set_update_error(update)
+                        coordinator.async_channel_failed(update)
                     elif isinstance(update, ChannelOpened):
-                        coordinator._read_error = None
-                        coordinator._channel_error = None
+                        coordinator.async_channel_opened()
                     else:
                         coordinator.apply_update(update)
                     if (

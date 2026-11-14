@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import logging
+import time
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
 from unittest.mock import AsyncMock, MagicMock
@@ -610,6 +611,105 @@ async def test_stream_surfaces_channel_errors_without_leaking_tasks(tokens, erro
         assert channel_cancelled.is_set()
         assert receive_cancelled.is_set()
     session.ws_connect.return_value.__aexit__.assert_awaited_once()
+
+
+def mocked_stream(tokens, open_channel, devices, frames=()):
+    """A notification stream over a mocked socket that sends `frames`, then stays silent."""
+    release = asyncio.Event()
+    pending = iter(["{}" + api.SEPARATOR, *frames])
+
+    async def receive(**kwargs):
+        if (frame := next(pending, None)) is not None:
+            return aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, frame, "")
+        await release.wait()
+        return aiohttp.WSMessage(aiohttp.WSMsgType.CLOSED, None, "")
+
+    socket = AsyncMock()
+    socket.receive.side_effect = receive
+    session = MagicMock()
+    session.ws_connect.return_value.__aenter__.return_value = socket
+    client = api.SubZeroClient(session, "test-key", tokens)
+    client._request = AsyncMock(
+        return_value={"url": api.SIGNALR_ORIGIN + "/client/", "accessToken": "test-signalr"}
+    )
+    client._json = AsyncMock(return_value={"connectionToken": "test-connection"})
+    client.open_channel = open_channel
+    return client, session, client.watch(devices)
+
+
+async def test_channel_events_arrive_without_a_message_or_ping(tokens):
+    """An appliance that rejects its channel says so at once, not with the next ping."""
+    offline = api.ApiError("The appliance rejected opening its update channel.")
+
+    async def open_channel(device_id):
+        raise offline
+
+    assert api.PING_INTERVAL >= 10
+    _, _, stream = mocked_stream(tokens, open_channel, ["test-fridge"])
+    try:
+        async with asyncio.timeout(1):
+            assert await anext(stream) == ("test-fridge", offline)
+    finally:
+        await stream.aclose()
+
+
+async def test_rate_limit_on_a_channel_retry_keeps_the_connection(tokens, monkeypatch):
+    """Only an appliance that already failed is left to retry, so the rest keep reporting."""
+    monkeypatch.setattr(api, "RECONNECT_DELAY", 0.01)
+    monkeypatch.setattr(api.random, "uniform", lambda *_: 0)
+    offline = api.ApiError("The appliance rejected opening its update channel.")
+    limited = api.RateLimited(300)
+    limited.retry_after = 0.2
+    oven = iter([offline, limited, None])
+    attempts = []
+
+    async def open_channel(device_id):
+        attempts.append((device_id, time.monotonic()))
+        if device_id == "test-oven" and (error := next(oven)) is not None:
+            raise error
+
+    client, session, stream = mocked_stream(tokens, open_channel, ["test-fridge", "test-oven"])
+    try:
+        async with asyncio.timeout(2):
+            assert await anext(stream) == ("test-fridge", api.ChannelOpened())
+            assert await anext(stream) == ("test-oven", offline)
+            # The limited retry reports nothing and ends nothing; the next one opens.
+            assert await anext(stream) == ("test-oven", api.ChannelOpened())
+        assert client.push_connected
+    finally:
+        await stream.aclose()
+    assert [device_id for device_id, _ in attempts] == ["test-fridge"] + ["test-oven"] * 3
+    # The retry after the limit waited for it.
+    assert attempts[3][1] - attempts[2][1] >= 0.2
+    session.ws_connect.assert_called_once()
+    assert not client.failed_connections
+
+
+async def test_connection_that_never_opens_times_out(tokens, monkeypatch):
+    monkeypatch.setattr(api, "CONNECT_TIMEOUT", 0.05)
+    never = asyncio.Event()
+
+    async def connect(*_):
+        await never.wait()
+
+    session = MagicMock()
+    session.ws_connect.return_value.__aenter__.side_effect = connect
+    client = api.SubZeroClient(session, "test-key", tokens)
+    client._request = AsyncMock(
+        return_value={"url": api.SIGNALR_ORIGIN + "/client/", "accessToken": "test-signalr"}
+    )
+    client._json = AsyncMock(return_value={"connectionToken": "test-connection"})
+    stream = client.watch(["test-fridge"])
+    try:
+        async with asyncio.timeout(1):
+            with pytest.raises(api.ApiError, match="Could not maintain"):
+                await anext(stream)
+    finally:
+        await stream.aclose()
+    assert not client.push_connected
+    assert [attempt["error"] for attempt in client.failed_connections] == [
+        "Could not maintain Sub-Zero's notification connection. (TimeoutError)"
+    ]
 
 
 @pytest.fixture

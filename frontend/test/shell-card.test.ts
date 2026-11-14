@@ -16,7 +16,9 @@ vi.mock("../src/families/index", () => ({
   familyModel: () => fake.model,
   makeContext: (...args: unknown[]) => {
     fake.contexts.push(args);
-    return { appliance: args[0], hass: args[1], t: args[2], now: args[3] } as unknown as ApplianceContext;
+    const appliance = args[0] as PanelAppliance;
+    const entityId = (key: string) => Object.values(appliance.entities?.[key] ?? {})[0];
+    return { appliance, hass: args[1], t: args[2], now: args[3], entityId } as unknown as ApplianceContext;
   },
 }));
 
@@ -212,6 +214,56 @@ describe("sz-appliance-card", () => {
     expect(card.hasAttribute("offline")).toBe(true);
     expect(shadow(card).querySelector(".lcd")).toBeNull();
     expect(last(fake.inputs)!.state.available).toBe(false);
+  });
+
+  it("asks the model nothing about an appliance that's offline but its drawing and rows", async () => {
+    fake.model = model({ display: vi.fn(() => ({ text: "4:12" })) });
+    await mount({ ...FRIDGE, available: false });
+    expect(fake.model.status).not.toHaveBeenCalled();
+    expect(fake.model.display).not.toHaveBeenCalled();
+    expect(fake.model.drawingState).toHaveBeenCalled();
+    expect(fake.model.infoRows).toHaveBeenCalled();
+  });
+
+  it("shows the appliance's latest event and when, from its event entity's own state", async () => {
+    fake.model = model();
+    const EVENT = "event.dishwasher_appliance_event";
+    const dishwasher = makeAppliance("dishwasher", SPECS.dishwasher, { entities: { appliance_event: { event: EVENT } } });
+    const fired = (at: string, type: string) => ({ [EVENT]: entity(EVENT, at, { event_type: type }, at) });
+    const hass = makeHass({ states: fired("2026-10-24T11:42:00.000+00:00", "dishwasher_complete"), locale: { language: "en", time_zone: "server" } });
+    const card = await mount(dishwasher, hass);
+    const line = () => shadow(card).querySelector(".event")!;
+    expect(text(line().querySelector(".what"))).toBe("Wash cycle complete");
+    expect(text(line().querySelector("time"))).toBe("11:42 AM");
+    expect(line().querySelector("time")!.getAttribute("datetime")).toBe("2026-10-24T11:42:00.000Z");
+    // It follows the entity, with no history read; an older day shows its date.
+    card.hass = { ...hass, states: fired("2026-10-21T08:05:00.000+00:00", "rinse_aid_low") };
+    await settle(card);
+    expect(text(line())).toBe("Rinse aid low Oct 21, 8:05 AM");
+    expect(hass.callWS).not.toHaveBeenCalled();
+    expect(text(line().previousElementSibling)).toContain("Refrigerator");
+  });
+
+  it("keeps the event line's place while there's no event, and has none without the entity", async () => {
+    fake.model = model();
+    const EVENT = "event.fridge_appliance_event";
+    const fridge = { ...FRIDGE, entities: { ...FRIDGE.entities, appliance_event: { event: EVENT } } };
+    const card = await mount(fridge, hassFor({ states: { [EVENT]: entity(EVENT, "unknown") } }));
+    expect(shadow(card).querySelector(".event")).not.toBeNull();
+    expect(text(shadow(card).querySelector(".event"))).toBe("");
+    const without = await mount();
+    expect(shadow(without).querySelector(".event")).toBeNull();
+  });
+
+  it("names a range's oven event after its Right and Left ovens, as the full view does", async () => {
+    fake.model = model();
+    const EVENT = "event.range_appliance_event";
+    const range = makeAppliance("range", SPECS.range, {
+      entities: { appliance_event: { event: EVENT }, cav_unit_on: { binary_sensor: "binary_sensor.range_cooking" }, cav2_unit_on: { binary_sensor: "binary_sensor.range_lower_cooking" } },
+    });
+    const at = "2026-10-24T11:30:00.000+00:00";
+    const card = await mount(range, makeHass({ states: { [EVENT]: entity(EVENT, at, { event_type: "lower_oven_preheated" }, at) } }));
+    expect(text(shadow(card).querySelector(".event .what"))).toBe("Left oven · Preheat complete");
   });
 
   it("opens the full view on click, Enter and Space", async () => {

@@ -2,22 +2,25 @@
  * An appliance's full view: the large live drawing with its status and display, then every
  * control the appliance has, its recent events, Refresh, and (for admins) its Appearance.
  * The shell renders <sz-appliance-view .hass .appliance .narrow .isAdmin> for
- * /sub-zero/<device_id>, and passes its clock and helpers too.
+ * /sub-zero/<device_id>, and passes its clock and helpers too. A view is for one appliance: the
+ * shell makes a new one for another, so nothing a view holds (calls in flight, errors, the
+ * controls' unsent values) needs clearing between appliances.
  */
 import { LitElement, css, html, nothing, svg, type PropertyValues } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { applyAction } from "../actions";
 import { DrawingSize } from "../card/drawing-size";
 import { partStyles, renderDisplay, renderPill } from "../card/parts";
-import { attempt, displayIdle, drawingInput, safeDrawing } from "../card/view";
+import { drawingInput, evaluate, safeDrawing } from "../card/view";
 import { icon, icons } from "../controls/base";
 import { renderControl, type ControlBinding } from "../controls/index";
 import { relevantChange } from "../data/appliances";
 import { panelHelpers } from "../data/helpers";
+import { HistoryCache } from "../data/history";
 import { errorMessage, translatorFor } from "../data/locale";
-import { formatDateTime, formatNumber, timeZone } from "../families/common";
-import { eventName, fetchEvents, ovenNames, type ApplianceEvent, type OvenNames } from "../families/events";
-import { familyModel, makeContext, type ContextHelpers } from "../families/index";
+import { controlEntity, formatDateTime, formatNumber, timeZone } from "../families/common";
+import { eventName, eventsFrom, ovenNames, type OvenNames } from "../families/events";
+import type { ContextHelpers } from "../families/index";
 import type { Control, ControlAction, Section } from "../families/types";
 import type { HomeAssistant } from "../hass";
 import type { Translate } from "../i18n";
@@ -25,8 +28,17 @@ import { buttonStyles, syncTheme, tokens, toneStyles } from "../styles";
 import type { PanelAppliance } from "../types";
 import "./appearance-editor";
 
+/** How far back the events list reaches, and how many it shows at most. */
+interface EventSpan {
+  days: number;
+  shown: number;
+}
+
 // The list stays readable; a busy week of door alerts can run long.
-const EVENTS_SHOWN = 50;
+const RECENT: EventSpan = { days: 7, shown: 50 };
+// What "Show 30 days" asks for. Home Assistant has only as many days as its recorder keeps.
+const LONGER: EventSpan = { days: 30, shown: 200 };
+const DAY_MS = 86_400_000;
 
 const CHEVRON = svg`<path d="M7.4 8.6 12 13.2l4.6-4.6L18 10l-6 6-6-6z" />`;
 const REFRESH = svg`<path d="M17.7 6.3A8 8 0 1 0 19.7 14h-2.1A6 6 0 1 1 12 6c1.7 0 3.1.7 4.2 1.8L13 11h7V4l-2.3 2.3Z" />`;
@@ -41,6 +53,12 @@ function without<T>(record: Record<string, T>, key: string): Record<string, T> {
 
 function sameName(a: string, b: string): boolean {
   return a.trim().toLocaleLowerCase() === b.trim().toLocaleLowerCase();
+}
+
+/** What every control of the view is bound with, besides its own state. */
+interface SectionBinding extends Pick<ControlBinding, "now" | "timeZone" | "formatNumber"> {
+  /** The entity whose more-info dialog the control's label opens. */
+  entityOf(control: Control): string | undefined;
 }
 
 /** The Home Assistant action a control applies its value with. */
@@ -61,8 +79,7 @@ export class ApplianceView extends LitElement {
     helpers: { attribute: false },
     pending: { state: true },
     errors: { state: true },
-    events: { state: true },
-    eventsError: { state: true },
+    eventSpan: { state: true },
     refreshing: { state: true },
     refreshError: { state: true },
   };
@@ -75,13 +92,12 @@ export class ApplianceView extends LitElement {
   declare now: number | undefined;
   /** History and preheat helpers; the page's shared ones when not given. */
   declare helpers: ContextHelpers | undefined;
-  /** Calls in flight, by section and control id. */
-  declare pending: Record<string, boolean>;
+  /** How many calls are in flight, by section and control id. */
+  declare pending: Record<string, number>;
   /** Home Assistant's message for the last rejected call, by section and control id. */
   declare errors: Record<string, string>;
-  /** Null while loading. */
-  declare events: ApplianceEvent[] | null;
-  declare eventsError: string | null;
+  /** The week the events list starts with, or the longer span once it's asked for. */
+  declare eventSpan: EventSpan;
   declare refreshing: boolean;
   declare refreshError: string | null;
 
@@ -91,8 +107,11 @@ export class ApplianceView extends LitElement {
   private clock = Date.now();
   private timer: ReturnType<typeof setTimeout> | undefined;
   private stopHelpers: (() => void) | undefined;
-  /** What the events were last fetched for; a new event changes the entity's state. */
-  private eventsFor: string | null = null;
+  // The Appliance event entity's history, on the view's clock; its replies draw the view again.
+  private readonly eventLog = new HistoryCache(
+    () => this.requestUpdate(),
+    () => this.now ?? Date.now(),
+  );
 
   constructor() {
     super();
@@ -100,8 +119,7 @@ export class ApplianceView extends LitElement {
     this.isAdmin = false;
     this.pending = {};
     this.errors = {};
-    this.events = null;
-    this.eventsError = null;
+    this.eventSpan = RECENT;
     this.refreshing = false;
     this.refreshError = null;
   }
@@ -109,21 +127,39 @@ export class ApplianceView extends LitElement {
   override connectedCallback(): void {
     super.connectedCallback();
     this.stopHelpers = panelHelpers.onChange(() => this.requestUpdate());
-    this.tick();
+    this.keepTime();
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    clearTimeout(this.timer);
-    this.timer = undefined;
+    this.keepTime();
     this.stopHelpers?.();
     this.stopHelpers = undefined;
   }
 
-  // Countdowns and the preheat ring move every second, on the panel's clock when it passes one.
+  protected override updated(changed: PropertyValues<this>): void {
+    if (changed.has("now")) this.keepTime();
+  }
+
+  /**
+   * Countdowns and the preheat ring move every second. The panel's clock moves them when it
+   * hands the view its time; only a view on its own keeps a clock running.
+   */
+  private keepTime(): void {
+    const own = this.isConnected && this.now === undefined;
+    if (!own) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+    } else if (this.timer === undefined) {
+      this.clock = Date.now();
+      this.timer = setTimeout(this.tick, 1000 - (this.clock % 1000) + 5);
+    }
+  }
+
+  // On the second, so countdowns change together with the appliances' own clocks.
   private readonly tick = (): void => {
     this.clock = Date.now();
-    if (this.now === undefined) this.requestUpdate();
+    this.requestUpdate();
     this.timer = setTimeout(this.tick, 1000 - (this.clock % 1000) + 5);
   };
 
@@ -136,58 +172,27 @@ export class ApplianceView extends LitElement {
     return true;
   }
 
-  protected override willUpdate(changed: PropertyValues<this>): void {
+  protected override willUpdate(): void {
     syncTheme(this, this.hass);
-    const before = changed.get("appliance") as PanelAppliance | undefined;
-    if (changed.has("appliance") && before?.device_id !== this.appliance?.device_id) {
-      this.pending = {};
-      this.errors = {};
-      this.events = null;
-      this.eventsError = null;
-      this.refreshError = null;
-      this.eventsFor = null;
-    }
     // On its own (without the panel's helpers), the view keeps the shared ones current itself.
     if (!this.helpers && this.hass && this.appliance) panelHelpers.observe(this.hass, [this.appliance]);
-  }
-
-  protected override updated(): void {
-    this.fetchEventsIfNeeded();
-  }
-
-  private fetchEventsIfNeeded(): void {
-    const { hass, appliance } = this;
-    if (!hass || !appliance) return;
-    const entityId = appliance.entities?.appliance_event?.event;
-    if (!entityId) return;
-    const marker = `${appliance.device_id}|${entityId}|${hass.states[entityId]?.state ?? ""}`;
-    if (marker === this.eventsFor) return;
-    this.eventsFor = marker;
-    fetchEvents(hass, entityId, this.now ?? this.clock).then(
-      (events) => {
-        if (this.eventsFor !== marker) return;
-        this.events = events;
-        this.eventsError = null;
-      },
-      (error) => {
-        if (this.eventsFor !== marker) return;
-        this.eventsError = errorMessage(error);
-      },
-    );
   }
 
   private async apply(key: string, control: Control, value: unknown): Promise<void> {
     const hass = this.hass;
     const action = actionFor(control);
     if (!hass || !action) return;
-    this.pending = { ...this.pending, [key]: true };
+    // Counted, not flagged: a second change can go out before the first call returns, and the
+    // control waits until the last of them has.
+    this.pending = { ...this.pending, [key]: (this.pending[key] ?? 0) + 1 };
     this.errors = without(this.errors, key);
     try {
       await applyAction(hass, action, value);
     } catch (error) {
       this.errors = { ...this.errors, [key]: errorMessage(error) || translatorFor(hass)("full.failed") };
     } finally {
-      this.pending = without(this.pending, key);
+      const left = (this.pending[key] ?? 1) - 1;
+      this.pending = left > 0 ? { ...this.pending, [key]: left } : without(this.pending, key);
     }
   }
 
@@ -210,29 +215,21 @@ export class ApplianceView extends LitElement {
     if (!hass || !appliance) return nothing;
     const t = translatorFor(hass);
     const now = this.now ?? this.clock;
-    const model = familyModel(appliance);
-    const ctx = makeContext(appliance, hass, t, now, this.helpers ?? panelHelpers);
-    const what = (part: string) => `${appliance.spec?.family} ${part} for ${appliance.device_id}`;
-    // A model that trips over an appliance's state shows less, never a broken page.
-    const state = attempt(what("drawing state"), () => model.drawingState(ctx), {
-      available: appliance.available,
-      doors: {},
-      readouts: {},
-    });
-    const status = attempt(what("status"), () => model.status(ctx), { text: "", tone: "neutral" as const });
-    const display = appliance.available ? attempt(what("display"), () => model.display(ctx), null) : null;
-    const sections = attempt(what("sections"), () => model.sections(ctx), [] as Section[]);
-    const ovens = attempt(what("oven names"), () => ovenNames(ctx), {} as OvenNames);
-    const binding = {
+    const { state, status, display, dim, ctx, part } = evaluate(appliance, hass, t, now, this.helpers ?? panelHelpers);
+    const sections = part<Section[]>("sections", (model) => model.sections(ctx), []);
+    const ovens = part<OvenNames>("oven names", () => ovenNames(ctx), {});
+    const binding: SectionBinding = {
+      now,
       timeZone: timeZone(hass),
-      formatNumber: (value: number, decimals: number) => formatNumber(hass, value, decimals, decimals),
+      formatNumber: (value, decimals) => formatNumber(hass, value, decimals, decimals),
+      entityOf: (control) => controlEntity(ctx, control),
     };
     return html`<div class="layout">
       <section class="hero" aria-label=${t("full.appliance")}>
         <div class="hero-head">
           <!-- Not a live region: preheat and timer pills change every second. -->
           <div>${renderPill(status)}</div>
-          ${renderDisplay(display, displayIdle(state))}
+          ${renderDisplay(display, dim)}
         </div>
         <div class="stage">
           <div class="drawing">
@@ -261,7 +258,7 @@ export class ApplianceView extends LitElement {
     </details>`;
   }
 
-  private renderSection(section: Section, t: Translate, binding: Pick<ControlBinding, "timeZone" | "formatNumber">) {
+  private renderSection(section: Section, t: Translate, binding: SectionBinding) {
     // A reason that two or more locked controls share (a cycle running, Sabbath, the oven being
     // off) shows once at the top instead of under each of them; a one-off stays with its control.
     // Each control keeps it for screen readers, so the note at the top is only for the eye.
@@ -298,7 +295,10 @@ export class ApplianceView extends LitElement {
               onValue: (event) => void this.apply(key, control, event.detail.value),
               quiet,
               sharedReason: Boolean(control.disabled && control.reason && shared.includes(control.reason)),
-              ...binding,
+              now: binding.now,
+              timeZone: binding.timeZone,
+              formatNumber: binding.formatNumber,
+              entityId: binding.entityOf(control),
             })}
           </div>`;
         },
@@ -308,32 +308,43 @@ export class ApplianceView extends LitElement {
   }
 
   private renderEvents(t: Translate, hass: HomeAssistant, now: number, ovens: OvenNames) {
-    if (!this.appliance?.entities?.appliance_event?.event) return nothing;
+    const entityId = this.appliance?.entities?.appliance_event?.event;
+    if (!entityId) return nothing;
+    // Read once, and again for each new event, which shows before history holds it.
+    const span = this.eventSpan;
+    const { rows, error } = this.eventLog.states(hass, entityId, span.days);
+    const events = rows && eventsFrom(rows, now - span.days * DAY_MS);
     let body: unknown;
-    if (!this.events && this.eventsError) {
-      body = html`<p class="note error" role="alert">${t("full.events_error", { error: this.eventsError })}</p>
-        <button type="button" class="sz-button" @click=${() => this.retryEvents()}>${t("overview.retry")}</button>`;
-    } else if (!this.events) {
+    if (!events && error !== null) {
+      body = html`<p class="note error" role="alert">${t("full.events_error", { error: errorMessage(error) || t("full.failed") })}</p>
+        <button type="button" class="sz-button" @click=${() => this.retryEvents(entityId)}>${t("overview.retry")}</button>`;
+    } else if (!events) {
       body = html`<p class="note">${t("full.events_loading")}</p>`;
-    } else if (!this.events.length) {
-      body = html`<p class="note">${t("full.no_events")}</p>`;
     } else {
-      body = html`<ol class="events">
-        ${this.events.slice(0, EVENTS_SHOWN).map(
-          (event) => html`<li>
-            <span>${eventName(t, event.type, ovens)}</span>
-            <time datetime=${new Date(event.time).toISOString()}>${formatDateTime(hass, event.time, now)}</time>
-          </li>`,
-        )}
-      </ol>`;
+      const list = events.length
+        ? html`<ol class="events">
+            ${events.slice(0, span.shown).map(
+              (event) => html`<li>
+                <span>${eventName(t, event.type, ovens)}</span>
+                <time datetime=${new Date(event.time).toISOString()}>${formatDateTime(hass, event.time, now)}</time>
+              </li>`,
+            )}
+          </ol>`
+        : html`<p class="note">${t("full.no_events", { days: span.days })}</p>`;
+      body = html`${list}
+      ${span === RECENT
+        ? html`<button type="button" class="sz-button more-events" @click=${() => (this.eventSpan = LONGER)}>
+            ${t("full.events_more", { days: LONGER.days })}
+          </button>`
+        : nothing}`;
     }
     return this.card(t("full.recent_events"), body, true);
   }
 
-  // A failed fetch is otherwise tried again only when a new event arrives.
-  private retryEvents(): void {
-    this.eventsFor = null;
-    this.eventsError = null;
+  // A failed fetch is otherwise tried again a minute later, or when a new event arrives.
+  private retryEvents(entityId: string): void {
+    this.eventLog.forgetStates(entityId, this.eventSpan.days);
+    this.requestUpdate();
   }
 
   private renderRefresh(t: Translate) {
@@ -515,6 +526,9 @@ export class ApplianceView extends LitElement {
         color: var(--sz-muted);
         font-variant-numeric: tabular-nums;
         white-space: nowrap;
+      }
+      .more-events {
+        margin-top: 10px;
       }
       .refresh {
         display: flex;

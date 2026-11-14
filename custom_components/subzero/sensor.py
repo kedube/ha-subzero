@@ -139,12 +139,14 @@ DESCRIPTIONS = (
         key="air_filter_pct_remaining",
         name="Air filter remaining",
         native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:air-filter",
     ),
     SensorEntityDescription(
         key="water_filter_pct_remaining",
         name="Water filter remaining",
         native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:water",
     ),
     SensorEntityDescription(
@@ -195,6 +197,7 @@ DESCRIPTIONS = (
             name=name,
             device_class=SensorDeviceClass.TEMPERATURE,
             native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+            state_class=SensorStateClass.MEASUREMENT,
         )
         for key, name in (
             ("ref_display_temp", "Refrigerator display temperature"),
@@ -429,8 +432,12 @@ class SubZeroBroilLevelSensor(SubZeroEntity, SensorEntity):
 
 class SubZeroActiveFaultsSensor(CoordinatorEntity[SubZeroFaultsCoordinator], SensorEntity):
     _attr_has_entity_name = True
-    _attr_name = "Active faults"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    entity_description = SensorEntityDescription(
+        key="active_faults", name="Active faults", translation_key="active_faults"
+    )
+    # Each fault's description and resolution steps are long, and the count is the state.
+    _unrecorded_attributes = frozenset({"faults"})
 
     def __init__(self, appliance: SubZeroCoordinator, coordinator: SubZeroFaultsCoordinator):
         super().__init__(coordinator)

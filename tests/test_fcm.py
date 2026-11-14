@@ -670,3 +670,105 @@ async def test_stopped_firebase_listener_task_is_restarted(cloud_appliance, monk
     await asyncio.wait_for(recreated.wait(), timeout=1)
     await manager.stop()
     assert len(instances) >= 2
+
+
+@oven
+async def test_cleanup_keeps_trying_until_the_subscriptions_are_gone(cloud_appliance, monkeypatch):
+    manager = cloud_appliance.entry.runtime_data.alerts
+    manager._save(fcm_psid="test-psid", fcm_registration_ids={"appliance": "registration-id"})
+    results = iter([ApiError("Could not connect to Sub-Zero."), False, True])
+    calls = []
+
+    async def remove(psid, retain):
+        calls.append((psid, retain))
+        if isinstance(result := next(results), Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr("custom_components.subzero.fcm.RETRY_INTERVAL", 0.01)
+    monkeypatch.setattr(manager, "_remove_subscriptions", remove)
+    await asyncio.wait_for(manager._cleanup_loop(), timeout=1)
+    assert calls == [("test-psid", set())] * 3
+    # The attempt that raised is what diagnostics show.
+    assert manager.last_error == "ApiError"
+
+
+@oven
+async def test_cleanup_without_a_phone_id_has_nothing_to_remove(cloud_appliance):
+    manager = cloud_appliance.entry.runtime_data.alerts
+    assert "fcm_psid" not in manager.entry.data
+    cloud_appliance.client.alert_types = AsyncMock()
+    await asyncio.wait_for(manager._cleanup_loop(), timeout=1)
+    cloud_appliance.client.alert_types.assert_not_awaited()
+
+
+@oven
+async def test_cleanup_runs_in_the_background_and_stops_with_the_entry(cloud_appliance):
+    manager = cloud_appliance.entry.runtime_data.alerts
+    manager._save(fcm_psid="test-psid", fcm_registration_ids={"appliance": "registration-id"})
+    waiting = asyncio.Event()
+
+    async def alert_types(psid, device_id):
+        waiting.set()
+        await asyncio.Event().wait()
+
+    cloud_appliance.client.alert_types = alert_types
+    manager.start_cleanup()
+    await asyncio.wait_for(waiting.wait(), timeout=1)
+    assert not manager._task.done()
+    await manager.stop()
+    assert manager._task.cancelled()
+
+
+@pytest.mark.parametrize(
+    ("properties", "family", "healthy"),
+    [
+        # Refrigeration, wine storage and ice makers share an alert family; dishwashers
+        # and ovens have their own.
+        ({"ref_set_temp": 38}, 1, True),
+        ({"wine_set_temp": 55}, 1, True),
+        ({"appliance_type": "1.21.1.0"}, 1, True),
+        ({"wash_cycle": 2}, 3, True),
+        ({"cav_unit_on": False}, 2, True),
+        # The app has no alerts for a hood, so there is nothing to subscribe to.
+        ({"appliance_type": "1.23.1.0", "fan_on": False}, None, True),
+        # Until an appliance says what it is, its alerts can't be chosen.
+        ({"version": {"fw": "1.0"}}, None, False),
+        ({}, None, False),
+    ],
+)
+@oven
+async def test_subscriptions_follow_the_kind_of_appliance(
+    cloud_appliance, properties, family, healthy
+):
+    manager = cloud_appliance.entry.runtime_data.alerts
+    cloud_appliance.coordinator.data = dict(properties)
+    client = cloud_appliance.client
+    client.alert_registration = AsyncMock(return_value=None)
+    client.register_for_alerts = AsyncMock()
+    client.alert_types = AsyncMock(return_value={999})
+    client.unsubscribe_alerts = AsyncMock()
+    client.subscribe_alerts = AsyncMock()
+    assert await manager._sync("test-psid", "test-token") is healthy
+    if family is None:
+        client.register_for_alerts.assert_not_awaited()
+        client.subscribe_alerts.assert_not_awaited()
+        return
+    codes = client.subscribe_alerts.await_args.args[2]
+    assert codes and all(code // 100 == family for code in codes)
+    # A code the app no longer offers is dropped.
+    client.unsubscribe_alerts.assert_awaited_once_with("test-psid", "appliance", {999})
+
+
+@oven
+async def test_an_appliance_whose_alerts_cannot_be_set_is_tried_again(cloud_appliance, caplog):
+    manager = cloud_appliance.entry.runtime_data.alerts
+    client = cloud_appliance.client
+    client.alert_registration = AsyncMock(return_value=None)
+    client.register_for_alerts = AsyncMock(side_effect=ApiError("HTTP 503", status=503))
+    client.subscribe_alerts = AsyncMock()
+    assert not await manager._sync("test-psid", "test-token")
+    client.subscribe_alerts.assert_not_awaited()
+    assert "Could not subscribe to alerts for Kitchen" in caplog.text
+    # The id made for it is kept, so the next try registers the same one.
+    assert cloud_appliance.entry.data["fcm_registration_ids"]["appliance"]

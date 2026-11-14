@@ -1,4 +1,6 @@
 import { nothing, svg, type SVGTemplateResult } from "lit";
+import { isWood, offlineFilter, parseHex, polyPath, round as n, tint, toHex, type Ids, type Rgb } from "../materials-core";
+import type { OverlayStyle } from "../overlay";
 
 /**
  * Materials shared by the generic and dishwasher drawings: brushed stainless, polished
@@ -6,76 +8,19 @@ import { nothing, svg, type SVGTemplateResult } from "lit";
  * reference so a drawing stays a handful of gradients and filters.
  */
 
-/**
- * One drawing's definition ids. Each starts with the drawing's uid, since several drawings
- * share one shadow root and a duplicate id would resolve to another drawing's definition.
- */
-export class Defs {
-  private readonly prefix: string;
-
-  constructor(uid: string) {
-    // The ids end up inside url(#…), where spaces or quotes would break the reference.
-    this.prefix = uid.replace(/[^\w-]/g, "_");
-  }
-
-  id(name: string): string {
-    return `${this.prefix}-${name}`;
-  }
-
-  url(name: string): string {
-    return `url(#${this.prefix}-${name})`;
-  }
-}
-
 // ---------------------------------------------------------------------------------------------
 // Color helpers
 
-type Rgb = [number, number, number];
-
+/** A panel color as the Appearance setting gives it: "#rrggbb" or "#rgb", with or without the #. */
 export function parseColor(hex: string | null | undefined, fallback = "#e9e6df"): Rgb {
   const match = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec((hex ?? "").trim());
   const value = match ? match[1] : fallback.slice(1);
   const full = value.length === 3 ? [...value].map((c) => c + c).join("") : value;
-  return [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16)) as Rgb;
-}
-
-export function toHex([r, g, b]: Rgb): string {
-  const part = (v: number) =>
-    Math.round(Math.min(255, Math.max(0, v)))
-      .toString(16)
-      .padStart(2, "0");
-  return `#${part(r)}${part(g)}${part(b)}`;
-}
-
-/** Mixes toward white (amount > 0) or black (amount < 0). */
-export function shade(color: Rgb, amount: number): string {
-  const target = amount > 0 ? 255 : 0;
-  const t = Math.abs(amount);
-  return toHex(color.map((v) => v + (target - v) * t) as Rgb);
-}
-
-/**
- * Whether a panel color reads as stained wood (walnut, oak): a muted orange-brown. Wood gets
- * a faint grain; paint stays flat.
- */
-export function isWoodTone([r, g, b]: Rgb): boolean {
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  if (max === min) return false;
-  const l = (max + min) / 510;
-  const s = (max - min) / 255 / (1 - Math.abs(2 * l - 1));
-  let h = 0;
-  if (max === r) h = ((g - b) / (max - min)) % 6;
-  else if (max === g) h = (b - r) / (max - min) + 2;
-  else h = (r - g) / (max - min) + 4;
-  h = (h * 60 + 360) % 360;
-  return h >= 15 && h <= 45 && s >= 0.2 && s <= 0.75 && l >= 0.12 && l <= 0.62;
+  return parseHex(`#${full}`);
 }
 
 // ---------------------------------------------------------------------------------------------
 // Geometry helpers
-
-const n = (value: number) => Math.round(value * 100) / 100;
 
 /** A rectangle (optionally rounded) as path data, so every face can be one <path>. */
 export function rectPath(x: number, y: number, w: number, h: number, r = 0): string {
@@ -88,15 +33,17 @@ export function rectPath(x: number, y: number, w: number, h: number, r = 0): str
   );
 }
 
-export function polyPath(points: Array<[number, number]>): string {
-  return `M${points.map(([x, y]) => `${n(x)} ${n(y)}`).join("L")}Z`;
-}
-
 // ---------------------------------------------------------------------------------------------
 // Definitions
 
+/**
+ * How these drawings look while the appliance can't be reached. The filter's region is a little
+ * larger than the drawing's box.
+ */
+const OFFLINE = { saturation: 0.06, slope: 0.6, lift: 0.22, margin: 5 };
+
 /** The shared gradients and filters every drawing using these materials needs, once. */
-export function materialDefs(d: Defs): SVGTemplateResult {
+export function materialDefs(d: Ids): SVGTemplateResult {
   return svg`
     <linearGradient id=${d.id("ss")} x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#b4b3b1" />
@@ -201,14 +148,7 @@ export function materialDefs(d: Defs): SVGTemplateResult {
     <filter id=${d.id("blur-m")} x="-30%" y="-80%" width="160%" height="260%">
       <feGaussianBlur stdDeviation="3.2" />
     </filter>
-    <filter id=${d.id("offline")} x="-5%" y="-5%" width="110%" height="110%" color-interpolation-filters="sRGB">
-      <feColorMatrix type="saturate" values="0.06" />
-      <feComponentTransfer>
-        <feFuncR type="linear" slope="0.6" intercept="0.22" />
-        <feFuncG type="linear" slope="0.6" intercept="0.22" />
-        <feFuncB type="linear" slope="0.6" intercept="0.22" />
-      </feComponentTransfer>
-    </filter>
+    ${offlineFilter(d.id("offline"), OFFLINE)}
   `;
 }
 
@@ -230,20 +170,20 @@ function grainFilter(id: string, frequency: string): SVGTemplateResult {
  * across the set; paint is drawn as it is.
  */
 export function panelTone(color: Rgb): Rgb {
-  if (!isWoodTone(color)) return color;
+  if (!isWood(color)) return color;
   const gray = 0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2];
   return color.map((v) => v + (gray - v) * 0.3) as Rgb;
 }
 
 /** Gradients for one painted panel color: flat paint with a soft sheen, optional wood grain. */
-export function paintDefs(d: Defs, name: string, color: Rgb): SVGTemplateResult {
-  const wood = isWoodTone(color);
+export function paintDefs(d: Ids, name: string, color: Rgb): SVGTemplateResult {
+  const wood = isWood(color);
   const base = panelTone(color);
   return svg`
     <linearGradient id=${d.id(`${name}-base`)} x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color=${shade(base, 0.05)} />
+      <stop offset="0" stop-color=${tint(base, 0.05)} />
       <stop offset="0.55" stop-color=${toHex(base)} />
-      <stop offset="1" stop-color=${shade(base, -0.07)} />
+      <stop offset="1" stop-color=${tint(base, -0.07)} />
     </linearGradient>
     <linearGradient id=${d.id(`${name}-sheen`)} x1="0" y1="0" x2="1" y2="0.9">
       <stop offset="0" stop-color="#ffffff" stop-opacity="0.09" />
@@ -283,7 +223,7 @@ export interface FaceOptions {
 }
 
 /** Brushed stainless: base tone, light falloff, a faint environment band and the grain. */
-export function stainless(d: Defs, path: string, options: FaceOptions = {}): SVGTemplateResult {
+export function stainless(d: Ids, path: string, options: FaceOptions = {}): SVGTemplateResult {
   const grain = options.grain ?? 0.1;
   const filter = d.url(options.brush === "h" ? "grain-h" : "grain");
   return svg`
@@ -300,7 +240,7 @@ export function stainless(d: Defs, path: string, options: FaceOptions = {}): SVG
 
 /** A painted (or stained) panel face from `paintDefs`. */
 export function painted(
-  d: Defs,
+  d: Ids,
   name: string,
   path: string,
   color: Rgb,
@@ -308,7 +248,7 @@ export function painted(
 ): SVGTemplateResult {
   return svg`
     <path d=${path} fill=${d.url(`${name}-base`)} />
-    ${isWoodTone(color)
+    ${isWood(color)
       ? svg`<path d=${path} fill="#000" filter=${d.url(`${name}-wood`)} opacity="0.22" />`
       : nothing}
     <path d=${path} fill=${d.url(`${name}-sheen`)} />
@@ -317,7 +257,7 @@ export function painted(
 }
 
 /** Black glass with a restrained reflection. */
-export function blackGlass(d: Defs, path: string): SVGTemplateResult {
+export function blackGlass(d: Ids, path: string): SVGTemplateResult {
   return svg`
     <path d=${path} fill=${d.url("glass")} />
     <path d=${path} fill=${d.url("glass-env")} />
@@ -373,7 +313,7 @@ function sidedRect(x: number, y: number, w: number, h: number, left: number, rig
  * away from the light and a dark seam where the bar enters. The tubular rod mounts at its ends.
  */
 export function barHandle(
-  d: Defs,
+  d: Ids,
   x1: number,
   x2: number,
   cy: number,
@@ -441,7 +381,7 @@ export function barHandle(
 }
 
 /** A vertical tubular handle from y1 to y2 at x, standing off a door seen from the front. */
-export function vBarHandle(d: Defs, x: number, y1: number, y2: number, dia = 8): SVGTemplateResult {
+export function vBarHandle(d: Ids, x: number, y1: number, y2: number, dia = 8): SVGTemplateResult {
   const r = dia / 2;
   return svg`
     <rect x=${x - r + 2.5} y=${y1 + 3} width=${dia} height=${y2 - y1} rx=${r} fill="#000" opacity="0.16"
@@ -454,9 +394,14 @@ export function vBarHandle(d: Defs, x: number, y1: number, y2: number, dia = 8):
   `;
 }
 
+/** How these drawings' frosted labels and chips are drawn: on the small soft blur. */
+export function pills(d: Ids): OverlayStyle {
+  return { shadow: d.url("blur-s") };
+}
+
 /** The contact shadow under an appliance standing on the floor at y. */
 export function floorShadow(
-  d: Defs,
+  d: Ids,
   x: number,
   w: number,
   y: number,
@@ -473,7 +418,7 @@ export function floorShadow(
 }
 
 /** A louvered toe-kick grille: dark recess with horizontal slats catching light on top. */
-export function kickGrille(d: Defs, x: number, y: number, w: number, h: number): SVGTemplateResult {
+export function kickGrille(d: Ids, x: number, y: number, w: number, h: number): SVGTemplateResult {
   const slats: string[] = [];
   for (let sy = y + 3; sy < y + h - 2; sy += 3.4) slats.push(`M${n(x + 3)} ${n(sy)}H${n(x + w - 3)}`);
   return svg`

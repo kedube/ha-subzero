@@ -70,6 +70,15 @@ interface ControlBase {
   hint?: string | null;
 }
 
+/** For a value that's only read, which has no action to name its entity. */
+interface Shown {
+  /**
+   * The entity the value comes from, when the control's id isn't that entity's property key.
+   * Its label opens the entity's more-info dialog (see controlEntity in common.ts).
+   */
+  entity_id?: string;
+}
+
 export type Control =
   | (ControlBase & {
       kind: "setpoint";
@@ -88,7 +97,16 @@ export type Control =
       /** `value` is what the entity takes; `label` is translated. */
       options: Array<{ value: string; label: string }>;
     })
-  | (ControlBase & { kind: "toggle"; action: ControlAction; value: boolean | null })
+  | (ControlBase & {
+      kind: "toggle";
+      action: ControlAction;
+      value: boolean | null;
+      /**
+       * Asked in the inline confirmation bar before turning off, with the text of the button that
+       * does it. Turning on, and a toggle without one, act at once.
+       */
+      confirmOff?: { text: string; button: string };
+    })
   | (ControlBase & {
       kind: "action";
       action: ControlAction;
@@ -106,6 +124,11 @@ export type Control =
       min: number;
       max: number;
       presets: number[];
+      /**
+       * The value counts down: it's the minutes left on a running timer, not the duration it was
+       * set to. Choosing the number it happens to read sets the timer to that again.
+       */
+      remaining?: boolean;
     })
   | (ControlBase & { kind: "fan"; action: ControlAction; value: number; speeds: number })
   | (ControlBase & {
@@ -119,9 +142,12 @@ export type Control =
       max_kelvin: number;
     })
   /** A read-only value, already formatted. */
-  | (ControlBase & { kind: "reading"; value: string; tone?: "normal" | "warning" | "alert" })
-  /** A read-only time left until an ISO timestamp, ticking. */
-  | (ControlBase & { kind: "countdown"; end: string | null })
+  | (ControlBase & Shown & { kind: "reading"; value: string; tone?: "normal" | "warning" | "alert" })
+  /**
+   * A read-only time left until an ISO timestamp, ticking. `hours` always shows the hours
+   * ("0:42:17"), for a time that a display beside it counts in hours and minutes.
+   */
+  | (ControlBase & Shown & { kind: "countdown"; end: string | null; hours?: boolean })
   /** The ice delay form, calling subzero.schedule_ice_delay. */
   | (ControlBase & { kind: "ice_delay"; device_id: string });
 

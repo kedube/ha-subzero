@@ -1,4 +1,5 @@
-import type { HomeAssistant } from "../hass";
+import { readRows, toMs } from "../data/history";
+import type { HassEntity } from "../hass";
 import type { Translate } from "../i18n";
 import { cavities, cavityName } from "./oven";
 import type { ApplianceContext } from "./types";
@@ -17,45 +18,19 @@ export type OvenNames = Partial<Record<"cav" | "cav2", string>>;
 const CAVITY_EVENT =
   /^(lower_)?oven_(cooking_timer_complete|cooking_timer_under_one_minute|door_ajar|preheated|probe_connected|probe_target_reached|probe_within_ten_degrees|self_clean_complete)$/;
 
-const DAY_MS = 86_400_000;
-
-type Row = {
-  s?: unknown;
-  a?: unknown;
-  lu?: unknown;
-  lc?: unknown;
-  state?: unknown;
-  attributes?: unknown;
-  last_changed?: unknown;
-};
-
-function toMs(value: unknown): number | null {
-  // Compressed history rows give seconds; full rows give ISO strings.
-  if (typeof value === "number" && Number.isFinite(value)) return value < 1e11 ? value * 1000 : value;
-  if (typeof value === "string" && value) {
-    const ms = Date.parse(value);
-    return Number.isNaN(ms) ? null : ms;
-  }
-  return null;
-}
-
 /**
  * Events from the Appliance event entity's history rows, newest first. Each row's state is when
  * Home Assistant fired the event; the appliance's own timestamp, when it sent one, is when it
  * happened, which matters for events read late from the appliance's history.
  */
 export function eventsFrom(rows: unknown, since: number): ApplianceEvent[] {
-  if (!Array.isArray(rows)) return [];
   const seen = new Set<string>();
   const events: ApplianceEvent[] = [];
-  for (const row of rows as Row[]) {
-    if (!row || typeof row !== "object") continue;
-    const state = row.s ?? row.state;
-    if (typeof state !== "string" || state === "unavailable" || state === "unknown") continue;
-    const attributes = (row.a ?? row.attributes ?? {}) as Record<string, unknown>;
+  for (const { state, attributes, at } of readRows(rows)) {
+    if (state === "unavailable" || state === "unknown") continue;
     const type = attributes.event_type;
     if (typeof type !== "string" || !type) continue;
-    const time = toMs(attributes.appliance_timestamp) ?? toMs(state) ?? toMs(row.lc ?? row.lu ?? row.last_changed);
+    const time = toMs(attributes.appliance_timestamp) ?? toMs(state) ?? at;
     if (time === null || time < since) continue;
     const key = `${time}|${type}`;
     if (seen.has(key)) continue;
@@ -65,19 +40,11 @@ export function eventsFrom(rows: unknown, since: number): ApplianceEvent[] {
   return events.sort((a, b) => b.time - a.time);
 }
 
-/** The last `days` of events from Home Assistant's history, newest first. */
-export async function fetchEvents(hass: HomeAssistant, entityId: string, now: number, days = 7): Promise<ApplianceEvent[]> {
-  const since = now - days * DAY_MS;
-  const reply = await hass.callWS<Record<string, unknown> | null>({
-    type: "history/history_during_period",
-    start_time: new Date(since).toISOString(),
-    entity_ids: [entityId],
-    include_start_time_state: false,
-    significant_changes_only: false,
-    minimal_response: false,
-    no_attributes: false,
-  });
-  return eventsFrom(reply?.[entityId], since);
+/** The event the Appliance event entity shows now, read as its history row would be; null when it has none. */
+export function liveEvent(entity: HassEntity | undefined): ApplianceEvent | null {
+  if (!entity) return null;
+  const row = { state: entity.state, attributes: entity.attributes, last_changed: entity.last_changed };
+  return eventsFrom([row], Number.NEGATIVE_INFINITY)[0] ?? null;
 }
 
 /**

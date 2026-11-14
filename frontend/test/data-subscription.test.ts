@@ -20,6 +20,8 @@ describe("PanelSubscription", () => {
     subscription.connect(connection as unknown as HassConnection);
     expect(connection.subscribeMessage).toHaveBeenCalledOnce();
     expect(connection.subscribeMessage.mock.calls[0][1]).toEqual({ type: "subzero/panel/subscribe" });
+    // It subscribes again itself after a reconnect, so the library mustn't too.
+    expect(connection.subscribeMessage.mock.calls[0][2]).toEqual({ resubscribe: false });
     await flush();
     connection.send(MESSAGE);
     expect(onMessage).toHaveBeenCalledWith(MESSAGE);
@@ -68,14 +70,93 @@ describe("PanelSubscription", () => {
 
   it("reports a subscribe call that throws", async () => {
     const { onError, subscription } = setup();
-    const connection = {
-      subscribeMessage: () => {
-        throw new Error("closed");
-      },
-    } as unknown as HassConnection;
-    subscription.connect(connection);
+    const connection = makeConnection();
+    connection.subscribeMessage.mockImplementationOnce(() => {
+      throw new Error("closed");
+    });
+    subscription.connect(connection as unknown as HassConnection);
     await flush();
     expect(onError).toHaveBeenCalledWith(new Error("closed"));
+  });
+
+  it("subscribes again when the socket reconnects, leaving the lost socket's subscription alone", async () => {
+    const { onMessage, subscription } = setup();
+    const connection = makeConnection();
+    subscription.connect(connection as unknown as HassConnection);
+    await flush();
+    connection.fire("disconnected");
+    connection.fire("ready");
+    await flush();
+    expect(connection.subscribeMessage).toHaveBeenCalledTimes(2);
+    // The old unsubscribe names a command of the old socket, which the new one may have given away.
+    expect(connection.unsubscribe).not.toHaveBeenCalled();
+    connection.send(MESSAGE, 0);
+    expect(onMessage).not.toHaveBeenCalled();
+    connection.send(MESSAGE);
+    expect(onMessage).toHaveBeenCalledOnce();
+    subscription.disconnect();
+    await flush();
+    expect(connection.unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it("reports a subscription the server rejects after a reconnect", async () => {
+    // The integration is still loading after a restart, say.
+    const { onError, subscription } = setup();
+    const connection = makeConnection();
+    subscription.connect(connection as unknown as HassConnection);
+    await flush();
+    connection.subscribeMessage.mockRejectedValueOnce({ code: "unknown_command", message: "Unknown command." });
+    connection.fire("disconnected");
+    connection.fire("ready");
+    await flush();
+    expect(onError).toHaveBeenCalledWith({ code: "unknown_command", message: "Unknown command." });
+  });
+
+  it("subscribes once the socket is back when it was down at first", async () => {
+    // The library leaves a subscription made while the socket is closed unsettled.
+    const { onError, onMessage, subscription } = setup();
+    const connection = makeConnection();
+    connection.subscribeMessage.mockReturnValueOnce(new Promise(() => {}));
+    subscription.connect(connection as unknown as HassConnection);
+    await flush();
+    connection.fire("ready");
+    await flush();
+    expect(connection.subscribeMessage).toHaveBeenCalledTimes(2);
+    connection.send(MESSAGE);
+    expect(onMessage).toHaveBeenCalledOnce();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("ends a subscription that's answered only after it has subscribed again", async () => {
+    // One the library held back until the socket was ready goes out next to the new one.
+    const { onMessage, subscription } = setup();
+    const connection = makeConnection();
+    let answer!: (unsubscribe: () => Promise<void>) => void;
+    const held = vi.fn(async () => {});
+    connection.subscribeMessage.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    subscription.connect(connection as unknown as HassConnection);
+    connection.fire("ready");
+    await flush();
+    answer(held);
+    await flush();
+    expect(held).toHaveBeenCalledOnce();
+    expect(connection.unsubscribe).not.toHaveBeenCalled();
+    connection.send(MESSAGE);
+    expect(onMessage).toHaveBeenCalledOnce();
+  });
+
+  it("doesn't unsubscribe while the socket is down, and stops listening once it has left", async () => {
+    const { subscription } = setup();
+    const connection = makeConnection();
+    subscription.connect(connection as unknown as HassConnection);
+    await flush();
+    connection.fire("disconnected");
+    subscription.disconnect();
+    await flush();
+    expect(connection.unsubscribe).not.toHaveBeenCalled();
+    connection.fire("ready");
+    await flush();
+    expect(connection.subscribeMessage).toHaveBeenCalledOnce();
   });
 
   it("swallows a rejected unsubscribe from a closed socket", async () => {

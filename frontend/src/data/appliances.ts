@@ -11,6 +11,20 @@ export function applianceName(
   return device?.name_by_user || device?.name || appliance.name;
 }
 
+/**
+ * The appliances with one entry per Home Assistant device, the first of each. An appliance on two
+ * accounts is one device that the integration lists once per account, and the panel's lists and
+ * routes go by device.
+ */
+export function uniqueDevices(appliances: readonly PanelAppliance[]): PanelAppliance[] {
+  const seen = new Set<string>();
+  return appliances.filter((appliance) => {
+    if (seen.has(appliance.device_id)) return false;
+    seen.add(appliance.device_id);
+    return true;
+  });
+}
+
 const WINE_AND_BEVERAGE = new Set<RefrigerationForm>([
   "column_wine",
   "wine_over_drawers",

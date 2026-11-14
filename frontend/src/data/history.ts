@@ -18,34 +18,57 @@ const VALUES_KEPT = 64;
 const RETRY_MS = 60_000;
 // A dropped connection doesn't end what the appliance was doing.
 const GAPS = new Set(["unavailable", "unknown"]);
+const DAY_MS = 86_400_000;
 
 type Row = {
   s?: unknown;
+  a?: unknown;
   lu?: unknown;
   lc?: unknown;
   state?: unknown;
+  attributes?: unknown;
   last_changed?: unknown;
   last_updated?: unknown;
 };
 
+/** One state from Home Assistant's history as it was sent, with its attributes when they were asked for. */
+export interface StateRow {
+  state: string;
+  attributes: Record<string, unknown>;
+  /** When it changed, in ms since the epoch; null when the row doesn't say. */
+  at: number | null;
+}
+
 /**
  * The rows `history/history_during_period` sends for one entity, oldest first: compressed rows
- * (`{s, lu, lc}` in seconds, what the websocket API sends) or full ones (`{state, last_changed,
- * last_updated}` as ISO strings). A row's change time is `lc`, or `lu` where they're equal.
+ * (`{s, a, lu, lc}` in seconds, what the websocket API sends) or full ones (`{state, attributes,
+ * last_changed, last_updated}` as ISO strings). A row's change time is `lc`, or `lu` where
+ * they're equal.
  */
-export function parseRows(rows: unknown): Change[] {
+export function readRows(rows: unknown): StateRow[] {
   if (!Array.isArray(rows)) return [];
-  const changes: Change[] = [];
+  const read: StateRow[] = [];
   for (const row of rows as Row[]) {
     if (!row || typeof row !== "object") continue;
     const state = row.s ?? row.state;
-    const at = toMs(row.lc ?? row.lu ?? row.last_changed ?? row.last_updated);
-    if (typeof state === "string" && at !== null) changes.push({ state, at });
+    if (typeof state !== "string") continue;
+    const attributes = row.a ?? row.attributes;
+    read.push({
+      state,
+      attributes: attributes && typeof attributes === "object" ? (attributes as Record<string, unknown>) : {},
+      at: toMs(row.lc ?? row.lu ?? row.last_changed ?? row.last_updated),
+    });
   }
-  return changes;
+  return read;
 }
 
-function toMs(value: unknown): number | null {
+/** The rows' state changes: those that say when. */
+export function parseRows(rows: unknown): Change[] {
+  return readRows(rows).flatMap(({ state, at }) => (at === null ? [] : [{ state, at }]));
+}
+
+/** A time from Home Assistant in ms: seconds as history rows carry them, or an ISO string. */
+export function toMs(value: unknown): number | null {
   // Home Assistant sends seconds; a value this large can only already be milliseconds.
   if (typeof value === "number" && Number.isFinite(value)) return value < 1e11 ? value * 1000 : value;
   if (typeof value === "string") {
@@ -53,6 +76,25 @@ function toMs(value: unknown): number | null {
     return Number.isNaN(ms) ? null : ms;
   }
   return null;
+}
+
+/**
+ * Asks Home Assistant for one entity's history from `start` (ms), and returns its rows as sent.
+ * `end` closes the window, and `full` asks for every state with its attributes instead of the
+ * compact form.
+ */
+async function fetchRows(hass: HomeAssistant, entityId: string, start: number, options: { end?: number; full?: boolean } = {}): Promise<unknown> {
+  const reply = await hass.callWS<Record<string, unknown> | null>({
+    type: "history/history_during_period",
+    start_time: new Date(start).toISOString(),
+    // A window's own changes only: the state before it can be long stale.
+    ...(options.end === undefined ? {} : { end_time: new Date(options.end).toISOString(), include_start_time_state: false }),
+    entity_ids: [entityId],
+    ...(options.full
+      ? { include_start_time_state: false, significant_changes_only: false, minimal_response: false, no_attributes: false }
+      : { minimal_response: true, no_attributes: true }),
+  });
+  return reply?.[entityId];
 }
 
 function isGap(state: string, target: string): boolean {
@@ -112,6 +154,35 @@ interface Value {
   final: boolean;
 }
 
+/** What `states` answers: the rows so far, and why the last fetch failed, if it did. */
+export interface StateHistory {
+  /** History rows for `readRows`, oldest first; null until the first reply. */
+  rows: unknown[] | null;
+  /** What the last fetch was rejected with; null when it wasn't. */
+  error: unknown;
+}
+
+/** A live state as the full history row it will be. */
+interface LiveRow {
+  state: string;
+  attributes: Record<string, unknown>;
+  last_changed: string;
+}
+
+interface StateLog {
+  /** The entity's state and `last_updated` when this was fetched; a newer one means fetch again. */
+  marker: string;
+  /** The answer: the last reply's rows as sent, then `live`. Null until a reply. */
+  rows: unknown[] | null;
+  /** Every state among `rows`. */
+  held: Set<string>;
+  /** Live states seen that the last reply didn't hold, oldest first. */
+  live: LiveRow[];
+  error: unknown;
+  /** When to fetch again after a failure; null while a fetch is under way or done. */
+  retryAt: number | null;
+}
+
 /**
  * Reads Home Assistant's history for the family models, synchronously: a lookup returns null
  * until the reply arrives, then `onChange` asks the panel to draw again. Each entity is fetched
@@ -120,6 +191,7 @@ interface Value {
 export class HistoryCache {
   private readonly histories = new Map<string, EntityHistory>();
   private readonly values = new Map<string, Value>();
+  private readonly logs = new Map<string, StateLog>();
 
   constructor(
     private readonly onChange: () => void = () => {},
@@ -218,16 +290,66 @@ export class HistoryCache {
     return fresh;
   }
 
+  /**
+   * Every state `entityId` had in the last `days` days, with its attributes: history rows as
+   * `readRows` reads them, oldest first. For an entity whose every state is a new one, as an
+   * event entity's are (each is the time the event fired). `rows` is null until the history
+   * arrives, and `error` is why the last fetch failed, if it did.
+   *
+   * Each new state fetches again, and so does a minute passing after a failure. Meanwhile the
+   * rows from before stand, and a live state the history doesn't hold follows them: the recorder
+   * writes a few seconds behind, so a reply asked for as a state arrives ends just before it.
+   */
+  states(hass: HomeAssistant | undefined, entityId: string | undefined, days: number): StateHistory {
+    if (!hass || !entityId) return { rows: null, error: null };
+    const current = hass.states[entityId];
+    const key = `${entityId}|${days}`;
+    const marker = `${current?.state ?? ""}|${current?.last_updated ?? ""}`;
+    let known = this.logs.get(key);
+    const retry = known !== undefined && known.retryAt !== null && this.now() >= known.retryAt;
+    if (!known || known.marker !== marker || retry) {
+      // While it asks again, the last answer stands.
+      const fresh: StateLog = known
+        ? { ...known, held: new Set(known.held), marker, error: retry ? known.error : null, retryAt: null }
+        : { marker, rows: null, held: new Set(), live: [], error: null, retryAt: null };
+      this.logs.set(key, fresh);
+      fetchRows(hass, entityId, this.now() - days * DAY_MS, { full: true }).then(
+        (reply) => {
+          if (this.logs.get(key) !== fresh) return;
+          const sent: unknown[] = Array.isArray(reply) ? reply : [];
+          const recorded = new Set(readRows(sent).map((row) => row.state));
+          // What was seen live stays until history holds it.
+          fresh.live = fresh.live.filter((row) => !recorded.has(row.state));
+          fresh.rows = [...sent, ...fresh.live];
+          fresh.held = new Set([...recorded, ...fresh.live.map((row) => row.state)]);
+          fresh.error = null;
+          this.onChange();
+        },
+        (error: unknown) => {
+          if (this.logs.get(key) !== fresh) return;
+          // Never null, which would read as no failure.
+          fresh.error = error ?? "";
+          fresh.retryAt = this.now() + RETRY_MS;
+          this.onChange();
+        },
+      );
+      known = fresh;
+    }
+    if (current && known.rows && !known.held.has(current.state)) {
+      const row: LiveRow = { state: current.state, attributes: current.attributes, last_changed: current.last_changed };
+      known.live = [...known.live, row];
+      known.rows = [...known.rows, row];
+      known.held.add(row.state);
+    }
+    return { rows: known.rows, error: known.error };
+  }
+
+  /** Forgets what `states` knows, so the next lookup fetches at once: for a Retry button. */
+  forgetStates(entityId: string, days: number): void {
+    this.logs.delete(`${entityId}|${days}`);
+  }
+
   private async fetch(hass: HomeAssistant, entityId: string, start: number, end?: number): Promise<Change[]> {
-    const reply = await hass.callWS<Record<string, unknown> | null>({
-      type: "history/history_during_period",
-      start_time: new Date(start).toISOString(),
-      // A window's own changes only: the state before it can be long stale.
-      ...(end === undefined ? {} : { end_time: new Date(end).toISOString(), include_start_time_state: false }),
-      entity_ids: [entityId],
-      minimal_response: true,
-      no_attributes: true,
-    });
-    return parseRows(reply?.[entityId]);
+    return parseRows(await fetchRows(hass, entityId, start, { end }));
   }
 }

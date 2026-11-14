@@ -1,7 +1,9 @@
 import { nothing, svg, type SVGTemplateResult } from "lit";
+import { polyPath, round, type Ids } from "../materials-core";
+import { isSelfCleaning, ovenHeat, type HeatScale } from "../oven-state";
 import type { OvenState } from "../types";
 import { depthScale, project, type DoorSlot, type RangeLayout } from "./layout";
-import { fade, gray, stainlessAt, type Ids } from "./materials";
+import { fade, gray, stainlessAt } from "./materials";
 
 /*
  * Oven doors. Wolf's doors have windows: the light shows the cavity's dark porcelain and its
@@ -9,9 +11,6 @@ import { fade, gray, stainlessAt, type Ids } from "./materials";
  * falling on the racks. The cavity is drawn in the same perspective as the rangetop, so a
  * dropped-open door reveals it consistently.
  */
-
-const round = (value: number) => Math.round(value * 100) / 100;
-const clamp = (value: number) => Math.min(1, Math.max(0, value));
 
 /** How far an open door is drawn dropped down: open a little, the cavity visible above it. */
 const OPEN_ANGLE = (45 * Math.PI) / 180;
@@ -35,25 +34,26 @@ interface Glow {
   clean: boolean;
 }
 
+/**
+ * The cavity's glow and the broil element's: brighter as the oven nears the setpoint. Once
+ * there the element cycles, so it settles a little. Self-clean runs far hotter than cooking.
+ */
+const GLOW: HeatScale = { clean: 1, preheated: 0.7, start: 0.25, span: 0.45, unknown: 0.5 };
+const ELEMENT: HeatScale = { clean: 1, preheated: 0.6, start: 0.25, span: 0.45, unknown: 0.55 };
+
 export function ovenGlow(state: OvenState | null): Glow {
-  if (!state) return { lit: 0, heat: 0, element: 0, probe: false, clean: false };
-  // Self-clean turns the oven lights off and runs far hotter than cooking.
-  if (state.self_clean) return { lit: 0, heat: 1, element: 1, probe: false, clean: true };
-  const lit = state.light || state.door_open ? 1 : 0;
-  let heat = 0;
-  let element = 0;
-  if (state.on) {
-    // Brighter as it nears the setpoint. Once there the element cycles, so it settles a little.
-    if (state.preheated) [heat, element] = [0.7, 0.6];
-    else if (state.progress !== null) heat = element = 0.25 + 0.45 * clamp(state.progress);
-    else [heat, element] = [0.5, 0.55];
-  }
-  return { lit, heat, element, probe: state.probe, clean: false };
+  const clean = isSelfCleaning(state);
+  return {
+    // Self-clean turns the oven lights off.
+    lit: state && !clean && (state.light || state.door_open) ? 1 : 0,
+    heat: ovenHeat(state, GLOW),
+    element: ovenHeat(state, ELEMENT),
+    probe: !!state && !clean && state.probe,
+    clean,
+  };
 }
 
 type Point = [number, number];
-
-const pathOf = (points: Point[]) => `M${points.map(([x, y]) => `${round(x)} ${round(y)}`).join("L")}Z`;
 
 interface Cavity {
   x0: number;
@@ -93,7 +93,7 @@ function interior(
     const [bx, by] = P(x1, h1, d1);
     return `M${round(ax)} ${round(ay)}L${round(bx)} ${round(by)}`;
   };
-  const quad = (a: Point, b: Point, d: Point, e: Point) => pathOf([a, b, d, e]);
+  const quad = (a: Point, b: Point, d: Point, e: Point) => polyPath([a, b, d, e]);
   const back = quad(P(c.x0, c.floor, c.back), P(c.x1, c.floor, c.back), P(c.x1, c.ceiling, c.back), P(c.x0, c.ceiling, c.back));
   const floor = quad(P(c.x0, c.floor, c.front), P(c.x1, c.floor, c.front), P(c.x1, c.floor, c.back), P(c.x0, c.floor, c.back));
   const ceiling = quad(P(c.x0, c.ceiling, c.front), P(c.x1, c.ceiling, c.front), P(c.x1, c.ceiling, c.back), P(c.x0, c.ceiling, c.back));
@@ -552,7 +552,7 @@ export function openDoor(
 
   // The door itself, by its local features.
   const corners = (u0: number, v0: number, u1: number, v1: number, off = 0) =>
-    pathOf([D(u0, v0, off), D(u1, v0, off), D(u1, v1, off), D(u0, v1, off)]);
+    polyPath([D(u0, v0, off), D(u1, v0, off), D(u1, v1, off), D(u0, v1, off)]);
   const face = corners(x0, 0, x1, height);
   const box = windowBox(layout, x0, x1, 0);
   // windowBox measures down from the top; convert to heights up from the hinge.
@@ -561,12 +561,12 @@ export function openDoor(
   const framePaths = layout.transitional
     ? []
     : [
-        pathOf([D(box.fx0, v(box.fy0)), D(box.fx1, v(box.fy0)), D(box.gx1, v(box.gy0)), D(box.gx0, v(box.gy0))]),
-        pathOf([D(box.fx0, v(box.fy1)), D(box.fx1, v(box.fy1)), D(box.gx1, v(box.gy1)), D(box.gx0, v(box.gy1))]),
-        pathOf([D(box.fx0, v(box.fy0)), D(box.gx0, v(box.gy0)), D(box.gx0, v(box.gy1)), D(box.fx0, v(box.fy1))]),
-        pathOf([D(box.fx1, v(box.fy0)), D(box.gx1, v(box.gy0)), D(box.gx1, v(box.gy1)), D(box.fx1, v(box.fy1))]),
+        polyPath([D(box.fx0, v(box.fy0)), D(box.fx1, v(box.fy0)), D(box.gx1, v(box.gy0)), D(box.gx0, v(box.gy0))]),
+        polyPath([D(box.fx0, v(box.fy1)), D(box.fx1, v(box.fy1)), D(box.gx1, v(box.gy1)), D(box.gx0, v(box.gy1))]),
+        polyPath([D(box.fx0, v(box.fy0)), D(box.gx0, v(box.gy0)), D(box.gx0, v(box.gy1)), D(box.fx0, v(box.fy1))]),
+        polyPath([D(box.fx1, v(box.fy0)), D(box.gx1, v(box.gy0)), D(box.gx1, v(box.gy1)), D(box.fx1, v(box.fy1))]),
       ];
-  const topEdge = pathOf([D(x0, height), D(x1, height), D(x1, height, -DOOR_THICKNESS), D(x0, height, -DOOR_THICKNESS)]);
+  const topEdge = polyPath([D(x0, height), D(x1, height), D(x1, height, -DOOR_THICKNESS), D(x0, height, -DOOR_THICKNESS)]);
   const [, gasketY] = D(x0, height, -DOOR_THICKNESS * 0.5);
   const handleV = height - (layout.transitional ? SLIM_HANDLE_Y : PRO_HANDLE_Y);
   const [, hy] = D(x0, handleV, HANDLE_STANDOFF);

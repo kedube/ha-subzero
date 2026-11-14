@@ -4,23 +4,22 @@ import type { KnobColor, OvenSlot } from "../../types";
 import { dishwasherBody, floorLight } from "../dishwasher";
 import { DW_HEIGHT } from "../dishwasher/door";
 import { dishwasherOverlay, dishwasherWords, doorOpen, FLOOR_LIGHT } from "../dishwasher/status";
-import { KNOB_PALETTE } from "../range/materials";
+import { KNOB_PALETTE, polyPath, round as n, type Ids } from "../materials-core";
+import { ovenHeat, ovenWords, type HeatScale, type SpokenOven } from "../oven-state";
+import { LABEL_H, labelScale, statusRow } from "../overlay";
 import type { DrawingState, OvenState } from "../types";
-import { ovenPhrases, withTemperature } from "../words";
 import {
   barHandle,
   bevel,
   blackGlass,
-  type Defs,
   type FaceOptions,
   kickGrille,
   outline,
-  polyPath,
+  pills,
   rectPath,
   stainless,
   vBarHandle,
 } from "./materials";
-import { LABEL_H, labelScale, statusRow } from "./overlay";
 
 /**
  * Plain, model-agnostic drawings for an appliance the panel knows only the type of: true
@@ -29,7 +28,7 @@ import { LABEL_H, labelScale, statusRow } from "./overlay";
  */
 
 export interface FormContext {
-  d: Defs;
+  d: Ids;
   state: DrawingState;
   t: Translate;
   knobs: KnobColor;
@@ -66,10 +65,8 @@ function uiScale(c: FormContext, height: number, below: number, floor: boolean):
   return labelScale(viewHeight({ height, below, floor }), c.pixelHeight);
 }
 
-const n = (value: number) => Math.round(value * 100) / 100;
-
 /** A flush stainless door or drawer front with folded, lit edges. */
-function slab(d: Defs, x: number, y: number, w: number, h: number, options: FaceOptions = {}): SVGTemplateResult {
+function slab(d: Ids, x: number, y: number, w: number, h: number, options: FaceOptions = {}): SVGTemplateResult {
   return svg`
     ${stainless(d, rectPath(x, y, w, h), options)}
     ${bevel(x, y, w, h, 0.9)}
@@ -90,7 +87,7 @@ function gapV(x: number, y: number, h: number): SVGTemplateResult {
 }
 
 /** A flush drawer front with a tubular handle `handleY` below its top. */
-function drawerFront(d: Defs, x: number, y: number, w: number, h: number, handleY: number): SVGTemplateResult {
+function drawerFront(d: Ids, x: number, y: number, w: number, h: number, handleY: number): SVGTemplateResult {
   const inset = Math.min(30, w * 0.09);
   return svg`${slab(d, x, y, w, h)}${barHandle(d, x + inset, x + w - inset, y + handleY, "tubular")}`;
 }
@@ -108,7 +105,7 @@ type BinContents = "produce" | "freezer";
  * hides the rest): fruit and greens in a refrigerator drawer, frosted packs in a freezer.
  */
 function binContents(
-  d: Defs,
+  d: Ids,
   key: string,
   kind: BinContents,
   x0: number,
@@ -200,7 +197,7 @@ function binContents(
  * shadow on what's below it. `front` is the closed front at (x, y), `w` by `h`.
  */
 function pulledDrawer(
-  d: Defs,
+  d: Ids,
   key: string,
   x: number,
   y: number,
@@ -270,7 +267,7 @@ function pulledDrawer(
 
 /** The cool-lit cabinet behind an open door: liner, glass shelves, a shadow under the top. */
 function cabinet(
-  d: Defs,
+  d: Ids,
   key: string,
   x: number,
   y: number,
@@ -311,7 +308,7 @@ type HandleKind = "v" | "h" | null;
  * the opening shows; the door is drawn over it.
  */
 function swungDoor(
-  d: Defs,
+  d: Ids,
   x: number,
   y: number,
   w: number,
@@ -380,7 +377,7 @@ function swungDoor(
 }
 
 function readouts(
-  d: Defs,
+  d: Ids,
   state: DrawingState,
   anchors: Array<{ zone: string; cx: number; cy: number }>,
   reducedMotion: boolean,
@@ -396,7 +393,7 @@ function readouts(
     // A zone this form has no place for stacks under the first label.
     if (!anchor) anchor = { ...anchors[0], cy: anchors[0].cy + (LABEL_H + 6) * scale * ++extra };
     used.add(anchor.zone);
-    parts.push(statusRow(d, anchor.cx, anchor.cy, { text }, [], reducedMotion, scale));
+    parts.push(statusRow(pills(d), anchor.cx, anchor.cy, { text }, [], reducedMotion, scale));
   }
   return parts;
 }
@@ -703,7 +700,7 @@ export function iceMaker(c: FormContext, widthIn: number): Drawn {
  * the light shows the cavity itself. Off, the window keeps its plain look.
  */
 function ovenWindow(
-  d: Defs,
+  d: Ids,
   key: string,
   x: number,
   y: number,
@@ -717,7 +714,7 @@ function ovenWindow(
   const view = rectPath(x + frit, y + frit, w - 2 * frit, h - 2 * frit, 3);
   const on = available && !!oven?.on;
   const light = available && !!oven?.light;
-  const heat = !on ? 0 : oven?.preheated ? 0.5 : oven?.progress != null ? 0.16 + 0.64 * oven.progress : 0.35;
+  const heat = on ? ovenHeat(oven, HEAT) : 0;
   const racks = [0.42, 0.7].map((f) => `M${n(x + frit + 4)} ${n(y + h * f)}H${n(x + w - frit - 4)}`).join("");
   return svg`
     <defs>
@@ -740,7 +737,10 @@ function ovenWindow(
   `;
 }
 
-function cookingDefs(d: Defs, knobs: KnobColor): SVGTemplateResult {
+/** The window's dim glow: warmer as preheating nears the setpoint, settling once there. */
+const HEAT: HeatScale = { preheated: 0.5, start: 0.16, span: 0.64, unknown: 0.35 };
+
+function cookingDefs(d: Ids, knobs: KnobColor): SVGTemplateResult {
   const knob = KNOB_PALETTE[knobs] ?? KNOB_PALETTE.red;
   return svg`
     <radialGradient id=${d.id("heat")} cx="0.5" cy="-0.05" r="1">
@@ -767,12 +767,6 @@ function windowLabelY(top: number, winH: number, scale: number): number {
   return top + Math.max(winH * 0.28, (LABEL_H * scale) / 2 + 8);
 }
 
-function ovenWords(t: Translate, position: OvenSlot["position"], oven: OvenState | undefined): string[] {
-  if (!oven) return [];
-  if (oven.on) return ovenPhrases(t, position, [withTemperature(t("drawing.state.on"), oven.temp)]);
-  return oven.light ? ovenPhrases(t, position, [t("drawing.state.light_on")]) : [];
-}
-
 /** A wall oven: a black-glass control strip over one or two stainless doors with windows. */
 export function wallOven(c: FormContext, widthIn: number, double: boolean, slots: OvenSlot[]): Drawn {
   const { d, state } = c;
@@ -783,7 +777,7 @@ export function wallOven(c: FormContext, widthIn: number, double: boolean, slots
   const doorH = (H - strip - 2 * doors) / doors;
   const parts: SVGTemplateResult[] = [];
   const labels: Array<SVGTemplateResult | typeof nothing> = [];
-  const words = [c.t(double ? "drawing.wall_oven_double" : "drawing.wall_oven")];
+  const spoken: SpokenOven[] = [];
   const keys = [0, 1].slice(0, doors);
   const scale = uiScale(c, H, 0, false);
   const touch: string[] = [];
@@ -811,9 +805,9 @@ export function wallOven(c: FormContext, widthIn: number, double: boolean, slots
     `);
     if (state.available && oven?.on && oven.temp) {
       const cy = windowLabelY(y + 44, winH, scale);
-      labels.push(statusRow(d, W / 2, cy, { text: oven.temp }, [], c.reducedMotion, scale));
+      labels.push(statusRow(pills(d), W / 2, cy, { text: oven.temp }, [], c.reducedMotion, scale));
     }
-    if (state.available) words.push(...ovenWords(c.t, position, oven));
+    spoken.push({ position, state: oven });
   }
   return {
     width: W,
@@ -822,12 +816,12 @@ export function wallOven(c: FormContext, widthIn: number, double: boolean, slots
     floor: false,
     body: svg`<defs>${cookingDefs(d, c.knobs)}</defs>${parts}`,
     over: svg`${labels}`,
-    label: words,
+    label: [c.t(double ? "drawing.wall_oven_double" : "drawing.wall_oven"), ...ovenWords(c.t, spoken, state.display)],
   };
 }
 
 /** A knob in the Appearance color, Wolf-style: a domed face with a fin across it, in a bezel. */
-function knob(d: Defs, cx: number, cy: number, color: KnobColor): SVGTemplateResult {
+function knob(d: Ids, cx: number, cy: number, color: KnobColor): SVGTemplateResult {
   const palette = KNOB_PALETTE[color] ?? KNOB_PALETTE.red;
   return svg`
     <circle cx=${cx + 1.2} cy=${cy + 2.6} r="13.5" fill="#000" opacity="0.25" filter=${d.url("blur-s")} />
@@ -854,7 +848,7 @@ export function range(c: FormContext, widthIn: number, burners: number, slots: O
   const ovens = slots.length ? slots : [{ prefix: "cav" as const, position: "single" as const, width: null }];
   const totalNominal = ovens.reduce((sum, slot) => sum + (slot.width ?? widthIn / ovens.length), 0);
   const knobCount = Math.max(4, burners) + ovens.length;
-  const words = [c.t("drawing.range")];
+  const spoken: SpokenOven[] = [];
   const caps: string[] = [];
   const count = Math.max(4, burners);
   const scale = uiScale(c, H, 0, true);
@@ -888,10 +882,10 @@ export function range(c: FormContext, widthIn: number, burners: number, slots: O
     `);
     if (state.available && oven?.on && oven.temp) {
       labels.push(
-        statusRow(d, x + w / 2, windowLabelY(doorY + 52, winH, scale), { text: oven.temp }, [], c.reducedMotion, scale),
+        statusRow(pills(d), x + w / 2, windowLabelY(doorY + 52, winH, scale), { text: oven.temp }, [], c.reducedMotion, scale),
       );
     }
-    if (state.available) words.push(...ovenWords(c.t, ovens.length > 1 ? slot.position : "single", oven));
+    spoken.push({ position: ovens.length > 1 ? slot.position : "single", state: oven });
     x += w + 2;
   });
   parts.unshift(svg`
@@ -905,7 +899,7 @@ export function range(c: FormContext, widthIn: number, burners: number, slots: O
     floor: true,
     body: svg`<defs>${cookingDefs(d, c.knobs)}</defs>${parts}`,
     over: svg`${labels}`,
-    label: words,
+    label: [c.t("drawing.range"), ...ovenWords(c.t, spoken, state.display)],
   };
 }
 
@@ -1020,7 +1014,7 @@ export function dishwasher(c: FormContext, widthIn: number): Drawn {
     body,
     over: svg`
       ${lightColor ? floorLight(d, W, lightColor) : nothing}
-      ${statusRow(d, W / 2, statusY, label, chips, c.reducedMotion, scale)}
+      ${statusRow(pills(d), W / 2, statusY, label, chips, c.reducedMotion, scale)}
     `,
     label: [c.t("drawing.dishwasher"), ...dishwasherWords(c.t, state)],
   };

@@ -1,6 +1,101 @@
 import { css } from "lit";
 
 /**
+ * Choices as separate chips, the chosen one filled: the same whether they fit beside a label or
+ * wrap under it, and the same as the timer presets. For buttons in a `.segmented` group, whether
+ * the chosen one is pressed (aria-pressed) or the checked radio of a radio group (aria-checked).
+ * The full view's controls and the Appearance editor share it.
+ */
+export const segmentedStyles = css`
+  .segmented {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-width: 100%;
+  }
+  .segmented button {
+    flex: 0 0 auto;
+    min-height: 40px;
+    padding: 6px 14px;
+    border: none;
+    border-radius: 999px;
+    background: var(--sz-control-bg, rgba(127, 127, 127, 0.14));
+    color: inherit;
+    font: inherit;
+    font-size: 13.5px;
+    font-weight: 600;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  .segmented button:hover:not(:disabled, [aria-disabled="true"], [aria-pressed="true"], [aria-checked="true"]) {
+    background: var(--sz-control-hover, rgba(127, 127, 127, 0.2));
+  }
+  .segmented button:is([aria-pressed="true"], [aria-checked="true"]) {
+    background: var(--sz-accent-fill, var(--sz-accent, #03a9f4));
+    color: var(--sz-on-accent, #ffffff);
+  }
+  .segmented button:disabled,
+  .segmented button[aria-disabled="true"] {
+    cursor: default;
+  }
+  .segmented button:focus-visible {
+    outline: 2px solid var(--sz-accent, #03a9f4);
+    outline-offset: 2px;
+  }
+  /* Bigger targets wherever there's a finger: touch laptops report a mouse as their main pointer. */
+  @media (any-pointer: coarse) {
+    .segmented button {
+      min-height: 44px;
+    }
+  }
+`;
+
+/** A dropdown for more choices than fit as chips: a native select as a pill, in a `.dropdown` with its chevron. */
+export const dropdownStyles = css`
+  .dropdown {
+    position: relative;
+    display: inline-flex;
+    max-width: 100%;
+  }
+  .dropdown select {
+    max-width: 100%;
+    min-height: 40px;
+    padding: 7px 36px 7px 14px;
+    border: none;
+    border-radius: 999px;
+    background: var(--sz-control-bg, rgba(127, 127, 127, 0.14));
+    color: inherit;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  .dropdown select:focus-visible {
+    outline: 2px solid var(--sz-accent, #03a9f4);
+    outline-offset: 2px;
+  }
+  .dropdown svg {
+    position: absolute;
+    top: 50%;
+    right: 12px;
+    width: 18px;
+    height: 18px;
+    margin-top: -9px;
+    fill: currentColor;
+    pointer-events: none;
+  }
+  @media (any-pointer: coarse) {
+    .dropdown select {
+      min-height: 44px;
+    }
+  }
+`;
+
+/**
  * The controls' layout and widgets. Colors come from the `--sz-*` tokens (styles.ts), which the
  * full view defines and the controls inherit; the fallbacks keep a control legible on its own.
  * Targets are 40 px, and 44 px wherever there's a finger to tap with.
@@ -44,6 +139,30 @@ export const controlStyles = css`
   }
   .label {
     font-weight: 500;
+  }
+  /* A label that opens Home Assistant's more-info dialog for its entity. It reads as the label
+     it is, and shows it can be pressed when pointed at or focused. */
+  .more {
+    position: relative;
+    margin: 0;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* More to tap than a line of text, without moving anything. */
+  .more::before {
+    content: "";
+    position: absolute;
+    inset: -8px -6px;
+  }
+  .more:hover .label {
+    text-decoration: underline;
   }
   /* Still read out: the label of a quiet control, and a reason the section shows once. */
   :host([quiet]) .row.stacked .label,
@@ -116,81 +235,18 @@ export const controlStyles = css`
     }
   }
 
-  /* Choices as separate chips, the chosen one filled: the same whether they fit beside the label
-     or wrap under it, and the same as the timer presets. */
-  .segmented {
-    display: inline-flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    max-width: 100%;
-  }
+  /* The chips of a control change color over a moment, and dim together while it's locked. */
   .segmented button {
-    flex: 0 0 auto;
-    min-height: 40px;
-    padding: 6px 14px;
-    border: none;
-    border-radius: 999px;
-    background: var(--sz-control-bg, rgba(127, 127, 127, 0.14));
-    color: inherit;
-    font: inherit;
-    font-size: 13.5px;
-    font-weight: 600;
-    cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
-    touch-action: manipulation;
     transition: background-color 0.15s, color 0.15s;
-  }
-  .segmented button:hover:not([aria-disabled="true"]):not([aria-pressed="true"]) {
-    background: var(--sz-control-hover, rgba(127, 127, 127, 0.2));
-  }
-  .segmented button[aria-pressed="true"] {
-    background: var(--sz-accent-fill, var(--sz-accent, #03a9f4));
-    color: var(--sz-on-accent, #ffffff);
-  }
-  .segmented button:disabled,
-  .segmented button[aria-disabled="true"] {
-    cursor: default;
   }
   .segmented.disabled {
     opacity: 0.55;
   }
 
-  /* The dropdown for more than five choices. */
-  .dropdown {
-    position: relative;
-    display: inline-flex;
-    max-width: 100%;
-  }
-  .dropdown select {
-    max-width: 100%;
-    min-height: 40px;
-    padding: 7px 36px 7px 14px;
-    border: none;
-    border-radius: 999px;
-    background: var(--sz-control-bg, rgba(127, 127, 127, 0.14));
-    color: inherit;
-    font: inherit;
-    font-size: 14px;
-    font-weight: 600;
-    text-overflow: ellipsis;
-    cursor: pointer;
-    -webkit-appearance: none;
-    appearance: none;
-  }
   /* Locked but focusable: it doesn't open, by pointer or key (see SzSelect). */
   .dropdown select[aria-disabled="true"] {
     opacity: 0.55;
     cursor: default;
-    pointer-events: none;
-  }
-  .dropdown svg {
-    position: absolute;
-    top: 50%;
-    right: 12px;
-    width: 18px;
-    height: 18px;
-    margin-top: -9px;
-    fill: currentColor;
     pointer-events: none;
   }
 
@@ -416,9 +472,7 @@ export const controlStyles = css`
 
   /* Bigger targets wherever there's a finger: touch laptops report a mouse as their main pointer. */
   @media (any-pointer: coarse) {
-    .segmented button,
     .chips .sz-button,
-    .dropdown select,
     input[type="number"],
     input[type="time"] {
       min-height: 44px;

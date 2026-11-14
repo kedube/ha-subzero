@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { controlEntity } from "../src/families/common";
 import { familyModel } from "../src/families/index";
 import type { Control, Section } from "../src/families/types";
 import { beverage, fridge, wine } from "./fixtures/appliances";
-import { context, inMinutes, offline, withLocks, withStates, type Fixture } from "./fixtures/hass";
+import { NOW, context, inMinutes, offline, withLocks, withStates, type Fixture } from "./fixtures/hass";
 
 function sections(fixture: Fixture, options: Parameters<typeof context>[1] = {}): Section[] {
   return familyModel(fixture.appliance).sections(context(fixture, options));
@@ -37,6 +38,50 @@ describe("refrigerator (CL4850SID)", () => {
     const open = withStates(fridge(), { frz_door_ajar: { binary_sensor: "on" } });
     expect(model.drawingState(context(open)).doors.frz_door_ajar).toBe(true);
     expect(model.status(context(open))).toEqual({ text: "Door open", tone: "amber" });
+  });
+
+  it("says how long a door has been open, once history knows when it opened", () => {
+    const open = withStates(fridge(), { frz_door_ajar: { binary_sensor: "on" } });
+    const opened = (minutes: number) => (entityId: string) => (entityId === "binary_sensor.fridge_frz_door_ajar" ? NOW - minutes * 60_000 : null);
+    expect(model.status(context(open, { since: opened(4.5) }))).toEqual({ text: "Door open · 4 min", tone: "amber" });
+    expect(model.status(context(open, { since: opened(125) })).text).toBe("Door open · 2 h 5 min");
+    // In its first minute, and while the time isn't known, it's just open.
+    expect(model.status(context(open, { since: opened(0.5) })).text).toBe("Door open");
+    expect(model.status(context(open, { since: () => null })).text).toBe("Door open");
+    expect(model.status(context(open, { since: opened(4), language: "de" })).text).toBe("Tür offen · 4 Min.");
+    // The same beside the zone's setpoint, for that zone's own door.
+    const list = sections(open, { since: opened(4) });
+    expect(control(list, "frz_set_temp").hint).toBe("Door open · 4 min");
+    expect(control(list, "ref_set_temp").hint).toBeNull();
+  });
+
+  it("counts from the door that's been open longest", () => {
+    const both = withStates(fridge(), { frz_door_ajar: { binary_sensor: "on" }, ref_door_ajar: { binary_sensor: "on" } });
+    const since = (entityId: string) => NOW - (entityId.includes("frz") ? 2 : 9) * 60_000;
+    expect(model.status(context(both, { since })).text).toBe("Door open · 9 min");
+    // One whose time isn't known yet doesn't hide the other's.
+    const one = (entityId: string) => (entityId.includes("frz") ? NOW - 2 * 60_000 : null);
+    expect(model.status(context(both, { since: one })).text).toBe("Door open · 2 min");
+  });
+
+  it("names the entity behind each control, for its more-info dialog", () => {
+    const list = sections(fridge());
+    const entity = (id: string) => controlEntity(context(fridge()), control(list, id));
+    // What a control changes, and what a reading reads: the sensor with its id for a key.
+    expect(entity("ref_set_temp")).toBe("number.fridge_ref_set_temp");
+    expect(entity("operating_mode")).toBe("select.fridge_operating_mode");
+    expect(entity("air_filter_on")).toBe("switch.fridge_air_filter_on");
+    expect(entity("air_filter_pct_remaining")).toBe("sensor.fridge_air_filter_pct_remaining");
+    expect(entity("service_required")).toBe("binary_sensor.fridge_service_required");
+    expect(entity("ap_rssi")).toBe("sensor.fridge_ap_rssi");
+    // The model number is no entity's.
+    expect(entity("model")).toBeUndefined();
+    const maxIce = withStates(fridge(), { max_ice_on: { binary_sensor: "on" }, max_ice_end_time: { sensor: inMinutes(600) } });
+    expect(controlEntity(context(maxIce), control(sections(maxIce), "max_ice_end_time"))).toBe("sensor.fridge_max_ice_end_time");
+    // A reading that names its entity, since its id is another's key: the ice maker without its select.
+    const bare = fridge();
+    delete bare.appliance.entities.ice_maker_mode;
+    expect(controlEntity(context(bare), control(sections(bare), "ice_maker_mode"))).toBe("binary_sensor.fridge_ice_maker_on");
   });
 
   it("shows the ice mode from the binary sensors while the select is locked", () => {
@@ -81,13 +126,22 @@ describe("refrigerator (CL4850SID)", () => {
   });
 
   it("shows the user's unit as it comes, and translates", () => {
+    const degrees = { unit_of_measurement: "°C" };
     const celsius = withStates(fridge(), {
-      ref_set_temp: { sensor: "3", number: "3" },
-      frz_set_temp: { sensor: "-18", number: "-18" },
+      ref_set_temp: { sensor: ["3", degrees], number: ["3", degrees] },
+      frz_set_temp: { sensor: ["-18", degrees], number: ["-18", degrees] },
     });
     expect(model.drawingState(context(celsius, { unit: "°C" })).readouts).toMatchObject({ ref: "3°", frz: "-18°" });
     const setpoint = control(sections(celsius, { unit: "°C" }), "ref_set_temp");
     expect(setpoint).toMatchObject({ kind: "setpoint", value: 3, unit: "°C" });
+    // The unit is the entity's own, which the user can set apart from the unit system's.
+    expect(control(sections(celsius), "ref_set_temp")).toMatchObject({ value: 3, unit: "°C" });
+    expect(control(sections(fridge(), { unit: "°C" }), "ref_set_temp")).toMatchObject({ value: 38, unit: "°F" });
+    // An entity that names no unit is in the unit system's.
+    expect(control(sections(fridge(), { unit: "°C" }), "crisp_set_temp")).toMatchObject({ unit: "°C" });
+    // A locked number shows its sensor's value, in the sensor's unit.
+    const locked = withStates(celsius, { ref_set_temp: { number: ["unavailable", { unit_of_measurement: "°F" }] } });
+    expect(control(sections(locked), "ref_set_temp")).toMatchObject({ value: 3, unit: "°C" });
     expect(model.infoRows(context(fridge(), { language: "de" }))[0]).toEqual({
       label: "Eingestellt",
       value: "Kühlschrank 38° · Gefrierschrank 0°",

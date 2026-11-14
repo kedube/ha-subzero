@@ -1,6 +1,6 @@
 import { nothing, svg, type SVGTemplateResult } from "lit";
+import { floorShadowStrength, type Ids } from "../materials-core";
 import type { RangeLayout } from "./layout";
-import { floorShadow, type Ids } from "./materials";
 
 /*
  * The range's body around the doors: feet and floor shadow, the recessed toe-kick panel and the
@@ -50,7 +50,7 @@ export function floorAndFeet(layout: RangeLayout, ids: Ids, theme: "light" | "da
   const w = layout.width;
   const floor = layout.floorY;
   const top = floor - layout.levels.feet;
-  const shadow = floorShadow(theme);
+  const shadow = floorShadowStrength(theme);
   // The toe-kick panel is recessed behind the feet and stops a little above the floor; it has a
   // vent slot under each oven, just below the kick plate.
   const panelBottom = floor - 3.5;

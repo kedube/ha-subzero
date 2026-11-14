@@ -4,7 +4,7 @@
  * the details every appliance has when none does.
  */
 import type { DrawingState } from "../drawings/types";
-import { anyOpen, compact, detailsSection, has, isOn, needsService } from "./common";
+import { anyOpen, compact, detailsSection, doorOpenText, has, isOn, needsService } from "./common";
 import { dishwasher } from "./dishwasher";
 import { hood } from "./hood";
 import { iceMaker } from "./ice-maker";
@@ -71,7 +71,7 @@ export const generic: FamilyModel = {
     if (first) return first.status(ctx);
     const t = ctx.t;
     if (!ctx.appliance.available) return { text: t("pill.offline"), tone: "gray" };
-    if (anyOpen(ctx, DOORS)) return { text: t("pill.door_open"), tone: "amber" };
+    if (anyOpen(ctx, DOORS)) return { text: doorOpenText(ctx, DOORS), tone: "amber" };
     if (needsService(ctx)) return { text: t("pill.service"), tone: "red" };
     if (isOn(ctx, "sabbath_on", "binary_sensor")) return { text: t("pill.sabbath"), tone: "gray" };
     return { text: t("pill.normal"), tone: "neutral" };

@@ -305,6 +305,54 @@ describe("sz-appearance-editor", () => {
     expect(last(fake.inputs)!.appearance.knobs).toBe("black");
   });
 
+  it("offers a wall oven's knob colors only in the style drawn with knobs", async () => {
+    // An M series oven: knobs in the Professional style, none in the others.
+    const oven = makeAppliance("oven", SPECS.wallOven, {
+      appearance_options: {
+        finish: ["stainless", "black"],
+        panel_colors: [],
+        knobs: ["red", "black", "stainless"],
+        handle: null,
+        style: ["professional", "transitional", "contemporary"],
+        forms: ["single", "double"],
+      },
+    });
+    const { editor } = await mount(oven);
+    // The model's own style, Transitional, until another is chosen.
+    expect(radio(editor, "Style", "Transitional").getAttribute("aria-checked")).toBe("true");
+    expect(group(editor, "Knobs")).toBeNull();
+    radio(editor, "Style", "Professional").click();
+    await settle(editor);
+    radio(editor, "Knobs", "Black").click();
+    await settle(editor);
+    expect(last(fake.inputs)!.appearance).toMatchObject({ style: "professional", knobs: "black" });
+    radio(editor, "Style", "Contemporary").click();
+    await settle(editor);
+    expect(group(editor, "Knobs")).toBeNull();
+  });
+
+  it("previews the spec the integration sends for a pending form", async () => {
+    const french = { ...SPECS.frenchDoor, width: 48 };
+    const { editor } = await mount({ ...FRIDGE, form_specs: { side_by_side: SPECS.sideBySide, french_door: french } });
+    const select = root(editor).querySelector("select")!;
+    select.value = "french_door";
+    select.dispatchEvent(new Event("change"));
+    await settle(editor);
+    expect(last(fake.inputs)!.spec).toBe(french);
+  });
+
+  it("keeps the preview drawing's ids apart from its own", async () => {
+    const { editor } = await mount();
+    const prefix = last(fake.inputs)!.uid;
+    const ids = [...root(editor).querySelectorAll("[id]")].map((element) => element.id);
+    expect(ids.length).toBeGreaterThan(0);
+    expect(ids.filter((id) => id.startsWith(prefix))).toEqual([]);
+    // And apart from another editor's.
+    const other = await mount();
+    expect(last(fake.inputs)!.uid).not.toBe(prefix);
+    expect([...root(other.editor).querySelectorAll("[id]")].map((element) => element.id).filter((id) => ids.includes(id))).toEqual([]);
+  });
+
   it("moves through a group with the arrow keys", async () => {
     const { editor } = await mount();
     const tubular = radio(editor, "Handles", "Tubular");

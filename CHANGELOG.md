@@ -2,6 +2,65 @@
 
 Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then 2.00.
 
+## Unreleased
+
+### Added
+
+- **Translated entity names.** Entity names follow Home Assistant's language in German, French, Dutch, Spanish, Simplified Chinese, Italian, Polish, and Swedish. The entity IDs you already have don't change. States and option names, such as **Bake**, stay in English, so automations keep working.
+- **Repairs.** Home Assistant raises a repair when an appliance you selected is no longer on your Sub-Zero account, and when Firebase appliance alerts fail to start three times in a row. Each repair says what to do and clears itself once the cause is gone, or when you turn alerts off or remove the account.
+- An oven's climate entity shows whether the cavity is off, preheating, or heating at its temperature.
+- Display temperatures and filter life remaining keep long-term statistics, so their graphs go back further than the recorder's history.
+- In the sidebar panel, tapping the name of a control or reading opens Home Assistant's details dialog for its entity. Buttons such as **Start oven** don't do this, so the panel's confirmation can't be skipped.
+- **Door open** in the panel says for how long, such as **Door open · 4 min**.
+- The panel's overview cards show each appliance's latest event and when it happened.
+- **Show 30 days** under Recent events lists up to 200 events. Home Assistant keeps 10 days of history by default, so the list is usually shorter.
+- Turning an oven off from the panel asks first, since it ends what's cooking.
+
+### Fixed
+
+- Opening the live connection to Sub-Zero, including its handshake, now has a 30-second limit, after which it's retried. Before, only the reply to the handshake had a limit, so a connection that stalled while opening held up reconnecting.
+- An appliance whose updates fail to open is marked unavailable at once. Before, this waited for the next message or keep-alive.
+- When Sub-Zero rate-limits a retry for an appliance that failed to open, the integration waits as asked and keeps the connection, so the other appliances keep updating. Before, every appliance reconnected.
+- Recent events in the panel shows the newest event at once. Before, it was always one event behind while the appliance's view was open.
+- Kitchen timer: tapping the preset that equals the minutes left now restarts the timer, and a custom time you're typing isn't overwritten as the timer counts down.
+- Ice delay **Later** gives the right time across a daylight saving change.
+- Setpoints in the panel show the unit of their own entity, and preheat progress is right when the temperature and the setpoint use different units.
+- Numbers in the panel follow Home Assistant's 1'234.56 format.
+- After Home Assistant reconnects, the panel reloads its appliances, or shows the error with **Try again**, instead of keeping an outdated list.
+- An appliance on two Sub-Zero accounts is listed once in the panel.
+- An oven that is off is never shown as self-cleaning, in its status or in the drawing of a range, even when its mode still says Self clean.
+- The hood light control no longer lags after a change.
+- Controls no longer keep their state when you move directly from one appliance's view to another's.
+- A control changed again before the first change finishes stays busy until both finish.
+- The Appearance preview shows exactly what saving gives, such as a wine storage's glass door when you choose that form.
+- Knob color is offered for M Series wall ovens, which are drawn with knobs, and the editor shows it only for the Professional style, the one drawn with knobs.
+- 24″ and 36″ wall ovens, such as steam and speed ovens and the 36″ L Series, are drawn at their own width instead of as 30″ ovens.
+- A dishwasher's time left in the panel counts down with the display.
+- A custom panel color that reads as wood, such as tan, gets a wood grain on a dishwasher, as it does on a refrigerator. The eight preset colors are unchanged.
+- Screen readers describe wall ovens the way they describe ranges, such as "heating 350°", "preheated 350°" or "off", with the probe, Remote Ready and the kitchen timer.
+- The panel's offline label reads **Offline** in Dutch, Polish, and Swedish, like the rest of the panel in those languages.
+
+### Changed
+
+- At startup, appliances that haven't sent their state are read all at once instead of one after another, so Home Assistant starts faster with several appliances.
+- The **Active faults** history keeps the number of faults, not each fault's details, which take a lot of space in the recorder. The current details are still shown on the entity.
+
+### Security
+
+- The Validate workflow's third-party actions are pinned to exact commits.
+- The panel's drawings stay well formed whatever ids they're given, and the Appearance preview's drawing uses ids of its own.
+
+### Development
+
+- Dependabot checks the workflow actions, the panel's npm packages, and the Python test requirements monthly.
+- The panel takes knob ovens and left and right ovens from the integration instead of keeping its own copies, and a test checks that the constants it still copies match the integration's.
+- The panel's history, clock, and drawing evaluation each have one implementation. The drawings share one overlay, one set of material helpers, and one oven-state model.
+- New tests cover sign-in error paths, Firebase alerts, repairs, translated names, and the connection's timeouts and rate limits. A new panel test draws about 8,700 appliance variants without a browser and checks each drawing.
+
+### Documentation
+
+- The README describes repairs, statistics, translated entity names, and the oven's climate states. PROTOCOL.md describes the connect timeout, how channel results and rate limits are handled, and the parallel reads at startup.
+
 ## 1.08
 
 ### Fixed

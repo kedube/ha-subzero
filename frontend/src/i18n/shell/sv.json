@@ -2,7 +2,6 @@
   "panel.title": "Sub-Zero",
   "panel.menu": "Öppna sidofältet",
   "panel.back": "Tillbaka",
-  "status.offline": "Ej ansluten",
   "overview.no_area": "Inget område",
   "overview.loading": "Läser in vitvaror…",
   "overview.error_title": "Det gick inte att läsa in vitvarorna",

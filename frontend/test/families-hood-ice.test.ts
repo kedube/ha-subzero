@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { controlEntity } from "../src/families/common";
 import { familyModel } from "../src/families/index";
 import type { Control, Section } from "../src/families/types";
 import { hood, iceMaker } from "./fixtures/appliances";
@@ -121,6 +122,23 @@ describe("dedicated ice maker", () => {
     const open = withStates(iceMaker(), { ice_door_ajar: { binary_sensor: "on" } });
     expect(model.status(context(open))).toEqual({ text: "Door open", tone: "amber" });
     expect(model.drawingState(context(open)).doors).toEqual({ ice_door_ajar: true });
+    const opened = (entityId: string) => (entityId === "binary_sensor.ice_ice_door_ajar" ? Date.parse(inMinutes(-12)) : null);
+    expect(model.status(context(open, { since: opened }))).toEqual({ text: "Door open · 12 min", tone: "amber" });
+  });
+
+  it("names the entities behind readings whose ids aren't property keys", () => {
+    const daily = withStates(iceMaker(), {
+      delay_duration: { sensor: "28800" },
+      delay_recurring: { binary_sensor: "on" },
+      clean_soon_on: { binary_sensor: "on" },
+    });
+    const entity = (id: string) => controlEntity(context(daily), control(sections(daily), id)!);
+    expect(entity("delay_schedule")).toBe("sensor.ice_delay_duration");
+    expect(entity("clean_due")).toBe("binary_sensor.ice_clean_soon_on");
+    expect(entity("next_clean_time")).toBe("sensor.ice_next_clean_time");
+    // The form calls an action; there's no entity to show for it.
+    expect(entity("schedule_ice_delay")).toBeUndefined();
+    expect(controlEntity(context(iceMaker()), control(sections(iceMaker()), "clean_due")!)).toBe("binary_sensor.ice_clean_now_on");
   });
 
   it("lists the status, the delay and the next cleaning", () => {

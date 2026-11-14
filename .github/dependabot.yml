@@ -1,0 +1,26 @@
+# Proposes updates once a month: the workflows' actions (the two pinned to a commit
+# included), the sidebar panel's build tools, and the Python test requirements.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+
+  # An update that changes the panel's bundle fails Validate's "Committed bundle is up
+  # to date" until the bundle is rebuilt with `npm run build` and committed with it.
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: monthly
+    groups:
+      frontend:
+        patterns: ["*"]
+
+  # firebase-messaging is pinned here and in manifest.json, which Dependabot doesn't
+  # read, so an update to it needs the same version put there. fcm.py's PushClient
+  # works around bugs in 0.4.5 and may not be needed, or may not fit, in a newer one.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: monthly

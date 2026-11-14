@@ -378,3 +378,232 @@ async def test_phonefactor_call_login_and_timeout(login_server, login_client):
     assert login_server["call_polls"] == 2
     assert tokens["refresh_token"] == "test-refresh"
     assert login_server["exchanged"]
+
+
+CAPTCHA = "/policy/SelfAsserted/DisplayControlAction/vbeta/captchaControlChallengeCode"
+VERIFY = "/policy/Phonefactor/verify"
+
+
+def answer(login_server, path, body, status=200):
+    """Have the sign-in server answer one path with a body of the test's own."""
+    login_server.update(
+        response_path=path,
+        response_body=body if isinstance(body, str) else json.dumps(body),
+        response_status=status,
+    )
+
+
+async def reach_phone_verification(login_server, login_client, *, captcha=True):
+    login_server["failure"] = "phonefactor"
+    login_server["captcha_required"] = captcha
+    with pytest.raises(auth.LoginChallenge):
+        await login_client.login("owner@example.test", "test-only-password")
+
+
+@pytest.mark.parametrize("page", ["<html></html>", "SETTINGS = {broken", "SETTINGS = [1, 2];"])
+def test_page_without_usable_settings_is_rejected(page):
+    with pytest.raises(auth.LoginError, match="sign-in page has changed"):
+        auth.page_variable(page, "SETTINGS")
+
+
+def test_page_settings_are_read_from_the_script():
+    page = '<script>var SETTINGS = {"api": "Phonefactor"}; var OTHER = 1;</script>'
+    assert auth.page_variable(page, "SETTINGS") == {"api": "Phonefactor"}
+
+
+async def test_unexpected_first_step_is_rejected(login_server, login_client):
+    answer(login_server, "/authorize", 'SETTINGS = {"api": "SelfAsserted"};')
+    with pytest.raises(auth.LoginError, match="unexpected sign-in step"):
+        await login_client.login("owner@example.test", "test-only-password")
+    assert not login_server["form_accepted"]
+
+
+@pytest.mark.parametrize(
+    ("body", "status"), [("Service unavailable", 503), ("<html></html>", 200), ("[]", 200)]
+)
+async def test_bad_form_answers_report_connection_failure(login_server, login_client, body, status):
+    answer(login_server, "/policy/SelfAsserted", body, status)
+    with pytest.raises(auth.LoginError) as error:
+        await login_client.login("owner@example.test", "test-only-password")
+    assert type(error.value) is auth.LoginError
+    assert not login_server["exchanged"]
+
+
+@pytest.mark.parametrize(
+    ("body", "status", "message"),
+    [
+        ("", 302, "invalid sign-in redirect"),
+        ("Service unavailable", 503, "returned HTTP 503"),
+    ],
+)
+async def test_bad_sign_in_pages_are_rejected(login_server, login_client, body, status, message):
+    answer(login_server, "/authorize", body, status)
+    with pytest.raises(auth.LoginError, match=message):
+        await login_client.login("owner@example.test", "test-only-password")
+
+
+@pytest.mark.parametrize(
+    ("body", "status", "exception", "message"),
+    [
+        ("Bad request", 400, auth.InvalidAuth, "authorization code"),
+        ('{"access_token": "test-access"}', 200, auth.LoginError, "required login tokens"),
+    ],
+)
+async def test_unusable_token_answers_are_rejected(
+    login_server, login_client, body, status, exception, message
+):
+    answer(login_server, "/token", body, status)
+    with pytest.raises(exception, match=message) as error:
+        await login_client.login("owner@example.test", "test-only-password")
+    assert type(error.value) is exception
+
+
+async def test_phone_step_without_phone_numbers_is_not_a_phone_challenge(
+    login_server, login_client
+):
+    settings = {
+        "api": "Phonefactor",
+        "hosts": {"tenant": "/policy", "policy": "test-policy"},
+        "csrf": "mfa-csrf",
+        "transId": "mfa-transaction",
+    }
+    answer(
+        login_server,
+        "/policy/api/CombinedSigninAndSignup/confirmed",
+        f"SETTINGS = {json.dumps(settings)};",
+    )
+    with pytest.raises(auth.LoginChallenge):
+        await login_client.login("owner@example.test", "test-only-password")
+    assert login_client.phone_numbers == []
+    assert not login_client.is_phonefactor_challenge
+    assert login_client.masked_phone == "your phone"
+    assert not login_client.captcha_required
+
+
+@pytest.mark.parametrize(
+    "challenge",
+    [
+        {"status": "500"},
+        {"status": "200"},
+        {"status": "200", "challengeId": 7, "challengeString": "iVBORw0KGgo="},
+        {"status": "200", "challengeId": "challenge-1", "challengeString": "text/html,AAAA"},
+        {
+            "status": "200",
+            "challengeId": "challenge-1",
+            "challengeString": "data:image/png;base64,not base64!",
+        },
+    ],
+)
+async def test_unusable_captcha_challenge_is_rejected(login_server, login_client, challenge):
+    await reach_phone_verification(login_server, login_client)
+    answer(login_server, CAPTCHA + "/GetChallenge", challenge)
+    with pytest.raises(auth.LoginError) as error:
+        await login_client.get_captcha_challenge()
+    assert type(error.value) is auth.LoginError
+    assert login_client.captcha_image == ""
+    assert login_client.captcha_challenge_id == ""
+
+
+async def test_captcha_image_without_a_header_is_a_png(login_server, login_client):
+    await reach_phone_verification(login_server, login_client)
+    answer(
+        login_server,
+        CAPTCHA + "/GetChallenge",
+        {"status": "200", "challengeId": "challenge-1", "challengeString": "iVBORw0KGgo="},
+    )
+    assert await login_client.get_captcha_challenge() == "data:image/png;base64,iVBORw0KGgo="
+
+
+async def test_captcha_answers(login_server, login_client):
+    await reach_phone_verification(login_server, login_client)
+    await login_client.get_captcha_challenge()
+    with pytest.raises(auth.InvalidCaptcha, match="Enter the characters"):
+        await login_client.verify_captcha("   ")
+
+    answer(login_server, CAPTCHA + "/VerifyChallenge", {"status": "400"})
+    with pytest.raises(auth.InvalidCaptcha, match="did not accept"):
+        await login_client.verify_captcha("ABCD")
+    answer(login_server, CAPTCHA + "/VerifyChallenge", {"status": "500", "reason": "Broken"})
+    with pytest.raises(auth.LoginError, match="could not verify") as error:
+        await login_client.verify_captcha("ABCD")
+    assert type(error.value) is auth.LoginError
+    assert not login_client.captcha_solved
+
+    # The sign-in service can waive the challenge.
+    answer(
+        login_server,
+        CAPTCHA + "/VerifyChallenge",
+        {"status": "200", "reason": "UserMessageIfBypass"},
+    )
+    await login_client.verify_captcha("ABCD")
+    assert login_client.captcha_solved
+    # Once solved, it isn't sent again.
+    answer(login_server, CAPTCHA + "/VerifyChallenge", {"status": "500"})
+    await login_client.verify_captcha("ABCD")
+
+
+@pytest.mark.parametrize(
+    ("status", "exception", "message"),
+    [
+        ("429", auth.LoginRateLimited, "rate-limited"),
+        ("448", auth.LoginError, "unreachable"),
+        ("500", auth.LoginError, "could not start phone verification"),
+    ],
+)
+async def test_phone_verification_that_cannot_start(
+    login_server, login_client, status, exception, message
+):
+    await reach_phone_verification(login_server, login_client, captcha=False)
+    login_server["verify_request_status"] = status
+    with pytest.raises(exception, match=message) as error:
+        await login_client.request_mfa_verification("onewaysms")
+    assert type(error.value) is exception
+    assert login_client.mfa_requested_at is None
+
+
+@pytest.mark.parametrize(
+    ("status", "exception"), [("429", auth.LoginRateLimited), ("500", auth.LoginError)]
+)
+async def test_code_check_that_fails(login_server, login_client, status, exception):
+    await reach_phone_verification(login_server, login_client, captcha=False)
+    await login_client.request_mfa_verification("onewaysms")
+    with pytest.raises(auth.InvalidVerificationCode, match="Enter the 6-digit"):
+        await login_client.verify_mfa_code("  ")
+    answer(login_server, VERIFY, {"status": status})
+    with pytest.raises(exception) as error:
+        await login_client.verify_mfa_code("123456")
+    assert type(error.value) is exception
+    assert not login_server["exchanged"]
+
+
+@pytest.mark.parametrize(
+    ("status", "exception", "message"),
+    [
+        ("448", auth.MfaCallTimeout, "unreachable"),
+        ("500", auth.LoginError, "could not complete phone call"),
+    ],
+)
+async def test_phone_call_that_fails(login_server, login_client, status, exception, message):
+    await reach_phone_verification(login_server, login_client, captcha=False)
+    await login_client.request_mfa_verification("dialphone")
+    login_server["call_poll_statuses"] = [status]
+    with pytest.raises(exception, match=message) as error:
+        await login_client.poll_mfa_call()
+    assert type(error.value) is exception
+    assert login_server["call_polls"] == 1
+
+
+async def test_code_expiry_without_usable_limits_from_the_page(login_client, monkeypatch):
+    """A page that gives no usable limits gets three tries and 100 seconds."""
+    login_client.settings = {"config": {"retryLimit": "many", "pollIntervalInMilliseconds": "soon"}}
+    # Nothing was requested yet, so nothing can have expired.
+    assert not login_client._mfa_verification_expired()
+    login_client.mfa_attempts = 3
+    assert login_client._mfa_verification_expired()
+
+    login_client.mfa_attempts = 0
+    monkeypatch.setattr(auth.time, "monotonic", lambda: 1000.0)
+    login_client.mfa_requested_at = 901.0
+    assert not login_client._mfa_verification_expired()
+    login_client.mfa_requested_at = 900.0
+    assert login_client._mfa_verification_expired()

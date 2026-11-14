@@ -7,6 +7,7 @@ import type { GalleryVariant } from "../gallery/types";
 import { renderDrawing } from "../src/drawings/index";
 import type { DrawingInput, DrawingState } from "../src/drawings/types";
 import { makeTranslate, type Translate } from "../src/i18n";
+import { numberProblems } from "./drawing-markup";
 
 /**
  * Words printed on the appliance itself, which stay as Wolf prints them whatever the panel's
@@ -64,6 +65,8 @@ export function checkSvg(svg: SVGSVGElement, uid: string): void {
   for (const bad of ["NaN", "undefined", "Infinity", "[object Object]"]) {
     expect(markup.includes(bad), `no ${bad} in the markup`).toBe(false);
   }
+  // Lit writes an attribute bound to undefined as empty, which the scan above can't see.
+  expect(numberProblems(markup), "no empty number or negative size").toEqual([]);
 
   // Several drawings share a shadow root, so every id carries the uid and none repeats.
   const ids = [...svg.querySelectorAll("[id]")].map((element) => element.id);

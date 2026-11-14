@@ -26,11 +26,21 @@ export interface HassArea {
   floor_id?: string | null;
 }
 
+/** "ready" each time the socket (re)connects and has signed in; "disconnected" when it's lost. */
+export type HassConnectionEvent = "ready" | "disconnected";
+
 export interface HassConnection {
+  /**
+   * `resubscribe: false` keeps home-assistant-js-websocket from sending the subscription again
+   * by itself after a reconnect, where a failure would reach no one.
+   */
   subscribeMessage<T>(
     callback: (message: T) => void,
     message: Record<string, unknown>,
+    options?: { resubscribe?: boolean },
   ): Promise<() => Promise<void>>;
+  addEventListener(type: HassConnectionEvent, listener: () => void): void;
+  removeEventListener(type: HassConnectionEvent, listener: () => void): void;
 }
 
 export interface HomeAssistant {

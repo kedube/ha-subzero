@@ -9,7 +9,7 @@ import {
   wifiQuality,
   withUnit,
 } from "../src/families/common";
-import { eventName, eventsFrom, ovenNames } from "../src/families/events";
+import { eventName, eventsFrom, liveEvent, ovenNames } from "../src/families/events";
 import type { HomeAssistant } from "../src/hass";
 import { makeTranslate } from "../src/i18n";
 import { range, wallOven } from "./fixtures/appliances";
@@ -62,6 +62,8 @@ describe("readouts", () => {
     expect(formatNumber(hass("en", "space_comma"), 1234.5, 1).replace(/\s/g, " ")).toBe("1 234,5");
     expect(formatNumber(hass("de", "none"), 1234.5, 1)).toBe("1234.5");
     expect(formatNumber(hass("fr"), 454, 1)).toBe("454");
+    // Home Assistant's "1'234.56": Swiss German's apostrophe and point, whichever apostrophe it writes.
+    expect(formatNumber(hass("en", "quote_decimal"), 1234.5, 1).replace(/[’‘]/g, "'")).toBe("1'234.5");
   });
 
   it("shows a sensor with its unit, as the frontend formats it when it can", () => {
@@ -111,6 +113,33 @@ describe("events", () => {
       { type: "dishwasher_started", time: Date.parse("2026-10-22T10:00:00Z") },
     ]);
     expect(eventsFrom(undefined, since)).toEqual([]);
+  });
+
+  it("reads the event entity's live state as its newest event", () => {
+    const fired = (state: string, attributes: Record<string, unknown>) => ({ entity_id: "event.x", state, attributes, last_changed: state, last_updated: state });
+    expect(liveEvent(fired("2026-10-24T17:59:30.000+00:00", { event_type: "dishwasher_complete" }))).toEqual({
+      type: "dishwasher_complete",
+      time: Date.parse("2026-10-24T17:59:30Z"),
+    });
+    // At the appliance's own time, as its history row reads.
+    const late = fired("2026-10-24T17:59:30.000+00:00", { event_type: "oven_preheated", appliance_timestamp: "2026-10-24T17:40:00+00:00" });
+    expect(liveEvent(late)?.time).toBe(Date.parse("2026-10-24T17:40:00Z"));
+    expect(liveEvent(fired("unknown", {}))).toBeNull();
+    expect(liveEvent(fired("unavailable", { event_type: "oven_preheated" }))).toBeNull();
+    expect(liveEvent(undefined)).toBeNull();
+  });
+
+  it("lists an event once when the live state follows its own history row", () => {
+    // As HistoryCache.states hands them over: the rows as sent, then a live state they lacked.
+    const rows = [
+      { s: "2026-10-23T08:30:00.000+00:00", a: { event_type: "dishwasher_complete" }, lu: 2 },
+      { state: "2026-10-24T17:59:30.000+00:00", attributes: { event_type: "dishwasher_started" }, last_changed: "2026-10-24T17:59:30.000+00:00" },
+      { state: "2026-10-23T08:30:00.000+00:00", attributes: { event_type: "dishwasher_complete" }, last_changed: "2026-10-23T08:30:00.000+00:00" },
+    ];
+    expect(eventsFrom(rows, since)).toEqual([
+      { type: "dishwasher_started", time: Date.parse("2026-10-24T17:59:30Z") },
+      { type: "dishwasher_complete", time: Date.parse("2026-10-23T08:30:00Z") },
+    ]);
   });
 
   it("names events in the user's language", () => {

@@ -10,7 +10,7 @@ import time
 import uuid
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import aclosing
+from contextlib import AsyncExitStack, aclosing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -34,6 +34,8 @@ API_BASE = "https://prod.iot.subzero.com"
 SIGNALR_ORIGIN = "https://sznacasigprod.service.signalr.net"
 SEPARATOR = "\x1e"
 PING_INTERVAL = 15
+# Seconds a new notification connection has to open and answer the handshake.
+CONNECT_TIMEOUT = 30
 # How many recent notification connections, and failed attempts to open one,
 # diagnostics list, newest last.
 RECENT_CONNECTIONS = 10
@@ -808,11 +810,17 @@ class SubZeroClient:
             id=connection
         )
         try:
-            async with self.session.ws_connect(
-                ws_url, headers={**APP_HEADERS, **headers}, max_msg_size=262144
-            ) as websocket:
-                await websocket.send_str('{"protocol":"json","version":1}' + SEPARATOR)
-                first = await websocket.receive(timeout=20)
+            async with AsyncExitStack() as stack:
+                # A server that accepts the connection and then says nothing would
+                # otherwise hold push down for as long as the session's own timeout.
+                async with asyncio.timeout(CONNECT_TIMEOUT):
+                    websocket = await stack.enter_async_context(
+                        self.session.ws_connect(
+                            ws_url, headers={**APP_HEADERS, **headers}, max_msg_size=262144
+                        )
+                    )
+                    await websocket.send_str('{"protocol":"json","version":1}' + SEPARATOR)
+                    first = await websocket.receive(timeout=20)
                 if first.type != aiohttp.WSMsgType.TEXT or SEPARATOR not in first.data:
                     raise ApiError("Sub-Zero did not complete the notification handshake.")
                 handshake, pending = first.data.split(SEPARATOR, 1)
@@ -830,33 +838,50 @@ class SubZeroClient:
                 self.connection_history.append(connection)
                 end = "closed"
                 channel_events: deque[tuple[str, ApiError | ChannelOpened]] = deque()
+                # Set with each channel event, so one is delivered as it happens rather
+                # than with the next message or ping.
+                channel_event = asyncio.Event()
                 pending_channels = set(device_ids)
+
+                def report(device_id: str, event: ApiError | ChannelOpened) -> None:
+                    channel_events.append((device_id, event))
+                    channel_event.set()
 
                 async def open_channels() -> None:
                     backoff = RECONNECT_DELAY
+                    retrying = False
                     while pending_channels:
+                        limited = 0.0
                         for index, device_id in enumerate(device_ids, 1):
                             if device_id not in pending_channels:
                                 continue
                             _LOGGER.debug("Opening update channel for appliance %d", index)
                             try:
                                 await self.open_channel(device_id)
-                            except RateLimited:
-                                raise
+                            except RateLimited as error:
+                                if not retrying:
+                                    raise
+                                # Only appliances whose channel already failed are left.
+                                # The channels that opened keep delivering, so the limit
+                                # postpones the retry instead of ending the connection.
+                                limited = error.retry_after
+                                break
                             except ApiError as error:
                                 if device_id in pending_channels:
-                                    channel_events.append((device_id, error))
+                                    report(device_id, error)
                             else:
                                 _LOGGER.debug("Update channel accepted for appliance %d", index)
-                                channel_events.append((device_id, ChannelOpened()))
+                                report(device_id, ChannelOpened())
                                 pending_channels.discard(device_id)
                         if pending_channels:
-                            await asyncio.sleep(backoff + random.uniform(0, 5))
+                            await asyncio.sleep(max(backoff, limited) + random.uniform(0, 5))
                             backoff = min(backoff * 2, MAX_RECONNECT_DELAY)
+                            retrying = True
 
                 opening = asyncio.create_task(open_channels())
                 receiving = asyncio.create_task(websocket.receive())
-                tasks = {opening, receiving}
+                reported = asyncio.create_task(channel_event.wait())
+                tasks = {opening, receiving, reported}
                 try:
                     next_ping = time.monotonic() + PING_INTERVAL
                     last_received = time.monotonic()
@@ -925,6 +950,12 @@ class SubZeroClient:
                             timeout=max(0.1, min(next_ping, renew_at) - time.monotonic()),
                             return_when=asyncio.FIRST_COMPLETED,
                         )
+                        if reported.done():
+                            # The events are yielded at the top of the loop.
+                            channel_event.clear()
+                            tasks.discard(reported)
+                            reported = asyncio.create_task(channel_event.wait())
+                            tasks.add(reported)
                         if opening.done():
                             opening.result()
                             tasks.discard(opening)
@@ -948,6 +979,7 @@ class SubZeroClient:
                     connection.update(ended=datetime.now(UTC).isoformat(), end=end)
                     opening.cancel()
                     receiving.cancel()
-                    await asyncio.gather(opening, receiving, return_exceptions=True)
+                    reported.cancel()
+                    await asyncio.gather(opening, receiving, reported, return_exceptions=True)
         except aiohttp.ClientError, TimeoutError:
             raise ApiError("Could not maintain Sub-Zero's notification connection.") from None

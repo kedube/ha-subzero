@@ -34,6 +34,10 @@ export interface DrawingInput {
   pixelHeight?: number;
 }
 
+/**
+ * One cavity's live state. The drawings read it through oven-state.ts, which holds the rules
+ * they share, so the range, the wall oven and the generic oven can't disagree about a state.
+ */
 export interface OvenState {
   /** The cavity is on (`cav_unit_on`). */
   on: boolean;
@@ -45,6 +49,12 @@ export interface OvenState {
   door_open: boolean;
   probe: boolean;
   remote_ready: boolean;
+  /**
+   * The cavity is in its Self clean mode. It counts only while the cavity is on: a drawing shows
+   * self-clean (the hotter glow, the lock, "CLEAN", "self-cleaning") when `on && self_clean`, and
+   * draws an oven that's off as off whatever mode it last reported. `isSelfCleaning` in
+   * oven-state.ts is that rule; nothing else should read this field.
+   */
   self_clean: boolean;
   /** The cavity temperature, formatted (e.g. "350°"), only while on; null while off. */
   temp: string | null;

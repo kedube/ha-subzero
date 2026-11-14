@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DrawingInput, DrawingState } from "../src/drawings/types";
 import type { ApplianceContext, Control, DisplayText, FamilyModel, Section } from "../src/families/types";
 // First, so Lit finds its dev-mode notice already silenced.
-import { SPECS, entity, flush, last, makeAppliance, makeHass, settle, text } from "./shell-fixtures";
+import { SPECS, deferred, entity, flush, last, makeAppliance, makeHass, settle, text } from "./shell-fixtures";
 
 // The full view is tested against a stand-in family model and drawing, so it checks the view.
 const fake = vi.hoisted(() => ({
@@ -166,6 +166,135 @@ describe("sz-appliance-view", () => {
     await settle(view);
     const names = [...shadow(view).querySelectorAll(".events li span")].map(text);
     expect(names).toEqual(["Right oven · Preheat complete", "Left oven · Door open"]);
+  });
+
+  it("lists an event that has just fired, which history doesn't hold yet", async () => {
+    // The recorder writes a few seconds behind, so each reply ends at the event before.
+    const started = { s: "2026-10-24T10:00:00.000+00:00", a: { event_type: "dishwasher_started" }, lu: 1 };
+    const complete = { s: "2026-10-24T11:58:00.000+00:00", a: { event_type: "dishwasher_complete" }, lu: 2 };
+    const later = deferred<unknown>();
+    const callWS = vi.fn().mockResolvedValueOnce({ [EVENT]: [started] }).mockReturnValueOnce(later.promise);
+    const fired = entity(EVENT, complete.s, complete.a, complete.s);
+    const view = await mount(hassWith({ states: { [EVENT]: fired }, callWS: callWS as unknown as HomeAssistant["callWS"] }));
+    await flush();
+    await settle(view);
+    const names = () => [...shadow(view).querySelectorAll(".events li span")].map(text);
+    expect(names()).toEqual(["Wash cycle complete", "Wash cycle started"]);
+    // The next one shows at once, over the list from before, and stays once history is read again.
+    const at = "2026-10-24T11:59:30.000+00:00";
+    view.hass = { ...view.hass!, states: { [EVENT]: entity(EVENT, at, { event_type: "dishwasher_service_required" }, at) } };
+    await settle(view);
+    expect(callWS).toHaveBeenCalledTimes(2);
+    expect(names()).toEqual(["Dishwasher service required", "Wash cycle complete", "Wash cycle started"]);
+    later.resolve({ [EVENT]: [started, complete] });
+    await flush();
+    await settle(view);
+    expect(names()).toEqual(["Dishwasher service required", "Wash cycle complete", "Wash cycle started"]);
+  });
+
+  it("keeps a control busy until the last of its overlapping calls returns", async () => {
+    fake.sections = [{ id: "options", title: "Options", controls: [toggle("heated_dry_on", "Extra dry")] }];
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    const callService = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const view = await mount(hassWith({ callService: callService as unknown as HomeAssistant["callService"] }));
+    const control = shadow(view).querySelector("sz-toggle") as HTMLElement & { pending: boolean };
+    const flip = async () => {
+      control.shadowRoot!.querySelector<HTMLButtonElement>("[role=switch]")!.click();
+      await settle(view);
+    };
+    await flip();
+    await flip();
+    expect(callService).toHaveBeenCalledTimes(2);
+    expect(control.pending).toBe(true);
+    first.resolve(undefined);
+    await settle(view);
+    expect(control.pending).toBe(true);
+    second.resolve(undefined);
+    await settle(view);
+    expect(control.pending).toBe(false);
+  });
+
+  it("opens more-info for a control's entity from its label, and for a reading's by its property key", async () => {
+    const rinse: Control = { kind: "reading", id: "rinse_aid_low", label: "Rinse aid", value: "OK" };
+    const model: Control = { kind: "reading", id: "model", label: "Model", value: "DW2450" };
+    fake.sections = [{ id: "options", title: "Options", controls: [toggle("heated_dry_on", "Extra dry"), rinse, model] }];
+    const appliance = makeAppliance("dishwasher", SPECS.dishwasher, {
+      entities: { ...DISHWASHER.entities, rinse_aid_low: { binary_sensor: "binary_sensor.dishwasher_rinse_aid_low" } },
+    });
+    const view = await mount(hassWith(), appliance);
+    const heard: unknown[] = [];
+    // As Home Assistant hears it: on its root element, above the panel.
+    const listen = (event: Event) => heard.push((event as CustomEvent).detail);
+    document.body.addEventListener("hass-more-info", listen);
+    const label = (tag: string, nth = 0) => shadow(view).querySelectorAll(tag)[nth].shadowRoot!.querySelector<HTMLButtonElement>("button.more");
+    label("sz-toggle")!.click();
+    label("sz-reading")!.click();
+    document.body.removeEventListener("hass-more-info", listen);
+    expect(heard).toEqual([{ entityId: "switch.heated_dry_on" }, { entityId: "binary_sensor.dishwasher_rinse_aid_low" }]);
+    // The model number isn't an entity's, so its label is only a label.
+    expect(label("sz-reading", 1)).toBeNull();
+  });
+
+  it("shows a week of events, and a month once asked", async () => {
+    const recent = { s: "2026-10-24T11:00:00.000+00:00", a: { event_type: "dishwasher_complete" }, lu: 2 };
+    const older = { s: "2026-10-03T09:00:00.000+00:00", a: { event_type: "rinse_aid_low" }, lu: 1 };
+    const callWS = vi.fn(async (message: Record<string, unknown>) => ({
+      [EVENT]: Date.parse(String(message.start_time)) < Date.parse("2026-10-10T00:00:00Z") ? [older, recent] : [recent],
+    }));
+    const view = await mount(hassWith({ callWS: callWS as unknown as HomeAssistant["callWS"] }));
+    await flush();
+    await settle(view);
+    const names = () => [...shadow(view).querySelectorAll(".events li span")].map(text);
+    const more = () => shadow(view).querySelector<HTMLButtonElement>(".more-events");
+    expect(names()).toEqual(["Wash cycle complete"]);
+    expect(text(more())).toBe("Show 30 days");
+    more()!.click();
+    await settle(view);
+    await flush();
+    await settle(view);
+    expect(callWS).toHaveBeenCalledTimes(2);
+    expect(callWS.mock.calls[1][0]).toMatchObject({ start_time: "2026-09-24T12:00:00.000Z" });
+    expect(names()).toEqual(["Wash cycle complete", "Rinse aid low"]);
+    expect(more()).toBeNull();
+  });
+
+  it("says how far back it looked when there are no events, and still offers the month", async () => {
+    const view = await mount();
+    await flush();
+    await settle(view);
+    const events = () => [...shadow(view).querySelectorAll("details")].find((card) => text(card.querySelector("h2")) === "Recent events")!;
+    expect(text(events().querySelector(".note"))).toBe("No events in the last 7 days.");
+    events().querySelector<HTMLButtonElement>(".more-events")!.click();
+    await settle(view);
+    await flush();
+    await settle(view);
+    expect(text(events().querySelector(".note"))).toBe("No events in the last 30 days.");
+    expect(events().querySelector(".more-events")).toBeNull();
+  });
+
+  it("runs on the panel's clock when it has one, and keeps its own only without", async () => {
+    vi.useFakeTimers({ now: Date.parse("2026-10-24T12:00:00.000Z"), toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      fake.sections = [{ id: "options", title: "Options", controls: [toggle("heated_dry_on", "Extra dry")] }];
+      const view = await mount();
+      const before = fake.renders;
+      await vi.advanceTimersByTimeAsync(3500);
+      await settle(view);
+      expect(fake.renders).toBe(before);
+      expect(vi.getTimerCount()).toBe(0);
+      // Without the panel's clock, the view ticks every second itself.
+      view.now = undefined;
+      await settle(view);
+      const own = fake.renders;
+      await vi.advanceTimersByTimeAsync(2100);
+      await settle(view);
+      expect(fake.renders).toBe(own + 2);
+      view.remove();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("greys the display while it has nothing live to show", async () => {

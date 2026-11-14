@@ -174,6 +174,15 @@ async def test_the_snapshot_describes_each_appliance(hass, cloud_appliance, hass
         "panel_colors": PANEL_COLORS,
         "forms": list(FORMS[family]),
     }
+    # The spec each offered form would give, for the Appearance editor's preview.
+    assert set(appliance["form_specs"]) == {appliance["detected_form"], *FORMS[family]}
+    assert appliance["form_specs"][appliance["detected_form"]] == appliance["spec"]
+    assert all(spec["form"] == form for form, spec in appliance["form_specs"].items())
+    # The DF48850 has knobs and two ovens, which the app calls right and left.
+    assert appliance["traits"] == {
+        "knob_oven": family == "range",
+        "left_right_ovens": family == "range",
+    }
     assert appliance["entities"] == registered_entities(hass, cloud_appliance.entry)
     assert appliance["entities"]["appliance_event"] == {"event": "event.kitchen_appliance_event"}
     assert appliance["entities"]["active_faults"] == {"sensor": "sensor.kitchen_active_faults"}
@@ -581,13 +590,16 @@ async def test_appearance_is_saved_pushed_and_reset(
     }
     assert (await next_message(hass, client))["appliances"][0]["appearance"] == expected
 
-    # A field set to null returns to its default.
+    # A field set to null returns to its default, and a color goes with its panel finish,
+    # as it does in the editor.
     response = await set_appearance(client, {"handle": None, "finish": "stainless"})
     assert response["result"] == {"appearance": DEFAULTS}
-    # The color waits for a panel finish to be chosen again.
-    assert saved_appearance(hass_storage) == {"appliance": {"panel_color": "#9caf88"}}
+    assert saved_appearance(hass_storage) == {}
     response = await set_appearance(client, {"finish": "panel"})
-    assert response["result"]["appearance"]["panel_color"] == "#9caf88"
+    assert response["result"]["appearance"]["panel_color"] is None
+    # Nor is one kept for another finish.
+    response = await set_appearance(client, {"finish": "black", "panel_color": "#9caf88"})
+    assert saved_appearance(hass_storage) == {"appliance": {"finish": "black"}}
 
     # Null resets the whole Appearance.
     response = await set_appearance(client, None)
@@ -614,6 +626,33 @@ async def test_a_form_override_changes_the_spec(hass, cloud_appliance, hass_ws_c
     await set_appearance(client, {"form": None})
     [appliance] = (await next_message(hass, client))["appliances"]
     assert appliance["spec"]["form"] == detected
+
+
+def test_form_specs_bring_what_comes_with_each_form():
+    """The editor previews a form as saving it would draw it, not with the form alone swapped."""
+    # A wine column has glass doors, which a refrigerator column in its place doesn't.
+    wine = appliance_drawing({"wine_set_temp": 55, "wine2_set_temp": 60}, None, "DEC2450W")
+    assert wine["spec"]["form"] == "column_wine"
+    assert wine["spec"]["glass"] is True
+    assert wine["form_specs"]["column_wine"] == wine["spec"]
+    assert wine["form_specs"]["column_refrigerator"]["glass"] is False
+    # Drawer units say what their drawers hold.
+    assert wine["form_specs"]["undercounter_drawers"]["drawers"] == "refrigerator"
+    assert wine["form_specs"]["column_refrigerator"]["drawers"] is None
+    # A saved form doesn't change what the others would be.
+    saved = appliance_drawing(
+        {"wine_set_temp": 55, "wine2_set_temp": 60}, {"form": "column_refrigerator"}, "DEC2450W"
+    )
+    assert saved["spec"] == wine["form_specs"]["column_refrigerator"]
+    assert saved["form_specs"] == wine["form_specs"]
+
+    # A wall oven's cavities follow its form.
+    oven = appliance_drawing({"cav_unit_on": False}, None, "SO3050PM")
+    assert [slot["position"] for slot in oven["form_specs"]["single"]["ovens"]] == ["single"]
+    assert [slot["position"] for slot in oven["form_specs"]["double"]["ovens"]] == [
+        "upper",
+        "lower",
+    ]
 
 
 @pytest.fixture
@@ -728,8 +767,17 @@ def test_each_family_offers_its_appearance():
         "style": ["professional", "transitional", "contemporary"],
         "forms": list(FORMS["wall_oven"]),
     }
-    # Only knob ovens have knobs to color.
-    assert appearance_options({"family": "wall_oven", "knob": False})["knobs"] is None
+    # Only ovens drawn with knobs have knobs to color: the M series, an oven whose series
+    # is unknown, which is drawn as one, and any other the integration knows has a knob.
+    for series, knob, offered in (
+        ("e", False, False),
+        ("l", False, False),
+        ("e", True, True),
+        ("m", False, True),
+        (None, False, True),
+    ):
+        spec = {"family": "wall_oven", "series": series, "knob": knob}
+        assert (appearance_options(spec)["knobs"] is not None) is offered, spec
     for family in ("hood", "generic"):
         assert appearance_options({"family": family}) == {
             "finish": ["stainless"],

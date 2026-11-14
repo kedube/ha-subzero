@@ -22,7 +22,8 @@ import {
 } from "./hood/parts";
 import type { Translate } from "../i18n";
 import type { DrawingRenderer } from "./types";
-import { HOOD_LIGHT, clamp, materialDefs, materialIds, round, url } from "./wall-oven/materials";
+import { Ids, clamp, round } from "./materials-core";
+import { HOOD_LIGHT, materialDefs, materialIds, url } from "./wall-oven/materials";
 import { spoken } from "./words";
 
 /** The island hood's chimney shows this much above the canopy, fading out over its upper part. */
@@ -52,8 +53,9 @@ export const renderHood: DrawingRenderer = (input) => {
     halo: state?.halo ?? false,
     fan: state?.fan ?? 0,
   };
-  const m = materialIds(input.uid);
-  const ids = hoodIds(input.uid);
+  const drawing = new Ids(input.uid);
+  const m = materialIds(drawing);
+  const ids = hoodIds(drawing);
   // The liner sits a little inside its surround; the other hoods' fronts span their full width.
   const inset = form === "insert" ? 8 : 0;
   // A liner's band hides in its surround, so its rolled edge sits right under the wood.
@@ -86,7 +88,7 @@ export const renderHood: DrawingRenderer = (input) => {
           parts: { knob: true, wideBlur: look.light > 0, offline: !input.state.available },
         })}
         ${hoodDefs(ids, look, input.theme)}
-        <radialGradient id=${`${m.uid}-wall-shadow`}>
+        <radialGradient id=${m.ids.id("wall-shadow")}>
           <stop offset="0" stop-color="#000" stop-opacity=${shadow} />
           <stop offset="1" stop-color="#000" stop-opacity="0" />
         </radialGradient>
@@ -94,7 +96,7 @@ export const renderHood: DrawingRenderer = (input) => {
       ${form === "island"
         ? nothing
         : svg`<ellipse cx=${width / 2} cy=${bottom + 6} rx=${width * 0.52} ry="12"
-            fill=${url(`${m.uid}-wall-shadow`)} />`}
+            fill=${url(m.ids.id("wall-shadow"))} />`}
       <g filter=${input.state.available ? nothing : url(m.offline)}>
         ${lightSpill(m, ids, lights, bottom, look, SPILL, input.theme)}
         ${form === "island" ? chimney(m, ids, width, 0, CHIMNEY) : nothing}

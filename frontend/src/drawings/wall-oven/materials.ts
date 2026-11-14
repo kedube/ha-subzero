@@ -1,5 +1,6 @@
 import { nothing, svg, type SVGTemplateResult } from "lit";
 import type { KnobColor } from "../../types";
+import { floorShadowStrength, KNOB_PALETTE, knobFace, mix, offlineFilter, satinTube, type Ids } from "../materials-core";
 
 /**
  * Materials for Wolf's stainless cooking and ventilation drawings (wall ovens and hoods), matched
@@ -10,9 +11,6 @@ import type { KnobColor } from "../../types";
  */
 
 export type MetalFinish = "stainless" | "black" | "carbon";
-
-/** A point in drawing units (0.1 inch). */
-export type Pt = readonly [number, number];
 
 interface MetalTones {
   /** The tone at the middle of the appliance, where the studio light is brightest. */
@@ -97,16 +95,22 @@ const WINDOW_GLASS: Array<[number, string]> = [
   [1, "#161616"],
 ];
 
-/** The approved range drawing's knob colors, so every Wolf knob in the panel reads alike. */
+/**
+ * The approved range drawing's knob colors, so every Wolf knob in the panel reads alike. The
+ * brushed stainless knob is a lighter satin here than on the range.
+ */
 const KNOBS: Record<KnobColor, { light: string; base: string; dark: string; rim: string }> = {
-  red: { light: "#953c42", base: "#843236", dark: "#62191e", rim: "#a5676a" },
-  black: { light: "#3c3c3f", base: "#262628", dark: "#141415", rim: "#58585c" },
+  ...KNOB_PALETTE,
   stainless: { light: "#dfe0e1", base: "#b4b6b8", dark: "#7f8285", rim: "#eff0f0" },
 };
 
+/** How an oven or hood looks while it can't be reached. */
+const OFFLINE = { saturation: 0.08, slope: 0.62, lift: 0.2 };
+
 /** The ids of the shared definitions for one drawing. */
 export interface Materials {
-  uid: string;
+  /** The drawing's ids, for the definitions a part makes for itself (clip paths, per-door gradients). */
+  ids: Ids;
   /** Brushed metal across the whole appliance, so every panel shares the studio lighting. */
   metal: string;
   /** Soft vertical light: a touch brighter at the top, darker at the bottom. */
@@ -153,33 +157,33 @@ export interface Materials {
   pillShadow: string;
 }
 
-export function materialIds(uid: string): Materials {
+export function materialIds(ids: Ids): Materials {
   return {
-    uid,
-    metal: `${uid}-metal`,
-    sheen: `${uid}-sheen`,
-    glass: `${uid}-glass`,
-    blackGlass: `${uid}-black-glass`,
-    chrome: `${uid}-chrome`,
-    capEndLeft: `${uid}-cap-l`,
-    capEndRight: `${uid}-cap-r`,
-    knob: `${uid}-knob`,
-    knobRim: `${uid}-knob-rim`,
-    bezelRight: `${uid}-bezel-r`,
-    bezelLeft: `${uid}-bezel-l`,
-    bevelTop: `${uid}-bevel-t`,
-    bevelLeft: `${uid}-bevel-l`,
-    bevelRight: `${uid}-bevel-r`,
-    bevelBottom: `${uid}-bevel-b`,
-    recessRight: `${uid}-recess-r`,
-    recessBottom: `${uid}-recess-b`,
-    dropShadow: `${uid}-drop`,
-    grain: `${uid}-grain`,
-    offline: `${uid}-offline`,
-    blur: `${uid}-blur`,
-    blurWide: `${uid}-blur-wide`,
-    blurFine: `${uid}-blur-fine`,
-    pillShadow: `${uid}-pill-shadow`,
+    ids,
+    metal: ids.id("metal"),
+    sheen: ids.id("sheen"),
+    glass: ids.id("glass"),
+    blackGlass: ids.id("black-glass"),
+    chrome: ids.id("chrome"),
+    capEndLeft: ids.id("cap-l"),
+    capEndRight: ids.id("cap-r"),
+    knob: ids.id("knob"),
+    knobRim: ids.id("knob-rim"),
+    bezelRight: ids.id("bezel-r"),
+    bezelLeft: ids.id("bezel-l"),
+    bevelTop: ids.id("bevel-t"),
+    bevelLeft: ids.id("bevel-l"),
+    bevelRight: ids.id("bevel-r"),
+    bevelBottom: ids.id("bevel-b"),
+    recessRight: ids.id("recess-r"),
+    recessBottom: ids.id("recess-b"),
+    dropShadow: ids.id("drop"),
+    grain: ids.id("grain"),
+    offline: ids.id("offline"),
+    blur: ids.id("blur"),
+    blurWide: ids.id("blur-wide"),
+    blurFine: ids.id("blur-fine"),
+    pillShadow: ids.id("pill-shadow"),
   };
 }
 
@@ -299,24 +303,7 @@ export function materialDefs(m: Materials, options: MaterialOptions): SVGTemplat
           ${stops(BLACK_GLASS)}
         </linearGradient>`
       : nothing}
-    <linearGradient id=${m.chrome} x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#8a8988" />
-      <stop offset="0.07" stop-color="#a09f9d" />
-      <stop offset="0.11" stop-color="#cac9c7" />
-      <stop offset="0.15" stop-color="#fbfbfa" />
-      <stop offset="0.3" stop-color="#ffffff" />
-      <stop offset="0.35" stop-color="#f7f7f6" />
-      <stop offset="0.4" stop-color="#dfdedc" />
-      <stop offset="0.45" stop-color="#d6d5d3" />
-      <stop offset="0.53" stop-color="#e2e1df" />
-      <stop offset="0.62" stop-color="#d8d7d5" />
-      <stop offset="0.73" stop-color="#cdccca" />
-      <stop offset="0.79" stop-color="#dad9d7" />
-      <stop offset="0.85" stop-color="#f9f9f8" />
-      <stop offset="0.9" stop-color="#f0efee" />
-      <stop offset="0.95" stop-color="#bebdbb" />
-      <stop offset="1" stop-color="#8c8b89" />
-    </linearGradient>
+    ${satinTube(m.chrome)}
     ${parts.caps
       ? svg`
         <linearGradient id=${m.capEndLeft} x1="0" y1="0" x2="1" y2="0">
@@ -332,15 +319,7 @@ export function materialDefs(m: Materials, options: MaterialOptions): SVGTemplat
           <stop offset="1" stop-color="#fff" stop-opacity="0" />
         </linearGradient>`
       : nothing}
-    ${parts.knob
-      ? svg`
-        <radialGradient id=${m.knob} cx="0.45" cy="0.32" r="0.8">
-          <stop offset="0" stop-color=${knob.light} />
-          <stop offset="0.45" stop-color=${knob.base} />
-          <stop offset="0.85" stop-color=${knob.base} />
-          <stop offset="1" stop-color=${knob.dark} />
-        </radialGradient>`
-      : nothing}
+    ${parts.knob ? knobFace(m.knob, knob) : nothing}
     ${parts.bezel
       ? svg`
         <linearGradient id=${m.knobRim}><stop offset="0" stop-color=${knob.rim} /></linearGradient>
@@ -379,17 +358,7 @@ export function materialDefs(m: Materials, options: MaterialOptions): SVGTemplat
       <feBlend in="grain" in2="SourceGraphic" mode="overlay" result="brushed" />
       <feComposite in="brushed" in2="SourceAlpha" operator="in" />
     </filter>
-    ${parts.offline
-      ? svg`
-        <filter id=${m.offline} color-interpolation-filters="sRGB">
-          <feColorMatrix type="saturate" values="0.08" />
-          <feComponentTransfer>
-            <feFuncR type="linear" slope="0.62" intercept="0.2" />
-            <feFuncG type="linear" slope="0.62" intercept="0.2" />
-            <feFuncB type="linear" slope="0.62" intercept="0.2" />
-          </feComponentTransfer>
-        </filter>`
-      : nothing}
+    ${parts.offline ? offlineFilter(m.offline, OFFLINE) : nothing}
     <filter id=${m.blur} x="-50%" y="-50%" width="200%" height="200%">
       <feGaussianBlur stdDeviation="2.4" />
     </filter>
@@ -420,8 +389,8 @@ export function contactShadow(
   ry: number,
   theme: "light" | "dark",
 ): SVGTemplateResult {
-  const id = `${m.uid}-contact`;
-  const strength = theme === "dark" ? 0.62 : 0.3;
+  const id = m.ids.id("contact");
+  const strength = floorShadowStrength(theme);
   return svg`
     <radialGradient id=${id}>
       <stop offset="0" stop-color="#000" stop-opacity=${strength} />
@@ -432,35 +401,7 @@ export function contactShadow(
   `;
 }
 
-export function points(list: readonly Pt[]): string {
-  return list.map(([px, py]) => `${round(px)},${round(py)}`).join(" ");
-}
-
-export function round(value: number): number {
-  return Math.round(value * 100) / 100;
-}
-
-export function clamp(value: number, low = 0, high = 1): number {
-  return Math.min(high, Math.max(low, value));
-}
-
-/** Linear interpolation between two "#rrggbb" colors. */
-export function mix(from: string, to: string, t: number): string {
-  const a = parse(from);
-  const b = parse(to);
-  const k = clamp(t);
-  return `#${a
-    .map((channel, index) => Math.round(channel + (b[index] - channel) * k))
-    .map((channel) => channel.toString(16).padStart(2, "0"))
-    .join("")}`;
-}
-
-/** A color scaled toward black (factor below 1) or white (above 1). */
-export function shade(color: string, factor: number): string {
+/** A metal tone scaled toward black (factor below 1) or white (above 1), as the light falls off. */
+function shade(color: string, factor: number): string {
   return factor <= 1 ? mix("#000000", color, factor) : mix(color, "#ffffff", factor - 1);
-}
-
-function parse(color: string): number[] {
-  const hex = color.replace("#", "");
-  return [0, 2, 4].map((offset) => parseInt(hex.slice(offset, offset + 2), 16));
 }

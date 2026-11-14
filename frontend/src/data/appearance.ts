@@ -26,7 +26,7 @@ export function isHexColor(value: unknown): value is string {
 }
 
 // The integration's panel colors (PANEL_COLORS in panel_api.py), by the name the editor gives them.
-const PANEL_COLOR_NAMES: Record<string, string> = {
+export const PANEL_COLOR_NAMES: Record<string, string> = {
   "#f4f2ec": "white",
   "#ece4d2": "cream",
   "#9aa0a6": "gray",
@@ -74,11 +74,16 @@ export function formChoices(appliance: PanelAppliance): string[] {
 
 /**
  * The spec the preview draws with a pending form: the detected form when the form override is
- * cleared. A wall oven's cavities follow its form, as they do when the integration applies it.
+ * cleared. The integration sends the spec each form would give, with everything that comes with
+ * the form worked out again (wine storage's glass door, an ice maker, drawers, a wall oven's
+ * cavities), so the preview shows what a save will. Without one for the form, the form alone
+ * changes, and a wall oven's cavities with it.
  */
 export function previewSpec(appliance: PanelAppliance, appearance: Appearance): ApplianceSpec {
   const spec = appliance.spec;
   const form = appearance.form ?? appliance.detected_form;
+  const known = appliance.form_specs?.[form];
+  if (known) return known;
   if (spec.form === form) return spec;
   if (spec.family === "wall_oven" && (form === "single" || form === "double")) {
     return wallOvenAs(spec, form);

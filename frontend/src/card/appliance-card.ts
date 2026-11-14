@@ -2,6 +2,7 @@ import { LitElement, css, html, nothing, type PropertyValues } from "lit";
 import { applianceName, relevantChange } from "../data/appliances";
 import { panelHelpers } from "../data/helpers";
 import { translatorFor } from "../data/locale";
+import { formatDateTime } from "../families/common";
 import type { ContextHelpers } from "../families/index";
 import type { HomeAssistant } from "../hass";
 import { syncTheme, tokens, toneStyles } from "../styles";
@@ -21,8 +22,8 @@ let cards = 0;
 
 /**
  * One appliance on the overview, in the GE appliance card's style: the name and a status pill,
- * the live drawing, the display where the appliance has one, and a few label and value rows.
- * The whole card is a button that opens the full view.
+ * the live drawing, the display where the appliance has one, a few label and value rows, and
+ * its latest event. The whole card is a button that opens the full view.
  */
 export class ApplianceCard extends LitElement {
   static override properties = {
@@ -97,8 +98,24 @@ export class ApplianceCard extends LitElement {
           ${safeDrawing(drawingInput(appliance, view.state, hass, this.uid, { pixelHeight: this.size.height }))}
         </div>
       </div>
-      ${renderInfoPanel(view.rows.slice(0, 3))}
+      ${renderInfoPanel(view.rows.slice(0, 3))} ${this.renderEvent(hass, appliance, view)}
     `;
+  }
+
+  /**
+   * The appliance's latest event and when it happened, under the info panel. The line is there
+   * for any appliance with an event entity, empty until it has an event, so a row of cards keeps
+   * its panels level.
+   */
+  private renderEvent(hass: HomeAssistant, appliance: PanelAppliance, view: CardView) {
+    if (!appliance.entities?.appliance_event?.event) return nothing;
+    const event = view.event;
+    return html`<div class="event">
+      ${event
+        ? html`<span class="what">${event.name}</span>
+            <time datetime=${new Date(event.time).toISOString()}>${formatDateTime(hass, event.time, this.now)}</time>`
+        : nothing}
+    </div>`;
   }
 
   private open(): void {
@@ -216,6 +233,29 @@ export class ApplianceCard extends LitElement {
         box-sizing: border-box;
         align-content: center;
         margin: auto 4% 0;
+      }
+      /* One quiet line in the panel's columns: what last happened, and when. */
+      .event {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 18px;
+        margin: 6px 4% 0;
+        padding: 0 12px;
+        color: var(--sz-muted);
+        font-size: 12.5px;
+        line-height: 18px;
+      }
+      .event .what {
+        min-width: 0;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+      .event time {
+        flex: none;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
       }
     `,
   ];

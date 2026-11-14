@@ -331,7 +331,7 @@ class SubZeroLogin:
                 raise LoginRateLimited("Sub-Zero rate-limited MFA verification requests.")
             if status != "200":
                 raise LoginError("Sub-Zero could not validate the verification code.")
-            return await self._confirm(remember_me=False)
+            return await self._confirm(password_step=False)
         except KeyError, TypeError, ValueError:
             raise LoginError("Sub-Zero returned an invalid MFA validation response.") from None
 
@@ -349,7 +349,7 @@ class SubZeroLogin:
                 result = await self._request_json("POST", path, params=params, data=data)
                 status = str(result.get("status", ""))
                 if status == "200":
-                    return await self._confirm(remember_me=False)
+                    return await self._confirm(password_step=False)
                 if status == "449":
                     continue
                 if status == "448":
@@ -359,11 +359,16 @@ class SubZeroLogin:
         except KeyError, TypeError, ValueError:
             raise LoginError("Sub-Zero returned an invalid MFA poll response.") from None
 
-    async def _confirm(self, *, remember_me: bool = True) -> dict:
+    async def _confirm(self, *, password_step: bool = True) -> dict:
+        """Follow the sign-in page's confirmation after a form step it accepted.
+
+        The password form's confirmation also says not to remember the browser, as the
+        page does with its box unticked; the phone verification's has no such choice.
+        """
         settings = self.settings
         path = settings["hosts"]["tenant"] + "/api/" + settings["api"] + "/confirmed"
         params = {
-            **({"rememberMe": "false"} if remember_me else {}),
+            **({"rememberMe": "false"} if password_step else {}),
             "csrf_token": settings["csrf"],
             "tx": settings["transId"],
             "p": settings["hosts"]["policy"],

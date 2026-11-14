@@ -24,8 +24,13 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util.hass_dict import HassKey
 
 from .appliance_spec import FORMS, appliance_spec, model_hints, refrigeration_with_form
-from .const import DOMAIN, FRIDGE_MODE_KEYS, ICE_KEYS
-from .controls import appliance_brand, control_lock_reason
+from .const import DOMAIN, FRIDGE_MODE_KEYS, ICE_KEYS, KNOB_OVEN_TYPES
+from .controls import (
+    appliance_brand,
+    appliance_type,
+    control_lock_reason,
+    has_left_and_right_ovens,
+)
 from .coordinator import SubZeroCoordinator, selected_devices
 from .frontend import SIGNAL_ENTRY_STATE, panel_entries
 
@@ -188,13 +193,23 @@ def detected_spec(data: dict, model: str | None = None) -> dict:
         return dict(GENERIC_SPEC)
 
 
+def wall_oven_knobs(spec: dict) -> bool:
+    """Whether a wall oven is drawn with knobs in the Professional style.
+
+    The M series Professional has them, and so does an oven of unknown series, which is
+    drawn as one. The panel's `hasKnobs` (drawings/wall-oven/layout.ts) adds the style, which
+    Appearance can change.
+    """
+    return bool(spec.get("knob")) or spec.get("series") in ("m", None)
+
+
 def appearance_options(spec: dict) -> dict:
     """The values the Appearance editor offers for an appliance (AppearanceOptions)."""
     family = spec.get("family")
     offered = FAMILY_OPTIONS.get(family, FAMILY_OPTIONS["generic"])
     knobs = offered["knobs"]
-    if family == "wall_oven" and not spec.get("knob"):
-        # Only knob ovens have knobs to color.
+    if family == "wall_oven" and not wall_oven_knobs(spec):
+        # Only ovens drawn with knobs have knobs to color.
         knobs = None
     return {
         "finish": list(offered["finish"]),
@@ -230,7 +245,7 @@ def effective_appearance(saved: dict, defaults: dict, options: dict) -> dict:
             appearance[name] = saved[name]
     if saved.get("form") in options["forms"]:
         appearance["form"] = saved["form"]
-    # A saved color is kept while another finish is chosen, for when panel is chosen again.
+    # A color belongs to the panel finish alone.
     color = saved.get("panel_color")
     if appearance["finish"] == "panel" and isinstance(color, str) and COLOR.fullmatch(color):
         appearance["panel_color"] = color
@@ -273,9 +288,15 @@ def appliance_drawing(data: dict, saved: dict | None, model: str | None = None) 
     detected = detected_spec(data, model)
     options = appearance_options(detected)
     appearance = effective_appearance(saved or {}, appearance_defaults(detected, model), options)
+    # What the appliance would be drawn as with each form the editor offers, so its preview
+    # shows what saving gives: a form brings more than itself, such as wine storage's glass.
+    forms = dict.fromkeys((detected.get("form"), *options["forms"]))
     return {
         "spec": apply_form(detected, appearance["form"], data),
         "detected_form": detected.get("form"),
+        "form_specs": {
+            form: apply_form(detected, form, data) for form in forms if isinstance(form, str)
+        },
         "appearance": appearance,
         "appearance_options": options,
     }
@@ -384,7 +405,8 @@ def _appliance(
     """An appliance as the panel receives it (PanelAppliance)."""
     data = appliance.data
     model = _model_number(data, device)
-    appliance_type = data.get("appliance_type")
+    reported_type = data.get("appliance_type")
+    parts = appliance_type(data)
     return {
         "device_id": device.id,
         "appliance_id": appliance.appliance_id,
@@ -392,8 +414,15 @@ def _appliance(
         "name": appliance.name,
         "brand": _brand(data, device),
         "model": model,
-        "appliance_type": appliance_type if isinstance(appliance_type, str) else None,
+        "appliance_type": reported_type if isinstance(reported_type, str) else None,
         "available": appliance.available,
+        # What the integration's own rules make of the type and properties, so the panel
+        # doesn't keep copies of them.
+        "traits": {
+            # KNOB_OVEN_TYPES leaves out the leading number appliance_type() keeps.
+            "knob_oven": parts is not None and parts[1:] in KNOB_OVEN_TYPES,
+            "left_right_ovens": has_left_and_right_ovens(data),
+        },
         **appliance_drawing(data, saved, model),
         "entities": entities,
         "locks": {key: code for key in entities if (code := lock_code(data, key)) is not None},
@@ -604,6 +633,9 @@ async def ws_set_appearance(
             saved.pop(name, None)
         else:
             saved[name] = value.lower() if name == "panel_color" else value
+    if saved.get("finish", defaults["finish"]) != "panel":
+        # A color belongs to the panel finish, so it goes with it, as the editor does.
+        saved.pop("panel_color", None)
     if saved:
         appearance[appliance_id] = saved
     else:

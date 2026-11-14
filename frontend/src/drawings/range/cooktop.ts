@@ -1,14 +1,13 @@
 import { svg, type SVGTemplateResult } from "lit";
+import { round, type Ids } from "../materials-core";
 import { CAMERA_DISTANCE, depthScale, project, TOP, type CooktopModule, type RangeLayout } from "./layout";
-import { fade, type Ids } from "./materials";
+import { fade } from "./materials";
 
 /*
  * The rangetop, seen from a little above. Cast-iron grates are modeled as bars (boxes in plan)
  * so their faces foreshorten the way the photos show: the front faces read as dark bands,
  * the tops as thin lighter strips, and the burner rings peek out between them.
  */
-
-const round = (value: number) => Math.round(value * 100) / 100;
 
 type Plan = [number, number];
 

@@ -6,7 +6,6 @@ import type { DrawingState, OvenState } from "../drawings/types";
 import type { OvenSlot } from "../types";
 import {
   anyOpen,
-  applianceType,
   base,
   buttonAction,
   buttonReady,
@@ -14,8 +13,10 @@ import {
   climateSetpoint,
   climateTakesTemperature,
   compact,
+  convertTemperature,
   countdown,
   detailsSection,
+  doorOpenText,
   doors,
   durationControl,
   formatClock,
@@ -33,7 +34,9 @@ import {
   roomTemperature,
   section,
   selectControl,
+  stateValue,
   switchToggle,
+  temperatureUnit,
   toNumber,
 } from "./common";
 import { optionLabel } from "./options";
@@ -48,23 +51,7 @@ export interface Cavity {
 
 const KITCHEN_TIMERS = ["kitchen_timer", "kitchen_timer2"] as const;
 // Modes Wolf requires starting at the oven (MANUAL_COOK_MODES in const.py).
-const MANUAL_MODES = new Set(["Broil", "Convection broil", "Proof", "Self clean"]);
-// Ovens with a mode knob, which the integration checks for mode changes (KNOB_OVEN_TYPES).
-const KNOB_TYPES = new Set([
-  "4.1.3",
-  "4.2.3",
-  "8.1.0",
-  "8.2.0",
-  "8.3.0",
-  "8.4.1",
-  "8.4.2",
-  "8.5.1",
-  "8.6.1",
-  "8.6.2",
-  "15.1.3",
-  "15.2.3",
-]);
-const RANGE_SERIES = 8;
+export const MANUAL_MODES = new Set(["Broil", "Convection broil", "Proof", "Self clean"]);
 
 // Keys every oven cavity reports one of.
 const CAVITY_KEYS = ["unit_on", "set_temp", "temp", "cook_mode", "door_ajar", "light_on", "remote_ready"];
@@ -80,7 +67,8 @@ export function hasOven(ctx: ApplianceContext): boolean {
 
 /**
  * The cavities in the drawing's order: left to right on a range, top to bottom on a wall oven.
- * The spec has them; without one, two cavities on a range (series 8) are left and right.
+ * The spec has them; without one, two cavities are left and right where the integration says the
+ * app calls them so (a range), else upper and lower.
  */
 export function cavities(ctx: ApplianceContext): Cavity[] {
   const spec = ctx.appliance.spec;
@@ -91,7 +79,7 @@ export function cavities(ctx: ApplianceContext): Cavity[] {
   }
   const found = (["cav", "cav2"] as const).filter((prefix) => reports(ctx, prefix));
   if (found.length < 2) return found.map((prefix) => ({ prefix, position: "single" }));
-  return applianceType(ctx.appliance)?.[0] === RANGE_SERIES
+  return ctx.appliance.traits?.left_right_ovens
     ? [
         { prefix: "cav2", position: "left" },
         { prefix: "cav", position: "right" },
@@ -154,22 +142,40 @@ function cavityReading(ctx: ApplianceContext, prefix: Prefix): CavityReading {
   // them with it, so those come first until the oven starts.
   const waiting = !on && remoteReady;
   const preheated = isOn(ctx, `${prefix}_at_set_temp`, "binary_sensor") === true;
-  const temperature = numberOf(ctx, `${prefix}_temp`, "sensor") ?? toNumber(climate?.attributes?.current_temperature);
-  const reported = numberOf(ctx, `${prefix}_set_temp`, "sensor");
+  // Each temperature with the unit it comes in: a sensor's own, which the user can change, or
+  // the unit system's from the climate entity.
+  const system = temperatureUnit(ctx.hass);
+  const measured = sensorTemperature(ctx, `${prefix}_temp`) ?? { value: toNumber(climate?.attributes?.current_temperature), unit: system };
+  const reported = sensorTemperature(ctx, `${prefix}_set_temp`);
   const chosen = toNumber(climate?.attributes?.temperature);
-  const setpoint = waiting ? (chosen ?? reported) : (reported ?? chosen);
+  const target = (waiting && chosen !== null) || !reported ? { value: chosen, unit: system } : reported;
   return {
     on,
     preheated,
-    temperature,
-    setpoint,
+    temperature: measured.value,
+    setpoint: target.value,
     mode: waiting ? read(ctx, `${prefix}_cook_mode`, "select", "sensor") : read(ctx, `${prefix}_cook_mode`, "sensor", "select"),
     light: isOn(ctx, `${prefix}_light_on`, "switch", "binary_sensor") === true,
     door: isOn(ctx, `${prefix}_door_ajar`, "binary_sensor") === true,
     probe: isOn(ctx, `${prefix}_probe_on`, "binary_sensor") === true,
     remoteReady,
-    progress: preheatProgress(on, preheated, temperature, setpoint, ctx.preheatStart(prefix), roomTemperature(ctx.hass)),
+    // Measured in the temperature's unit, where the preheat's start point is too; a setpoint in
+    // a unit that can't be converted leaves the progress unknown.
+    progress: preheatProgress(
+      on,
+      preheated,
+      measured.value,
+      convertTemperature(target.value, target.unit, measured.unit),
+      ctx.preheatStart(prefix),
+      roomTemperature(measured.unit),
+    ),
   };
+}
+
+function sensorTemperature(ctx: ApplianceContext, key: string): { value: number; unit: string } | null {
+  const entity = ctx.state(key, "sensor");
+  const value = toNumber(stateValue(entity));
+  return value === null ? null : { value, unit: temperatureUnit(ctx.hass, entity) };
 }
 
 function modeLabel(ctx: ApplianceContext, reading: CavityReading): string | null {
@@ -183,11 +189,6 @@ function setting(ctx: ApplianceContext, prefix: Prefix, reading: CavityReading):
   if (mode && level) return `${mode} · ${optionLabel(ctx.t, level)}`;
   if (mode && reading.setpoint !== null) return `${mode} ${formatTemperature(reading.setpoint)}`;
   return mode ?? (reading.setpoint !== null ? formatTemperature(reading.setpoint) : null);
-}
-
-function knobOven(ctx: ApplianceContext): boolean {
-  const type = applianceType(ctx.appliance);
-  return type !== null && KNOB_TYPES.has(type.join("."));
 }
 
 interface RunningTimer {
@@ -241,6 +242,8 @@ function cavitySection(ctx: ApplianceContext, cavity: Cavity): Section | null {
       }),
       action: { type: "climate_power", entity_id: climateId },
       value: now.on,
+      // Turning it off ends what's cooking, so that asks first too.
+      confirmOff: { text: t(`confirm.stop.${cavity.position}`), button: t("action.turn_off") },
     });
   }
 
@@ -258,7 +261,8 @@ function cavitySection(ctx: ApplianceContext, cavity: Cavity): Section | null {
     );
   }
 
-  const knobLocked = knobOven(ctx) && isOn(ctx, `${prefix}_mode_change_enabled`, "binary_sensor") === false;
+  // Only an oven with a mode knob says whether it takes mode changes.
+  const knobLocked = ctx.appliance.traits?.knob_oven === true && isOn(ctx, `${prefix}_mode_change_enabled`, "binary_sensor") === false;
   controls.push(
     selectControl(ctx, `${prefix}_cook_mode`, t("control.cook_mode"), {
       reasons: [notReady, knobLocked ? t("reason.mode_change_disabled") : null],
@@ -290,6 +294,7 @@ function cavitySection(ctx: ApplianceContext, cavity: Cavity): Section | null {
         {
           hint: now.probe ? (done ? t("value.probe_done") : close ? t("value.probe_close") : null) : null,
           tone: now.probe && done ? "warning" : "normal",
+          entity_id: ctx.entityId(`${prefix}_probe_temp`, "sensor"),
         },
       ),
     );
@@ -300,15 +305,28 @@ function cavitySection(ctx: ApplianceContext, cavity: Cavity): Section | null {
 
   const timerEnd = isOn(ctx, `${prefix}_cook_timer_active`, "binary_sensor") ? read(ctx, `${prefix}_cook_timer_end_time`, "sensor") : null;
   if (isOn(ctx, `${prefix}_cook_timer_complete`, "binary_sensor")) {
-    controls.push(reading(`${prefix}_cook_timer`, t("control.cook_timer"), t("value.done"), { tone: "warning" }));
+    controls.push(
+      reading(`${prefix}_cook_timer`, t("control.cook_timer"), t("value.done"), {
+        tone: "warning",
+        entity_id: ctx.entityId(`${prefix}_cook_timer_complete`, "binary_sensor"),
+      }),
+    );
   } else if (timerEnd) {
     const soon = isOn(ctx, `${prefix}_cook_timer_within_1min`, "binary_sensor");
-    controls.push(countdown(`${prefix}_cook_timer`, t("control.cook_timer"), timerEnd, soon ? t("value.under_minute") : null));
+    controls.push(
+      countdown(`${prefix}_cook_timer`, t("control.cook_timer"), timerEnd, soon ? t("value.under_minute") : null, {
+        entity_id: ctx.entityId(`${prefix}_cook_timer_end_time`, "sensor"),
+      }),
+    );
   }
 
   if (isOn(ctx, `${prefix}_gourmet_mode_on`, "binary_sensor")) {
     // Gourmet program names stay as the integration reports them: there are 79 of them.
-    controls.push(reading(`${prefix}_gourmet`, t("control.gourmet"), read(ctx, `${prefix}_gourmet_recipe`, "sensor") ?? t("value.on")));
+    controls.push(
+      reading(`${prefix}_gourmet`, t("control.gourmet"), read(ctx, `${prefix}_gourmet_recipe`, "sensor") ?? t("value.on"), {
+        entity_id: ctx.entityId(`${prefix}_gourmet_recipe`, "sensor") ?? ctx.entityId(`${prefix}_gourmet_mode_on`, "binary_sensor"),
+      }),
+    );
   }
 
   const level = read(ctx, `${prefix}_broil_level`, "sensor");
@@ -328,7 +346,8 @@ function timerSection(ctx: ApplianceContext, prefix: (typeof KITCHEN_TIMERS)[num
   const endsAt = parseTime(end);
   return section(prefix, t(`control.${prefix}`), [
     end ? countdown(`${prefix}_end_time`, t("control.time_left"), end, endsAt === null ? null : t("value.ends_at", { time: formatClock(ctx.hass, endsAt) })) : null,
-    durationControl(ctx, durationKey, t("control.duration"), [5, 10, 15, 30, 60]),
+    // While a timer runs, its number entity reads the whole minutes left.
+    durationControl(ctx, durationKey, t("control.duration"), [5, 10, 15, 30, 60], { remaining: true }),
     isOn(ctx, `${prefix}_complete`, "binary_sensor")
       ? buttonAction(ctx, `dismiss_${prefix}`, t("control.timer_finished"), t("action.dismiss"), {
           locks: [`dismiss_${prefix}`, durationKey],
@@ -370,7 +389,8 @@ export const oven: FamilyModel = {
         door_open: now.door,
         probe: now.probe,
         remote_ready: now.remoteReady,
-        self_clean: now.mode === "Self clean",
+        // Only while it runs: an oven that's off can still report the mode it last had.
+        self_clean: now.on && now.mode === "Self clean",
         // An oven that's off reports its last temperature, which is stale.
         temp: now.on && now.temperature !== null ? formatTemperature(now.temperature) : null,
         mode: now.on ? modeLabel(ctx, now) : null,
@@ -411,7 +431,7 @@ export const oven: FamilyModel = {
     if (KITCHEN_TIMERS.some((prefix) => isOn(ctx, `${prefix}_complete`, "binary_sensor"))) {
       return { text: t("pill.timer_done"), tone: "green" };
     }
-    if (anyOpen(ctx, doorKeys(ctx))) return { text: t("pill.door_open"), tone: "amber" };
+    if (anyOpen(ctx, doorKeys(ctx))) return { text: doorOpenText(ctx, doorKeys(ctx)), tone: "amber" };
     return { text: t("pill.off"), tone: "neutral" };
   },
 

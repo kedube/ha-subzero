@@ -60,14 +60,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: home-assistant/actions/hassfest@master
+      # Pinned to a commit, like the HACS check below, so a change to either action is
+      # one Dependabot proposes rather than one that runs unseen.
+      - uses: home-assistant/actions/hassfest@86d4564712fa02543c808e3a693dd04f9d3f8361 # master
 
   hacs:
     runs-on: ubuntu-latest
     steps:
       # Topics and issues matter only for the HACS default store, not for
       # installing this repository as a custom repository.
-      - uses: hacs/action@main
+      - uses: hacs/action@1ebf01c408f29afcb6406bd431bc98fd8cbb15aa # main
         with:
           category: integration
           comment: false

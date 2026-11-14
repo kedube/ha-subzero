@@ -1,9 +1,11 @@
 import { nothing, svg, type SVGTemplateResult } from "lit";
 import type { Translate } from "../../i18n";
 import type { KnobColor } from "../../types";
+import { KNOB_PALETTE, round, type Ids } from "../materials-core";
+import { isSelfCleaning } from "../oven-state";
 import type { OvenState } from "../types";
 import { KNOB_ROW, type DoorSlot, type RangeLayout } from "./layout";
-import { fade, KNOB_PALETTE, type Ids } from "./materials";
+import { fade } from "./materials";
 
 /*
  * The control panel as Wolf builds it: knobs in polished bezels (the bezels light up while in
@@ -12,7 +14,6 @@ import { fade, KNOB_PALETTE, type Ids } from "./materials";
  */
 
 const FONT = "'Helvetica Neue', Helvetica, Arial, sans-serif";
-const round = (value: number) => Math.round(value * 100) / 100;
 
 const KNOB_R = 11.6;
 const BEZEL_R = 13.4;
@@ -138,15 +139,15 @@ function statusBlock(
   t: Translate,
 ): SVGTemplateResult {
   const state = block.state;
-  const active = !!state && (state.on || state.self_clean);
-  if (!active) {
+  if (!state?.on) {
     return svg`
       ${screenWord(bx, y0 + h * 0.56, t("drawing.screen.off"), { size: 3, spacing: 0.3, max: bw * 0.9, fill: "#6f777f" })}
       ${state?.remote_ready ? remoteIcon(bx, y0 + h * 0.3, "#9fb3c8") : nothing}
     `;
   }
-  const preheating = !state.self_clean && !state.preheated && state.progress !== null;
-  const status = state.self_clean
+  const cleaning = isSelfCleaning(state);
+  const preheating = !cleaning && !state.preheated && state.progress !== null;
+  const status = cleaning
     ? t("drawing.screen.self_clean")
     : state.preheated
       ? t("drawing.screen.preheated")
@@ -156,7 +157,7 @@ function statusBlock(
   const icons: SVGTemplateResult[] = [];
   if (state.probe) icons.push(probeIcon(0, 0));
   if (state.remote_ready) icons.push(remoteIcon(0, 0, "#ffffff"));
-  if (state.self_clean) icons.push(lockIcon(0, 0));
+  if (cleaning) icons.push(lockIcon(0, 0));
   const spacing = 4.2;
   const iconsX = bx - ((icons.length - 1) * spacing) / 2;
   const track = Math.min(bw * 0.62, 20);
@@ -166,7 +167,7 @@ function statusBlock(
       (icon, index) => svg`<g transform=${`translate(${round(iconsX + index * spacing)} ${round(y0 + h * 0.24)})`}>${icon}</g>`,
     )}
     <text x=${bx} y=${y0 + h * 0.43} text-anchor="middle" font-family=${FONT} font-size="2.9" font-weight="600"
-      letter-spacing="0.25" fill="#ffffff">${UPPER(state.self_clean ? t("drawing.screen.clean") : (state.mode ?? ""), 12)}</text>
+      letter-spacing="0.25" fill="#ffffff">${UPPER(cleaning ? t("drawing.screen.clean") : (state.mode ?? ""), 12)}</text>
     <text x=${bx} y=${y0 + h * 0.63} text-anchor="middle" font-family=${FONT} font-size="5.4" font-weight="300"
       fill="#ffffff">${state.temp ?? ""}</text>
     ${screenWord(bx, y0 + h * 0.75, status, {
@@ -264,9 +265,7 @@ function screenUi(
 /** Whether the touchscreen is out: while a cavity is on, a timer runs, or a feature is active. */
 export function screenActive(ovens: Ovens, display: string | null): boolean {
   if (display) return true;
-  return Object.values(ovens).some(
-    (oven) => !!oven && (oven.on || oven.self_clean || oven.probe || oven.remote_ready),
-  );
+  return Object.values(ovens).some((oven) => !!oven && (oven.on || oven.probe || oven.remote_ready));
 }
 
 function touchscreen(

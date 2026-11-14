@@ -10,6 +10,7 @@ import {
   compact,
   countdown,
   detailsSection,
+  doorOpenText,
   doors,
   formatTemperature,
   has,
@@ -113,7 +114,7 @@ function zonesSection(ctx: ApplianceContext): Section | null {
     const shown = numberOf(ctx, `${zone}_display_temp`, "sensor");
     const hint = join([
       shown === null ? null : t("value.now", { temp: formatTemperature(shown) }),
-      isOn(ctx, `${zone}_door_ajar`, "binary_sensor") ? t("value.door_open") : null,
+      isOn(ctx, `${zone}_door_ajar`, "binary_sensor") ? doorOpenText(ctx, [`${zone}_door_ajar`], "value.door_open") : null,
     ]);
     // The freezer setpoint waits while Max ice runs, as on the appliance.
     const reasons = [zone === "frz" && isOn(ctx, "max_ice_on", "binary_sensor") ? t("reason.max_ice") : null];
@@ -151,7 +152,9 @@ function iceSection(ctx: ApplianceContext): Section | null {
   const maxEnd = isOn(ctx, "max_ice_on", "binary_sensor") ? read(ctx, "max_ice_end_time", "sensor") : null;
   return section("ice", t("section.ice_maker"), [
     selectControl(ctx, "ice_maker_mode", t("control.ice_maker"), { locks: ["ice_maker_mode", "ice_maker_on"] }) ??
-      reading("ice_maker_mode", t("control.ice_maker"), mode === null ? null : optionLabel(t, ICE_NAMES[mode])),
+      reading("ice_maker_mode", t("control.ice_maker"), mode === null ? null : optionLabel(t, ICE_NAMES[mode]), {
+        entity_id: ctx.entityId("ice_maker_on", "binary_sensor"),
+      }),
     maxEnd ? countdown("max_ice_end_time", t("control.max_ice_left"), maxEnd) : null,
   ]);
 }
@@ -224,7 +227,7 @@ export const refrigeration: FamilyModel = {
   status(ctx): StatusPill {
     const t = ctx.t;
     if (!ctx.appliance.available) return { text: t("pill.offline"), tone: "gray" };
-    if (anyOpen(ctx, REFRIGERATION_DOORS)) return { text: t("pill.door_open"), tone: "amber" };
+    if (anyOpen(ctx, REFRIGERATION_DOORS)) return { text: doorOpenText(ctx, REFRIGERATION_DOORS), tone: "amber" };
     if (needsService(ctx)) return { text: t("pill.service"), tone: "red" };
     if (isOn(ctx, "wine_temp_alert_on", "binary_sensor")) return { text: t("pill.temp_alert"), tone: "red" };
     if (isOn(ctx, "sabbath_on", "binary_sensor")) return { text: t("pill.sabbath"), tone: "gray" };

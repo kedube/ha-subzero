@@ -6,7 +6,9 @@ import {
   buttonReady,
   clamp,
   compact,
+  countdown,
   detailsSection,
+  doorOpenText,
   doors,
   formatClock,
   formatCountdown,
@@ -26,8 +28,8 @@ import type { ApplianceContext, Control, DisplayText, FamilyModel, InfoRow, Sect
 
 export type WashStatus = NonNullable<DrawingState["dishwasher"]>["status"];
 
-// The Wash status sensor's words, as WASH_STATUSES names them.
-const STATUSES: Record<string, WashStatus> = {
+// The Wash status sensor's words, as WASH_STATUSES in const.py names them.
+export const WASH_STATUSES: Record<string, WashStatus> = {
   Idle: "idle",
   Running: "running",
   Paused: "paused",
@@ -37,7 +39,7 @@ const STATUSES: Record<string, WashStatus> = {
   Delayed: "delayed",
   Error: "error",
 };
-const STATUS_NAMES = Object.fromEntries(Object.entries(STATUSES).map(([name, status]) => [status, name])) as Record<WashStatus, string>;
+const STATUS_NAMES = Object.fromEntries(Object.entries(WASH_STATUSES).map(([name, status]) => [status, name])) as Record<WashStatus, string>;
 // A cycle under way, which the progress ring and time left follow.
 const UNDER_WAY = new Set<WashStatus>(["running", "paused", "canceling", "drying"]);
 // DISHWASHER_SWITCHES in const.py.
@@ -46,7 +48,7 @@ const DOORS = ["door_ajar"];
 
 export function washStatus(ctx: ApplianceContext): WashStatus | null {
   const reported = read(ctx, "wash_status", "sensor");
-  if (reported !== null && reported in STATUSES) return STATUSES[reported];
+  if (reported !== null && reported in WASH_STATUSES) return WASH_STATUSES[reported];
   const on = isOn(ctx, "wash_cycle_on", "binary_sensor");
   return on === null ? null : on ? "running" : "idle";
 }
@@ -106,8 +108,8 @@ function cycleSection(ctx: ApplianceContext, status: WashStatus | null): Section
   const startsAt = waiting ? read(ctx, "delay_start_timer_end_time", "sensor") : null;
   const remoteReady = isOn(ctx, "remote_ready", "binary_sensor");
   const startKey = "remote_start_wash_cycle_on";
-  // Ticking with the view's clock, and in hours like the display, so the two read the same.
-  const left = (at: number | null) => (at === null ? null : formatCountdown(at - ctx.now, true));
+  // In hours like the display, so the two read the same.
+  const hours = { hours: true };
   const controls: Array<Control | null> = [
     has(ctx, "wash_status", "sensor")
       ? reading("wash_status", t("control.status"), status === null ? null : optionLabel(t, STATUS_NAMES[status]), {
@@ -115,11 +117,15 @@ function cycleSection(ctx: ApplianceContext, status: WashStatus | null): Section
         })
       : null,
     end
-      ? reading("wash_cycle_end_time", t("control.time_left"), left(endsAt), {
-          hint: endsAt === null ? null : t("value.ends_at", { time: formatClock(ctx.hass, endsAt) }),
-        })
+      ? countdown(
+          "wash_cycle_end_time",
+          t("control.time_left"),
+          end,
+          endsAt === null ? null : t("value.ends_at", { time: formatClock(ctx.hass, endsAt) }),
+          hours,
+        )
       : null,
-    startsAt ? reading("delay_start_timer_end_time", t("control.starts_in"), left(parseTime(startsAt))) : null,
+    startsAt ? countdown("delay_start_timer_end_time", t("control.starts_in"), startsAt, null, hours) : null,
     selectControl(ctx, "wash_cycle", t("control.wash_cycle"), { reasons: [busy], fallback: read(ctx, "wash_cycle", "sensor") }),
     selectControl(ctx, "delay_start_timer_duration", t("control.delay_start")),
   ];
@@ -214,7 +220,7 @@ export const dishwasher: FamilyModel = {
     if (status === "paused") return { text: word("paused"), tone: "neutral" };
     if (delayed(ctx, status)) return { text: word("delayed"), tone: "neutral" };
     if (status === "done") return { text: word("done"), tone: "green" };
-    if (anyOpen(ctx, DOORS)) return { text: t("pill.door_open"), tone: "amber" };
+    if (anyOpen(ctx, DOORS)) return { text: doorOpenText(ctx, DOORS), tone: "amber" };
     if (needsService(ctx)) return { text: t("pill.service"), tone: "red" };
     if (isOn(ctx, "sabbath_on", "binary_sensor")) return { text: t("pill.sabbath"), tone: "gray" };
     if (read(ctx, "mode", "select") === "Child lock") return { text: optionLabel(t, "Child lock"), tone: "neutral" };

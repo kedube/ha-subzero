@@ -1,6 +1,11 @@
 """Temperature controls for reported refrigeration zones and oven cavities."""
 
-from homeassistant.components.climate import ClimateEntity, ClimateEntityFeature, HVACMode
+from homeassistant.components.climate import (
+    ClimateEntity,
+    ClimateEntityFeature,
+    HVACAction,
+    HVACMode,
+)
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
@@ -89,6 +94,24 @@ class SubZeroClimate(SubZeroEntity, ClimateEntity):
             return HVACMode.COOL
         value = self.coordinator.data.get(f"{self._prefix}_unit_on")
         return HVACMode.HEAT if value is True else HVACMode.OFF if value is False else None
+
+    @property
+    def hvac_action(self) -> HVACAction | None:
+        """Whether an oven is off, preheating, or heating at its temperature.
+
+        Refrigeration reports nothing about its compressor, so it has no action.
+        """
+        if not self._oven:
+            return None
+        data = self.coordinator.data
+        on = data.get(f"{self._prefix}_unit_on")
+        if on is False:
+            return HVACAction.OFF
+        if on is not True:
+            return None
+        if data.get(f"{self._prefix}_at_set_temp") is False:
+            return HVACAction.PREHEATING
+        return HVACAction.HEATING
 
     @property
     def native_current_temperature(self) -> int | float | None:

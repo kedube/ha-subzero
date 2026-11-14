@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applianceName, familyRank, groupByArea, relevantChange } from "../src/data/appliances";
+import { applianceName, familyRank, groupByArea, relevantChange, uniqueDevices } from "../src/data/appliances";
 import type { HassDevice } from "../src/hass";
 import type { PanelAppliance } from "../src/types";
 import { SPECS, entity, makeAppliance, makeHass } from "./shell-fixtures";
@@ -28,6 +28,18 @@ describe("applianceName", () => {
       "Integration name",
     );
     expect(applianceName(appliance, undefined)).toBe("Integration name");
+  });
+});
+
+describe("uniqueDevices", () => {
+  it("keeps the first of the entries that share a device", () => {
+    // An appliance on two accounts: one Home Assistant device, sent once for each.
+    const fridge = makeAppliance("fridge", SPECS.sideBySide);
+    const again = { ...fridge, appliance_id: "app-fridge-again", entry_id: "entry-2" };
+    const range = makeAppliance("range", SPECS.range);
+    expect(uniqueDevices([fridge, range, again])).toEqual([fridge, range]);
+    expect(uniqueDevices([fridge, range])).toEqual([fridge, range]);
+    expect(uniqueDevices([])).toEqual([]);
   });
 });
 

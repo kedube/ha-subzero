@@ -44,3 +44,18 @@ def test_translation_has_every_string_and_placeholder(path):
     for key, text in strings.items():
         assert text.strip(), key
         assert sorted(PLACEHOLDER.findall(text)) == sorted(PLACEHOLDER.findall(ENGLISH[key])), key
+
+
+@pytest.mark.parametrize("path", sorted(TRANSLATIONS.glob("*.json")), ids=lambda path: path.stem)
+def test_entity_names_stay_distinct_on_each_platform(path):
+    """Two entities of one device can't share a name, in any language."""
+    english = json.loads((TRANSLATIONS / "en.json").read_text(encoding="utf-8"))["entity"]
+    entity = json.loads(path.read_text(encoding="utf-8"))["entity"]
+    for platform, keys in entity.items():
+        names = [value["name"] for value in keys.values()]
+        assert all(name == name.strip() for name in names), platform
+        # English shares a name only between entities no appliance has together, such as a
+        # refrigerator's Mode and a dishwasher's, and a translation may tell even those apart.
+        assert len(set(names)) >= len({value["name"] for value in english[platform].values()}), (
+            platform
+        )

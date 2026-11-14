@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { HistoryCache, lastTurnedTo, parseRows, type Change } from "../src/data/history";
+import { HistoryCache, lastTurnedTo, parseRows, readRows, type Change } from "../src/data/history";
 import type { HomeAssistant } from "../src/hass";
 import { deferred, entity, flush, makeHass } from "./shell-fixtures";
 
@@ -356,5 +356,147 @@ describe("HistoryCache.lowestAfter", () => {
     const cache = new HistoryCache();
     expect(cache.lowestAfter(makeHass(), undefined, START)).toBeNull();
     expect(cache.lowestAfter(makeHass(), TEMP, Number.NaN)).toBeNull();
+  });
+});
+
+describe("readRows", () => {
+  it("reads either form with its attributes, and keeps a row that doesn't say when", () => {
+    expect(
+      readRows([
+        { s: "a", a: { event_type: "x" }, lu: seconds("2026-10-24T08:00:00Z") },
+        { state: "b", attributes: { event_type: "y" }, last_changed: "2026-10-24T09:00:00Z" },
+        { s: "c" },
+        { s: 4, lu: 5 },
+        null,
+      ]),
+    ).toEqual([
+      { state: "a", attributes: { event_type: "x" }, at: at("2026-10-24T08:00:00Z") },
+      { state: "b", attributes: { event_type: "y" }, at: at("2026-10-24T09:00:00Z") },
+      { state: "c", attributes: {}, at: null },
+    ]);
+    expect(readRows("rows")).toEqual([]);
+  });
+});
+
+describe("HistoryCache.states", () => {
+  const EVENT = "event.dishwasher_appliance_event";
+  const fired = (time: string, type: string) => entity(EVENT, time, { event_type: type }, time);
+  const row = (time: string, type: string) => ({ s: time, a: { event_type: type }, lu: seconds(time) });
+  const live = (time: string, type: string) => ({ state: time, attributes: { event_type: type }, last_changed: time });
+  const STARTED = "2026-10-24T10:00:00.000+00:00";
+  const DONE = "2026-10-24T11:58:00.000+00:00";
+  const LOW = "2026-10-24T11:59:30.000+00:00";
+
+  function setup(state = fired(DONE, "dishwasher_complete")) {
+    const callWS = vi.fn();
+    const hass = makeHass({ states: { [EVENT]: state }, callWS: callWS as unknown as HomeAssistant["callWS"] });
+    const onChange = vi.fn();
+    let now = NOW;
+    const cache = new HistoryCache(onChange, () => now);
+    const later = (next: HomeAssistant["states"][string]) => ({ ...hass, states: { [EVENT]: next } });
+    return { callWS, hass, onChange, cache, later, wait: (ms: number) => (now += ms) };
+  }
+
+  it("asks for every state of the last days with its attributes", () => {
+    const { callWS, hass, cache } = setup();
+    callWS.mockReturnValue(new Promise(() => {}));
+    expect(cache.states(hass, EVENT, 7)).toEqual({ rows: null, error: null });
+    expect(callWS).toHaveBeenCalledWith({
+      type: "history/history_during_period",
+      start_time: "2026-10-17T12:00:00.000Z",
+      entity_ids: [EVENT],
+      include_start_time_state: false,
+      significant_changes_only: false,
+      minimal_response: false,
+      no_attributes: false,
+    });
+    // Each span of days is its own question.
+    cache.states(hass, EVENT, 30);
+    expect(callWS.mock.calls[1][0]).toMatchObject({ start_time: "2026-09-24T12:00:00.000Z" });
+    cache.states(hass, EVENT, 7);
+    expect(callWS).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives the rows as sent, and asks for a redraw when they arrive", async () => {
+    const { callWS, hass, onChange, cache } = setup();
+    const rows = [row(STARTED, "dishwasher_started"), row(DONE, "dishwasher_complete")];
+    callWS.mockResolvedValue({ [EVENT]: rows });
+    cache.states(hass, EVENT, 7);
+    await flush();
+    expect(onChange).toHaveBeenCalledOnce();
+    expect(cache.states(hass, EVENT, 7)).toEqual({ rows, error: null });
+    expect(callWS).toHaveBeenCalledOnce();
+  });
+
+  it("follows the rows with a live state the recorder hasn't written yet", async () => {
+    const { callWS, hass, cache } = setup();
+    // The recorder writes a few seconds behind: the reply ends at the event before.
+    callWS.mockResolvedValue({ [EVENT]: [row(STARTED, "dishwasher_started")] });
+    cache.states(hass, EVENT, 7);
+    await flush();
+    expect(cache.states(hass, EVENT, 7).rows).toEqual([row(STARTED, "dishwasher_started"), live(DONE, "dishwasher_complete")]);
+    // Asked again, it's the same one row, not one more each time.
+    expect(cache.states(hass, EVENT, 7).rows).toHaveLength(2);
+  });
+
+  it("keeps the rows it had while it asks again for a new state, and what it saw live until history holds it", async () => {
+    const { callWS, hass, onChange, cache, later } = setup();
+    callWS.mockResolvedValueOnce({ [EVENT]: [row(STARTED, "dishwasher_started")] });
+    cache.states(hass, EVENT, 7);
+    await flush();
+    cache.states(hass, EVENT, 7);
+
+    const second = deferred<unknown>();
+    callWS.mockReturnValueOnce(second.promise);
+    const next = later(fired(LOW, "rinse_aid_low"));
+    const waiting = [row(STARTED, "dishwasher_started"), live(DONE, "dishwasher_complete"), live(LOW, "rinse_aid_low")];
+    expect(cache.states(next, EVENT, 7).rows).toEqual(waiting);
+    expect(callWS).toHaveBeenCalledTimes(2);
+    // By now the recorder has the event before, but still not the newest.
+    second.resolve({ [EVENT]: [row(STARTED, "dishwasher_started"), row(DONE, "dishwasher_complete")] });
+    await flush();
+    expect(onChange).toHaveBeenCalledTimes(2);
+    expect(cache.states(next, EVENT, 7).rows).toEqual([
+      row(STARTED, "dishwasher_started"),
+      row(DONE, "dishwasher_complete"),
+      live(LOW, "rinse_aid_low"),
+    ]);
+    expect(callWS).toHaveBeenCalledTimes(2);
+  });
+
+  it("says why it couldn't read the history, and asks again a minute later or when told to", async () => {
+    const { callWS, hass, onChange, cache, wait } = setup();
+    const lost = { code: "unknown_error", message: "Connection lost" };
+    callWS.mockRejectedValueOnce(lost).mockRejectedValueOnce(lost).mockResolvedValue({ [EVENT]: [row(DONE, "dishwasher_complete")] });
+    cache.states(hass, EVENT, 7);
+    await flush();
+    expect(onChange).toHaveBeenCalledOnce();
+    expect(cache.states(hass, EVENT, 7)).toEqual({ rows: null, error: lost });
+    wait(59_000);
+    cache.states(hass, EVENT, 7);
+    expect(callWS).toHaveBeenCalledOnce();
+    wait(1000);
+    // The error stands while it asks again.
+    expect(cache.states(hass, EVENT, 7)).toEqual({ rows: null, error: lost });
+    expect(callWS).toHaveBeenCalledTimes(2);
+    await flush();
+    // Told to forget, it starts over at once.
+    cache.forgetStates(EVENT, 7);
+    expect(cache.states(hass, EVENT, 7)).toEqual({ rows: null, error: null });
+    expect(callWS).toHaveBeenCalledTimes(3);
+    await flush();
+    expect(cache.states(hass, EVENT, 7)).toEqual({ rows: [row(DONE, "dishwasher_complete")], error: null });
+  });
+
+  it("reads an entity that has no state yet, and nothing without an entity", async () => {
+    const { callWS, hass, cache } = setup();
+    callWS.mockResolvedValue({});
+    expect(cache.states(undefined, EVENT, 7)).toEqual({ rows: null, error: null });
+    expect(cache.states(hass, undefined, 7)).toEqual({ rows: null, error: null });
+    expect(callWS).not.toHaveBeenCalled();
+    const empty = { ...hass, states: {} };
+    cache.states(empty, EVENT, 7);
+    await flush();
+    expect(cache.states(empty, EVENT, 7)).toEqual({ rows: [], error: null });
   });
 });

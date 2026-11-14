@@ -1,7 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { ApplianceSpec, GenericSpec, RefrigerationSpec } from "../types";
 import * as forms from "./generic/forms";
-import { Defs, floorShadow, materialDefs } from "./generic/materials";
+import { floorShadow, materialDefs } from "./generic/materials";
+import { Ids } from "./materials-core";
 import type { DrawingInput } from "./types";
 import { spoken } from "./words";
 
@@ -85,7 +86,7 @@ function draw(spec: ApplianceSpec, c: forms.FormContext): forms.Drawn {
 }
 
 export function renderGeneric(input: DrawingInput): TemplateResult {
-  const d = new Defs(input.uid);
+  const d = new Ids(input.uid);
   const { state } = input;
   const drawn = draw(input.spec, {
     d,
