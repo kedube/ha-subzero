@@ -2,6 +2,17 @@
 
 Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then 2.00.
 
+## Unreleased
+
+### Fixed
+
+- Renewing the live connection no longer interrupts updates. The integration replaces its connection every 50 minutes, and it used to close the old connection before opening the new one. When Sub-Zero's live-update service refused the new connection (HTTP 429), updates stopped and every appliance became unavailable for about 8 minutes. Now the new connection opens first. If it's refused, the old one keeps delivering updates, and the integration tries again later.
+- When Sub-Zero's live-update service refuses a connection without saying how long to wait, the integration tries again after about a minute, doubling up to 10 minutes, with a random spread. Before, it always waited 10 minutes. This applies when there's no connection to keep, such as after a drop or at startup. Microsoft, which runs the service for Sub-Zero, recommends a random delay before reconnecting.
+
+### Diagnostics
+
+- In the integration download, a failed connection attempt has `renewal: true` when it was replacing a working connection, which kept delivering meanwhile. Each failed renewal is logged at info level, with when it will be tried again.
+
 ## 1.11
 
 ### Fixed

@@ -5,6 +5,7 @@ import base64
 import json
 import logging
 import time
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
 from unittest.mock import AsyncMock, MagicMock
@@ -1198,6 +1199,188 @@ async def test_requested_renewal_replaces_the_signalr_socket(
         assert client.connection_history[1]["renews_after_seconds"] == 3000
     finally:
         await stream.aclose()
+
+
+async def signalr_servers(aiohttp_server, monkeypatch, sockets, negotiate):
+    """Sub-Zero's API and the SignalR service, on hosts of their own as in production.
+
+    `negotiate` answers the SignalR negotiate. Each channel open pushes a snapshot on
+    the newest socket, and `sockets` collects the sockets, newest last.
+    """
+
+    async def negotiate_user(request):
+        return web.json_response({"url": origin + "/client/", "accessToken": "token"})
+
+    async def websocket(request):
+        socket = web.WebSocketResponse()
+        await socket.prepare(request)
+        sockets.append(socket)
+        await socket.receive_str()
+        await socket.send_str("{}" + api.SEPARATOR)
+        async for message in socket:
+            if message.type == aiohttp.WSMsgType.TEXT:
+                await socket.send_str('{"type":6}' + api.SEPARATOR)
+        return socket
+
+    async def command(request):
+        await sockets[-1].send_str(
+            json.dumps(notification({"appliance_model": "TEST-FRIDGE"}, full=True)) + api.SEPARATOR
+        )
+        return web.json_response({})
+
+    subzero = web.Application()
+    subzero.router.add_post("/signal-r/negotiateUser", negotiate_user)
+    subzero.router.add_post("/consumerapp/device/{device_id}/directmethod/executeAPICmd", command)
+    signalr = web.Application()
+    signalr.router.add_post("/client/negotiate", negotiate)
+    signalr.router.add_get("/client/", websocket)
+    subzero_server = await aiohttp_server(subzero)
+    signalr_server = await aiohttp_server(signalr)
+    origin = str(signalr_server.make_url("/")).rstrip("/")
+    monkeypatch.setattr(api, "API_BASE", str(subzero_server.make_url("/")).rstrip("/"))
+    monkeypatch.setattr(api, "SIGNALR_ORIGIN", origin)
+    monkeypatch.setattr(api, "PING_INTERVAL", 0.01)
+
+
+async def test_refused_renewal_keeps_the_current_connection(
+    hass, aiohttp_server, monkeypatch, socket_enabled
+):
+    """On 2026-11-14 the SignalR service refused renewals with a 429 and no Retry-After."""
+    negotiated = []
+    sockets = []
+
+    async def negotiate(request):
+        negotiated.append(len(sockets))
+        if len(negotiated) == 2:
+            # The current connection still delivers while its replacement is refused.
+            await sockets[0].send_str(
+                json.dumps(notification({"ref_door_ajar": True})) + api.SEPARATOR
+            )
+            return web.json_response({}, status=429)
+        return web.json_response({"connectionToken": "connection"})
+
+    await signalr_servers(aiohttp_server, monkeypatch, sockets, negotiate)
+    monkeypatch.setattr(api, "notification_lifetime", lambda _: 0.2)
+    monkeypatch.setattr(api, "RECONNECT_DELAY", 0.01)
+    monkeypatch.setattr(api, "SIGNALR_RETRY_FIRST", 1)
+    monkeypatch.setattr(api.random, "uniform", lambda low, high: low)
+    client = api.SubZeroClient(async_get_clientsession(hass), "test-key", make_tokens())
+    stream = client.watch(["test-fridge"])
+    received = []
+    try:
+        async with asyncio.timeout(5):
+            async for _, event in stream:
+                if isinstance(event, api.StateUpdate):
+                    received.append((event.full, client.connections, client.push_connected))
+                    if len(received) == 3:
+                        break
+        # The snapshot, the change on the first connection, then the replacement's snapshot.
+        assert received == [(True, 1, True), (False, 1, True), (True, 2, True)]
+        # The refused attempt opened no socket; the retry waited out the refusal.
+        assert negotiated == [0, 1, 1]
+        assert len(sockets) == 2 and sockets[0].closed
+        assert [connection["end"] for connection in client.connection_history] == [
+            "lifetime",
+            None,
+        ]
+        assert [{**attempt, "time": None} for attempt in client.failed_connections] == [
+            {
+                "time": None,
+                "error": "Sub-Zero temporarily limited requests "
+                "(SignalR negotiate, retrying in 1 s).",
+                "renewal": True,
+            }
+        ]
+        assert [(limit["api"], limit["retry_after"]) for limit in client.rate_limits] == [
+            ("signalr", 1)
+        ]
+    finally:
+        await stream.aclose()
+
+
+async def test_losing_the_connection_while_renewing_it_ends_the_attempt(
+    hass, aiohttp_server, monkeypatch, socket_enabled
+):
+    release = asyncio.Event()
+    sockets = []
+
+    async def negotiate(request):
+        if sockets:
+            # The current connection drops while the replacement is still negotiating.
+            await sockets[0].close(code=4000, message=b"Service restarting")
+            await release.wait()
+        return web.json_response({"connectionToken": "connection"})
+
+    await signalr_servers(aiohttp_server, monkeypatch, sockets, negotiate)
+    monkeypatch.setattr(api, "notification_lifetime", lambda _: 0.2)
+    client = api.SubZeroClient(async_get_clientsession(hass), "test-key", make_tokens())
+    stream = client.watch(["test-fridge"])
+    try:
+        async with asyncio.timeout(5):
+            with pytest.raises(api.ApiError, match="disconnected"):
+                async for _ in stream:
+                    pass
+        assert not client.push_connected
+        assert len(sockets) == 1
+        assert client.connection_history[-1]["end"] == (
+            "Sub-Zero's notification connection disconnected."
+        )
+        # The attempt was cut short, not refused.
+        assert not client.failed_connections
+    finally:
+        release.set()
+        await stream.aclose()
+
+
+async def test_signalr_refusals_without_retry_after_wait_longer_each_time(
+    aiohttp_server, monkeypatch, socket_enabled, tokens
+):
+    answers = iter([429, 429, 200, 429, 30])
+
+    async def negotiate(request):
+        answer = next(answers)
+        if answer == 200:
+            return web.json_response({"connectionToken": "connection"})
+        if answer == 429:
+            return web.json_response({}, status=429)
+        return web.json_response({}, status=429, headers={"Retry-After": str(answer)})
+
+    app = web.Application()
+    app.router.add_post("/client/negotiate", negotiate)
+    server = await aiohttp_server(app)
+    monkeypatch.setattr(api, "SIGNALR_ORIGIN", str(server.make_url("/")).rstrip("/"))
+    monkeypatch.setattr(api.random, "uniform", lambda low, high: low)
+    async with aiohttp.ClientSession() as session:
+        client = api.SubZeroClient(session, "test-key", tokens)
+        for _ in range(5):
+            client._holds.clear()
+            with suppress(api.RateLimited):
+                await client._json(
+                    "POST", api.SIGNALR_ORIGIN + "/client/negotiate", name="SignalR negotiate"
+                )
+    # Doubling from a minute, starting over after a success; Retry-After wins when sent.
+    assert [limit["retry_after"] for limit in client.rate_limits] == [60, 120, 60, 30]
+    assert [limit["retry_after_sent"] for limit in client.rate_limits] == [
+        False,
+        False,
+        False,
+        True,
+    ]
+
+
+def test_signalr_retry_delay_is_random_and_capped(monkeypatch):
+    monkeypatch.setattr(api.random, "uniform", lambda low, high: low)
+    assert [api.signalr_retry_delay(refusals) for refusals in range(6)] == [
+        60,
+        120,
+        240,
+        480,
+        600,
+        600,
+    ]
+    monkeypatch.setattr(api.random, "uniform", lambda low, high: high)
+    assert [api.signalr_retry_delay(refusals) for refusals in range(4)] == [75, 150, 300, 600]
+    assert api.signalr_retry_delay(1000) == 600
 
 
 @pytest.fixture

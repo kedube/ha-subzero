@@ -302,9 +302,9 @@ Sometimes the cloud stops delivering updates for a while, for every appliance at
 - **With the shared connection check on**, whenever the whole connection goes the chosen interval without any update. Each of these checks takes the appliance checked least recently.
 - **When the Refresh action runs.**
 
-If the appliance doesn't answer within 16 seconds, the integration reads its state directly and reconnects, which usually restores updates for every appliance. The connection is also renewed at least every 50 minutes, which brings every appliance up to date.
+If the appliance doesn't answer within 16 seconds, the integration reads its state directly and reconnects, which usually restores updates for every appliance. The connection is also renewed at least every 50 minutes, which brings every appliance up to date. The new connection opens before the old one closes, so if Sub-Zero refuses it, updates keep arriving on the old one and the integration tries again later.
 
-**If the connection drops,** for example when your internet connection blips, the integration reconnects: right away if the connection had been up for at least 2 minutes, then after 30 seconds, then 60, and so on. Appliances stay available for up to 2 minutes meanwhile, so a short drop doesn't make every entity unavailable or log an error for each appliance. Entities keep their last values during that time, and the **Live reporting mode** sensor shows **Disconnected**. Reconnecting brings every appliance up to date. If the integration still can't reconnect after 2 minutes, the appliances become unavailable until it does.
+**If the connection drops,** for example when your internet connection blips, the integration reconnects: right away if the connection had been up for at least 2 minutes, then after 30 seconds, then 60, and so on. Appliances stay available for up to 2 minutes meanwhile, so a short drop doesn't make every entity unavailable or log an error for each appliance. Entities keep their last values during that time, and the **Live reporting mode** sensor shows **Disconnected**. Reconnecting brings every appliance up to date. If the integration still can't reconnect after 2 minutes, the appliances become unavailable until it does. If Sub-Zero's live-update service refuses to connect (HTTP 429) without saying how long to wait, the integration tries again after about a minute, then about 2, doubling up to 10, with a random spread so that many homes don't retry at the same moment.
 
 Appliances that are busy sending updates need no checks, since each update shows the connection works. A status read the integration makes for another reason, such as confirming a control, doesn't delay a check.
 
@@ -325,7 +325,7 @@ The integration download shows:
 - how many live messages arrived, and how many were ignored or couldn't be read;
 - the Firebase listener's status, its last subscription sync, and how many alerts arrived;
 - the last 10 connections: when each started and ended, and why it ended (`lifetime`, `renewal`, `closed`, or an error). When the connection was closed or lost, `socket` shows how: whether Sub-Zero sent a close, with its code and reason, or the network dropped it;
-- the last 10 connection attempts that failed, with when and why, such as a network error looking up Sub-Zero's address;
+- the last 10 connection attempts that failed, with when and why, such as a network error looking up Sub-Zero's address. `renewal` is `true` when the attempt was replacing a connection, which kept delivering updates meanwhile;
 - the requests sent to Sub-Zero in the last hour, by kind, such as `get` for a status read or `negotiateUser` for a new connection, and those held back by a rate limit;
 - the last 10 times Sub-Zero limited requests (HTTP 429): which request it refused, the API that then waits, how long, and whether Sub-Zero said how long to wait;
 - whether the sidebar panel is on and in the sidebar.
