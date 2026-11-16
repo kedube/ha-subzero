@@ -6,14 +6,10 @@ from functools import wraps
 import aiohttp
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.const import UnitOfTime
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_create_clientsession, async_get_clientsession
 from homeassistant.helpers.selector import (
     BooleanSelector,
-    NumberSelector,
-    NumberSelectorConfig,
-    NumberSelectorMode,
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
@@ -36,24 +32,16 @@ from .auth import (
 )
 from .const import (
     CONF_FIREBASE_ALERTS,
-    CONF_FOLLOW_UP_CHECK_INTERVAL,
     CONF_FOLLOW_UP_CHECKS,
     CONF_SHARED_CONNECTION_CHECK,
-    CONF_SHARED_CONNECTION_CHECK_INTERVAL,
     CONF_SHOW_SIDEBAR_PANEL,
-    DEFAULT_FOLLOW_UP_CHECK_MINUTES,
-    DEFAULT_SHARED_CHECK_MINUTES,
     DOMAIN,
-    FOLLOW_UP_CHECK_MINUTES,
-    SHARED_CHECK_MINUTES,
 )
 from .coordinator import (
     firebase_alerts_enabled,
-    follow_up_check_minutes,
     follow_up_checks_enabled,
     selected_devices,
     shared_connection_check_enabled,
-    shared_connection_check_minutes,
     sidebar_panel_enabled,
 )
 
@@ -101,7 +89,7 @@ def holds_login_session(step):
 
 class SubZeroConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 2
-    MINOR_VERSION = 5
+    MINOR_VERSION = 6
     _client: SubZeroClient
     _devices: dict[str, dict]
     _title: str | None = None
@@ -519,12 +507,6 @@ class SubZeroOptionsFlow(config_entries.OptionsFlowWithReload):
                     options[CONF_SHOW_SIDEBAR_PANEL] = False
                 if user_input.get(CONF_FOLLOW_UP_CHECKS, follow_up_checks_enabled(entry)) is False:
                     options[CONF_FOLLOW_UP_CHECKS] = False
-                # Kept while the checks are off, for when they are turned back on.
-                minutes = round(
-                    user_input.get(CONF_FOLLOW_UP_CHECK_INTERVAL, follow_up_check_minutes(entry))
-                )
-                if minutes != DEFAULT_FOLLOW_UP_CHECK_MINUTES:
-                    options[CONF_FOLLOW_UP_CHECK_INTERVAL] = minutes
                 if (
                     user_input.get(
                         CONF_SHARED_CONNECTION_CHECK, shared_connection_check_enabled(entry)
@@ -532,20 +514,9 @@ class SubZeroOptionsFlow(config_entries.OptionsFlowWithReload):
                     is True
                 ):
                     options[CONF_SHARED_CONNECTION_CHECK] = True
-                # Kept while the check is off, for when it is turned back on.
-                minutes = round(
-                    user_input.get(
-                        CONF_SHARED_CONNECTION_CHECK_INTERVAL,
-                        shared_connection_check_minutes(entry),
-                    )
-                )
-                if minutes != DEFAULT_SHARED_CHECK_MINUTES:
-                    options[CONF_SHARED_CONNECTION_CHECK_INTERVAL] = minutes
                 if user_input.get(CONF_FIREBASE_ALERTS, firebase_alerts_enabled(entry)) is True:
                     options[CONF_FIREBASE_ALERTS] = True
                 return self.async_create_entry(data=options)
-        follow_up_low, follow_up_high = FOLLOW_UP_CHECK_MINUTES
-        low, high = SHARED_CHECK_MINUTES
         return self.async_show_form(
             step_id="init",
             data_schema=device_schema(
@@ -559,33 +530,9 @@ class SubZeroOptionsFlow(config_entries.OptionsFlowWithReload):
                         CONF_FOLLOW_UP_CHECKS, default=follow_up_checks_enabled(entry)
                     ): BooleanSelector(),
                     vol.Required(
-                        CONF_FOLLOW_UP_CHECK_INTERVAL,
-                        default=follow_up_check_minutes(entry),
-                    ): NumberSelector(
-                        NumberSelectorConfig(
-                            min=follow_up_low,
-                            max=follow_up_high,
-                            step=1,
-                            mode=NumberSelectorMode.BOX,
-                            unit_of_measurement=UnitOfTime.MINUTES,
-                        )
-                    ),
-                    vol.Required(
                         CONF_SHARED_CONNECTION_CHECK,
                         default=shared_connection_check_enabled(entry),
                     ): BooleanSelector(),
-                    vol.Required(
-                        CONF_SHARED_CONNECTION_CHECK_INTERVAL,
-                        default=shared_connection_check_minutes(entry),
-                    ): NumberSelector(
-                        NumberSelectorConfig(
-                            min=low,
-                            max=high,
-                            step=1,
-                            mode=NumberSelectorMode.BOX,
-                            unit_of_measurement=UnitOfTime.MINUTES,
-                        )
-                    ),
                     vol.Required(
                         CONF_FIREBASE_ALERTS, default=firebase_alerts_enabled(entry)
                     ): BooleanSelector(),

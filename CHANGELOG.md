@@ -2,6 +2,15 @@
 
 Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then 2.00.
 
+## Unreleased
+
+### Changed
+
+- **The follow-up check and shared connection check intervals are no longer options.** Both checks run after 3 minutes without an update, and Configure keeps only the switches that turn them on or off. Home Assistant's guidelines leave check intervals to the integration. For checks on another schedule, turn off **Enable polling for changes** and run the Refresh action from an automation.
+  - Follow-up checks used to wait 2 minutes by default, so they now come less often: up to 3 in the 10 minutes after an event instead of 5, and up to 5 while a door is open instead of 8.
+  - A shared connection check interval you chose is dropped on upgrade. With the check on, it makes up to 20 requests an hour while nothing else arrives.
+  - The recent rate limits came from reconnecting, not from these checks.
+
 ## 1.12
 
 ### Fixed

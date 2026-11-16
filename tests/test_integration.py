@@ -29,8 +29,6 @@ from custom_components.subzero.auth import InvalidAuth
 from custom_components.subzero.const import DOMAIN, PUSH_LOSS_GRACE
 from custom_components.subzero.coordinator import (
     SubZeroAccount,
-    follow_up_check_minutes,
-    shared_connection_check_minutes,
 )
 from tests.common import MockConfigEntry, async_fire_time_changed
 
@@ -204,9 +202,9 @@ async def test_status_check_reads_the_snapshot_a_reopened_channel_pushes(
     assert coordinator.push_stats["silent_channels"] == 0
     assert coordinator.unpushed_changes == {"ref_door_ajar": 1, "ref_set_temp": 1}
     client.renew_connection.assert_not_called()
-    # The snapshot schedules the next check, two minutes later while the door it
+    # The snapshot schedules the next check, three minutes later while the door it
     # reported stays open.
-    freezer.tick(timedelta(minutes=1, seconds=58))
+    freezer.tick(timedelta(minutes=2, seconds=58))
     await fire_time_changed(hass)
     assert client.open_channel.await_count == 1
     freezer.tick(timedelta(seconds=3))
@@ -280,10 +278,10 @@ async def test_push_during_a_silent_check_leaves_one_next_check(hass, loaded):
 
     client.open_channel.side_effect = reopen
     start = dt_util.utcnow()
-    await fire_time_changed(hass, start + timedelta(minutes=2, seconds=1))
+    await fire_time_changed(hass, start + timedelta(minutes=3, seconds=2))
     assert coordinator.push_stats["silent_channels"] == 1
     client.open_channel.side_effect = None
-    await fire_time_changed(hass, start + timedelta(minutes=4, seconds=2))
+    await fire_time_changed(hass, start + timedelta(minutes=6, seconds=4))
     assert client.open_channel.await_count == 2
     assert client.state.await_count == 3
 
@@ -382,9 +380,9 @@ async def test_unexpected_check_error_keeps_watching(hass, loaded):
     await hass.async_block_till_done()
     start = dt_util.utcnow()
     client.open_channel.side_effect = RuntimeError("Unexpected")
-    await fire_time_changed(hass, start + timedelta(minutes=2, seconds=1))
+    await fire_time_changed(hass, start + timedelta(minutes=3, seconds=2))
     client.open_channel.side_effect = None
-    await fire_time_changed(hass, start + timedelta(minutes=4, seconds=2))
+    await fire_time_changed(hass, start + timedelta(minutes=6, seconds=4))
     assert client.open_channel.await_count == 2
 
 
@@ -431,7 +429,8 @@ async def test_push_change_postpones_a_watch_check(hass, freezer, loaded):
     freezer.tick(timedelta(minutes=1))
     await updates.put(StateUpdate({"ref_set_temp": 37}, full=False))
     await hass.async_block_till_done()
-    freezer.tick(timedelta(minutes=1, seconds=1))
+    # Past when the door alone would have been checked.
+    freezer.tick(timedelta(minutes=2, seconds=2))
     await fire_time_changed(hass)
     client.open_channel.assert_not_awaited()
     freezer.tick(timedelta(minutes=1))
@@ -449,7 +448,7 @@ async def test_upgrade_drops_the_status_refresh_interval(hass, loaded, interval)
     )
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert entry.minor_version == 5
+    assert entry.minor_version == 6
     assert entry.options == {}
     assert entry.pref_disable_polling is False
 
@@ -496,24 +495,29 @@ async def test_shared_connection_check_runs_while_the_connection_is_quiet(hass, 
     assert client.open_channel.await_count == 2
 
 
-async def test_shared_connection_check_uses_the_chosen_interval(hass, freezer, loaded):
-    entry, client, _, _, _ = loaded
+async def test_upgrade_drops_the_check_intervals(hass, loaded):
+    entry, _, _, _, _ = loaded
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    options = {
+        **entry.options,
+        "follow_up_checks": False,
+        "shared_connection_check": True,
+    }
     hass.config_entries.async_update_entry(
-        entry, options={**entry.options, "shared_connection_check_interval": 5}
+        entry,
+        options={
+            **options,
+            "follow_up_check_interval": 5,
+            "shared_connection_check_interval": 15,
+        },
+        minor_version=5,
     )
-    coordinator = await enable_shared_connection_check(hass, entry)
-    freezer.tick(timedelta(minutes=4, seconds=58))
-    await fire_time_changed(hass)
-    client.open_channel.assert_not_awaited()
-    freezer.tick(timedelta(seconds=3))
-    await fire_time_changed(hass)
-    assert coordinator.push_stats["connection_checks"] == 1
-
-
-@pytest.mark.parametrize("minutes", [0, 61, 2.5, "5", None])
-async def test_unusable_shared_check_interval_uses_the_default(minutes):
-    entry = MockConfigEntry(domain=DOMAIN, options={"shared_connection_check_interval": minutes})
-    assert shared_connection_check_minutes(entry) == 3
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.minor_version == 6
+    # The checks stay on or off as they were; only the intervals, now fixed, go.
+    assert entry.options == options
 
 
 async def test_disabled_polling_stops_the_shared_connection_check(hass, loaded):
@@ -600,8 +604,8 @@ async def test_alert_starts_a_check_then_watches_for_ten_minutes(
     await fire_time_changed(hass)
     client.open_channel.assert_awaited_once_with("test-fridge")
     assert coordinator.push_stats["alert_checks"] == 1
-    # Its snapshot schedules the next check two minutes later.
-    freezer.tick(timedelta(minutes=1, seconds=58))
+    # Its snapshot schedules the next check three minutes later.
+    freezer.tick(timedelta(minutes=2, seconds=58))
     await fire_time_changed(hass)
     assert client.open_channel.await_count == 1
     freezer.tick(timedelta(seconds=3))
@@ -624,7 +628,7 @@ async def test_open_door_is_watched_until_it_reads_closed(hass, freezer, loaded)
     coordinator = entry.runtime_data.coordinators["test-fridge"]
     await updates.put(StateUpdate({"ref_door_ajar": True}, full=False))
     await hass.async_block_till_done()
-    freezer.tick(timedelta(minutes=1, seconds=58))
+    freezer.tick(timedelta(minutes=2, seconds=58))
     await fire_time_changed(hass)
     client.open_channel.assert_not_awaited()
     freezer.tick(timedelta(seconds=3))
@@ -644,14 +648,14 @@ async def test_door_left_open_is_watched_for_fifteen_minutes(hass, freezer, load
     client.state.return_value = {**client.state.return_value, "ref_door_ajar": True}
     await updates.put(StateUpdate({"ref_door_ajar": True}, full=False))
     await hass.async_block_till_done()
-    for _ in range(8):
-        freezer.tick(timedelta(minutes=2, seconds=1))
+    for _ in range(5):
+        freezer.tick(timedelta(minutes=3, seconds=2))
         await fire_time_changed(hass)
-    assert client.open_channel.await_count == 8
+    assert client.open_channel.await_count == 5
     # Open longer than 15 minutes, the door is probably open on purpose.
     freezer.tick(timedelta(hours=1))
     await fire_time_changed(hass)
-    assert client.open_channel.await_count == 8
+    assert client.open_channel.await_count == 5
 
 
 async def test_status_read_does_not_postpone_a_check(hass, freezer, loaded):
@@ -663,7 +667,7 @@ async def test_status_read_does_not_postpone_a_check(hass, freezer, loaded):
     freezer.tick(timedelta(minutes=1))
     # A read, such as one confirming a control, shows nothing about push.
     await coordinator.async_refresh()
-    freezer.tick(timedelta(minutes=1, seconds=1))
+    freezer.tick(timedelta(minutes=2, seconds=2))
     await fire_time_changed(hass)
     client.open_channel.assert_awaited_once_with("test-fridge")
 
@@ -707,32 +711,6 @@ async def test_follow_up_checks_off_leave_only_the_alert_check(hass, freezer, lo
     client.open_channel.assert_awaited_once()
     assert coordinator.push_stats["alert_checks"] == 1
     assert coordinator.push_stats["watch_checks"] == 0
-
-
-async def test_follow_up_checks_use_the_chosen_interval(hass, freezer, loaded):
-    entry, client, updates, _, _ = loaded
-    coordinator = await reload_with_options(hass, entry, follow_up_check_interval=5)
-    client.state.return_value = {**client.state.return_value, "ref_door_ajar": True}
-    await updates.put(StateUpdate({"ref_door_ajar": True}, full=False))
-    await hass.async_block_till_done()
-    freezer.tick(timedelta(minutes=4, seconds=58))
-    await fire_time_changed(hass)
-    client.open_channel.assert_not_awaited()
-    freezer.tick(timedelta(seconds=3))
-    await fire_time_changed(hass)
-    client.open_channel.assert_awaited_once_with("test-fridge")
-    # The door stays open, so checks continue for 15 minutes at the chosen interval.
-    for _ in range(3):
-        freezer.tick(timedelta(minutes=5, seconds=1))
-        await fire_time_changed(hass)
-    assert client.open_channel.await_count == 3
-    assert coordinator.push_stats["watch_checks"] == 3
-
-
-@pytest.mark.parametrize("minutes", [0, 11, 2.5, "5", None])
-async def test_unusable_follow_up_check_interval_uses_the_default(minutes):
-    entry = MockConfigEntry(domain=DOMAIN, options={"follow_up_check_interval": minutes})
-    assert follow_up_check_minutes(entry) == 2
 
 
 async def test_alerts_start_at_most_one_check_a_minute(hass, freezer, loaded):

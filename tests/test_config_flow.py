@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import aiohttp
 import pytest
-from homeassistant.data_entry_flow import FlowResultType, InvalidData, UnknownFlow
+from homeassistant.data_entry_flow import FlowResultType, UnknownFlow
 
 from custom_components.subzero.api import ApiError, Appliance, RateLimited, token_state
 from custom_components.subzero.auth import (
@@ -83,7 +83,7 @@ async def test_setup_creates_entry_with_selected_appliances(hass, tokens, select
     assert "password" not in result["data"]
     assert result["result"].unique_id == "test-owner"
     assert result["result"].version == 2
-    assert result["result"].minor_version == 5
+    assert result["result"].minor_version == 6
     assert result["result"].options == {}
 
 
@@ -872,13 +872,13 @@ async def test_options_can_turn_the_shared_connection_check_on_and_back_off(hass
         result = await hass.config_entries.options.async_init(entry.entry_id)
         defaults = result["data_schema"]({})
         assert defaults["shared_connection_check"] is False
-        assert defaults["shared_connection_check_interval"] == 3
+        # The check's interval is fixed.
+        assert "shared_connection_check_interval" not in defaults
         result = await hass.config_entries.options.async_configure(
             result["flow_id"],
             {"device_ids": ["test-fridge"], "shared_connection_check": True},
         )
         await hass.async_block_till_done()
-        # The default interval is not saved.
         assert entry.options == {
             "devices": {"test-fridge": DEVICES["test-fridge"]},
             "shared_connection_check": True,
@@ -887,49 +887,11 @@ async def test_options_can_turn_the_shared_connection_check_on_and_back_off(hass
         assert result["data_schema"]({})["shared_connection_check"] is True
         result = await hass.config_entries.options.async_configure(
             result["flow_id"],
-            {
-                "device_ids": ["test-fridge"],
-                "shared_connection_check": True,
-                "shared_connection_check_interval": 5.0,
-            },
-        )
-        await hass.async_block_till_done()
-        assert entry.options == {
-            "devices": {"test-fridge": DEVICES["test-fridge"]},
-            "shared_connection_check": True,
-            "shared_connection_check_interval": 5,
-        }
-        result = await hass.config_entries.options.async_init(entry.entry_id)
-        assert result["data_schema"]({})["shared_connection_check_interval"] == 5
-        result = await hass.config_entries.options.async_configure(
-            result["flow_id"],
             {"device_ids": ["test-fridge"], "shared_connection_check": False},
         )
         await hass.async_block_till_done()
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    # The interval stays for when the check is turned back on.
-    assert entry.options == {
-        "devices": {"test-fridge": DEVICES["test-fridge"]},
-        "shared_connection_check_interval": 5,
-    }
-
-
-async def test_options_reject_a_shared_check_interval_out_of_range(hass, tokens):
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        version=2,
-        data={"tokens": token_state(tokens), "devices": DEVICES},
-    )
-    entry.add_to_hass(hass)
-    with patch("custom_components.subzero.api.SubZeroClient.appliances", return_value=APPLIANCES):
-        result = await hass.config_entries.options.async_init(entry.entry_id)
-        for minutes in (0, 61):
-            with pytest.raises(InvalidData):
-                await hass.config_entries.options.async_configure(
-                    result["flow_id"],
-                    {"device_ids": ["test-fridge"], "shared_connection_check_interval": minutes},
-                )
-    assert entry.options == {}
+    assert entry.options == {"devices": {"test-fridge": DEVICES["test-fridge"]}}
 
 
 async def test_options_can_turn_follow_up_checks_off_and_back_on(hass, tokens):
@@ -948,54 +910,27 @@ async def test_options_can_turn_follow_up_checks_off_and_back_on(hass, tokens):
         result = await hass.config_entries.options.async_init(entry.entry_id)
         defaults = result["data_schema"]({})
         assert defaults["follow_up_checks"] is True
-        assert defaults["follow_up_check_interval"] == 2
+        # The checks' interval is fixed.
+        assert "follow_up_check_interval" not in defaults
         result = await hass.config_entries.options.async_configure(
             result["flow_id"],
-            {
-                "device_ids": ["test-fridge"],
-                "follow_up_checks": False,
-                "follow_up_check_interval": 5.0,
-            },
+            {"device_ids": ["test-fridge"], "follow_up_checks": False},
         )
         await hass.async_block_till_done()
         assert entry.options == {
             "devices": {"test-fridge": DEVICES["test-fridge"]},
             "follow_up_checks": False,
-            "follow_up_check_interval": 5,
         }
         result = await hass.config_entries.options.async_init(entry.entry_id)
-        defaults = result["data_schema"]({})
-        assert defaults["follow_up_checks"] is False
-        assert defaults["follow_up_check_interval"] == 5
+        assert result["data_schema"]({})["follow_up_checks"] is False
         result = await hass.config_entries.options.async_configure(
             result["flow_id"],
             {"device_ids": ["test-fridge"], "follow_up_checks": True},
         )
         await hass.async_block_till_done()
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    # On is the default, so only the interval is saved.
-    assert entry.options == {
-        "devices": {"test-fridge": DEVICES["test-fridge"]},
-        "follow_up_check_interval": 5,
-    }
-
-
-async def test_options_reject_a_follow_up_check_interval_out_of_range(hass, tokens):
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        version=2,
-        data={"tokens": token_state(tokens), "devices": DEVICES},
-    )
-    entry.add_to_hass(hass)
-    with patch("custom_components.subzero.api.SubZeroClient.appliances", return_value=APPLIANCES):
-        result = await hass.config_entries.options.async_init(entry.entry_id)
-        for minutes in (0, 11):
-            with pytest.raises(InvalidData):
-                await hass.config_entries.options.async_configure(
-                    result["flow_id"],
-                    {"device_ids": ["test-fridge"], "follow_up_check_interval": minutes},
-                )
-    assert entry.options == {}
+    # On is the default, so nothing is saved.
+    assert entry.options == {"devices": {"test-fridge": DEVICES["test-fridge"]}}
 
 
 async def test_options_can_turn_firebase_alerts_on_and_back_off(hass, tokens):

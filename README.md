@@ -63,14 +63,12 @@ Open **Settings → Devices & services → Sub-Zero → Configure** to change:
 | Option | What it does |
 | --- | --- |
 | **Appliances** | The appliances to include. The list is refreshed from your account. Removing an appliance removes its device and entities. If the list can't be refreshed, your saved appliances are shown and the other options can still be changed. |
-| **Follow-up checks** | On by default. After an event, and while a door is open, checks that live updates are still arriving whenever none have arrived for the interval below. The check two seconds after each event runs either way. See [How live updates work](#how-live-updates-work). |
-| **Follow-up check interval** | Minutes without an update before each follow-up check, from 1 to 10. The default is 2. |
-| **Shared connection check** | Off by default. Checks that live updates are still arriving whenever none have arrived for the interval below. See [How live updates work](#how-live-updates-work). |
-| **Shared connection check interval** | Minutes without any update before that check runs, from 1 to 60. The default is 3. |
+| **Follow-up checks** | On by default. After an event, and while a door is open, checks that live updates are still arriving whenever none have arrived for 3 minutes. The check two seconds after each event runs either way. See [How live updates work](#how-live-updates-work). |
+| **Shared connection check** | Off by default. Checks that live updates are still arriving whenever none have arrived for 3 minutes. See [How live updates work](#how-live-updates-work). |
 | **Firebase appliance alerts** | Off by default. Receives the alerts the phone app gets, such as a door left open. See [Events and automations](#events-and-automations). |
 | **Show Sub-Zero in the sidebar** | On by default. Adds the Sub-Zero panel to the sidebar for every user. See [Sidebar panel](#sidebar-panel). |
 
-<img src="docs/images/configure.png" alt="The Configure dialog with the appliance list, Show Sub-Zero in the sidebar, follow-up checks and the shared connection check with their intervals, and Firebase appliance alerts" width="420">
+<img src="docs/images/configure.png" alt="The Configure dialog with the appliance list and switches for Show Sub-Zero in the sidebar, follow-up checks, the shared connection check, and Firebase appliance alerts" width="420">
 
 Home Assistant's own **Enable polling for changes** switch, under the entry's **⋮ → System options**, also applies: turning it off stops every scheduled check, described in [How live updates work](#how-live-updates-work).
 
@@ -297,9 +295,9 @@ All the appliances on an account share one live connection to Sub-Zero's cloud. 
 
 Sometimes the cloud stops delivering updates for a while, for every appliance at once, even though the connection stays open. A door could then stay open in Home Assistant after it has closed. To catch this, the integration checks the connection at the moments a missed update matters most. A check asks one appliance to resend its full state, the same way the Sub-Zero app does each time it opens:
 
-- **After an event**, two seconds later, so the appliance's entities catch up with whatever caused it. With **Follow-up checks** on, for the next 10 minutes another check runs whenever the follow-up check interval, 2 minutes by default, passes without an update, since state often changes again soon after an event: a door closes, a timer is dismissed, a cycle moves on.
-- **While a door is open**, with **Follow-up checks** on, whenever the follow-up check interval passes without an update, for up to 15 minutes. A door open longer is probably open on purpose.
-- **With the shared connection check on**, whenever the whole connection goes the chosen interval without any update. Each of these checks takes the appliance checked least recently.
+- **After an event**, two seconds later, so the appliance's entities catch up with whatever caused it. With **Follow-up checks** on, for the next 10 minutes another check runs whenever 3 minutes pass without an update, since state often changes again soon after an event: a door closes, a timer is dismissed, a cycle moves on.
+- **While a door is open**, with **Follow-up checks** on, whenever 3 minutes pass without an update, for up to 15 minutes. A door open longer is probably open on purpose.
+- **With the shared connection check on**, whenever the whole connection goes 3 minutes without any update. Each of these checks takes the appliance checked least recently.
 - **When the Refresh action runs.**
 
 If the appliance doesn't answer within 16 seconds, the integration reads its state directly and reconnects, which usually restores updates for every appliance. The connection is also renewed at least every 50 minutes, which brings every appliance up to date. The new connection opens before the old one closes, so if Sub-Zero refuses it, updates keep arriving on the old one and the integration tries again later.
@@ -308,7 +306,9 @@ If the appliance doesn't answer within 16 seconds, the integration reads its sta
 
 Appliances that are busy sending updates need no checks, since each update shows the connection works. A status read the integration makes for another reason, such as confirming a control, doesn't delay a check.
 
-**Cloud requests.** Sub-Zero publishes no request limit. Each check is one request, plus one more when the appliance doesn't answer. With nothing happening, the integration makes none. An event or a door left open adds at most one check per follow-up check interval for 10 or 15 minutes: up to 5 or 8 at the default 2 minutes, and none with **Follow-up checks** off. The shared connection check adds one per interval while the connection is quiet: up to 20 an hour at the default 3 minutes, or 60 at 1 minute. If Sub-Zero asks the integration to slow down, it waits as long as asked, and updates keep arriving in the meantime.
+**Cloud requests.** Sub-Zero publishes no request limit. Each check is one request, plus one more when the appliance doesn't answer. With nothing happening, the integration makes none. An event or a door left open adds at most one check every 3 minutes for 10 or 15 minutes: up to 3 or 5, and none with **Follow-up checks** off. The shared connection check adds one every 3 minutes while the connection is quiet: up to 20 an hour. If Sub-Zero asks the integration to slow down, it waits as long as asked, and updates keep arriving in the meantime.
+
+**The check intervals are fixed**, as Home Assistant's guidelines ask of integrations. For checks on another schedule, turn off **Enable polling for changes** and run the Refresh action from an automation.
 
 **Turning off Enable polling for changes** stops the follow-up checks, the open-door checks, the shared connection check, and the 30-minute fault refresh. A new event still gets its one check.
 
@@ -321,7 +321,7 @@ Appliances that are busy sending updates need no checks, since each update shows
 **Diagnostics downloads.** Download diagnostics from the integration's page or from a device's page. They contain the appliances' cached state and the integration's counters, without your account credentials, appliance names, serial numbers, or network identifiers. They also list property names the integration doesn't recognize yet, without their values. Counters start over whenever the integration reloads, including after a change in Configure.
 
 The integration download shows:
-- the follow-up check and shared connection check settings and intervals, and whether **Enable polling for changes** is off;
+- whether follow-up checks and the shared connection check are on, their intervals, and whether **Enable polling for changes** is off;
 - how many live messages arrived, and how many were ignored or couldn't be read;
 - the Firebase listener's status, its last subscription sync, and how many alerts arrived;
 - the last 10 connections: when each started and ended, and why it ended (`lifetime`, `renewal`, `closed`, or an error). When the connection was closed or lost, `socket` shows how: whether Sub-Zero sent a close, with its code and reason, or the network dropped it;

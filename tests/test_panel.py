@@ -73,7 +73,7 @@ def _entry(hass, entry_id: str, **options) -> MockConfigEntry:
     entry = MockConfigEntry(
         domain=DOMAIN,
         version=2,
-        minor_version=5,
+        minor_version=6,
         entry_id=entry_id,
         data={"tokens": {}, "devices": {}},
         options=options,

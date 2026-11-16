@@ -54,7 +54,7 @@ async def cloud_appliance(hass, tokens, request, enable_custom_integrations):
     entry = MockConfigEntry(
         domain=DOMAIN,
         version=2,
-        minor_version=5,
+        minor_version=6,
         title="Account",
         data={
             "tokens": token_state(tokens),

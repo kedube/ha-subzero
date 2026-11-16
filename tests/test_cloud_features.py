@@ -2028,7 +2028,7 @@ async def test_diagnostics_omit_private_values(hass, appliances):
     encoded = json.dumps(result)
     assert result["push_connected"] is True
     assert result["follow_up_checks"] is True
-    assert result["follow_up_check_minutes"] == 2
+    assert result["follow_up_check_minutes"] == 3
     assert result["shared_connection_check"] is False
     assert result["shared_connection_check_minutes"] == 3
     assert result["polling_disabled"] is False
@@ -2213,7 +2213,7 @@ async def test_minor_upgrade_removes_only_retired_entities(hass, appliances):
     hass.config_entries.async_update_entry(entry, minor_version=1)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert entry.minor_version == 5
+    assert entry.minor_version == 6
     for entity in retired:
         assert registry.async_get(entity.entity_id) is None
         assert hass.states.get(entity.entity_id) is None
@@ -2245,7 +2245,7 @@ async def test_upgrade_keeps_firebase_alerts_on_only_where_already_registered(
     with patch("custom_components.subzero.fcm.FcmAlerts.start_cleanup"):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
-    assert entry.minor_version == 5
+    assert entry.minor_version == 6
     assert entry.options.get("firebase_alerts", False) is enabled
 
 
@@ -2345,7 +2345,7 @@ async def test_upgrade_retires_only_accent_light_number(
     ]
     assert registry.async_get(retired.entity_id) is None
     assert hass.states.get(retired.entity_id) is None
-    assert entry.minor_version == 5
+    assert entry.minor_version == 6
     current = registry.async_get(light.entity_id)
     assert current.id == light.id
     assert current.disabled_by is er.RegistryEntryDisabler.USER

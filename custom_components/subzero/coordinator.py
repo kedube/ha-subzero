@@ -38,20 +38,15 @@ from .api import (
 from .auth import InvalidAuth
 from .const import (
     CONF_FIREBASE_ALERTS,
-    CONF_FOLLOW_UP_CHECK_INTERVAL,
     CONF_FOLLOW_UP_CHECKS,
     CONF_SHARED_CONNECTION_CHECK,
-    CONF_SHARED_CONNECTION_CHECK_INTERVAL,
     CONF_SHOW_SIDEBAR_PANEL,
     CONTROL_CONFIRM_TIMEOUT,
     CONTROL_PUSH_TIMEOUT,
-    DEFAULT_FOLLOW_UP_CHECK_MINUTES,
-    DEFAULT_SHARED_CHECK_MINUTES,
     DEFAULT_SHOW_SIDEBAR_PANEL,
     DOMAIN,
     DOOR_KEYS,
     FAULT_METADATA_APPLIES_TO_BY_SERIES,
-    FOLLOW_UP_CHECK_MINUTES,
     ICE_DELAY_KEYS,
     KITCHEN_TIMERS,
     MAX_EVENT_HISTORY,
@@ -59,7 +54,6 @@ from .const import (
     PRIVATE_KEYS,
     PUSH_LOSS_GRACE,
     RECONNECT_DELAY,
-    SHARED_CHECK_MINUTES,
     STABLE_CONNECTION,
     STATE_KEYS,
     UNCOMPARED_READ_KEYS,
@@ -95,10 +89,14 @@ SNAPSHOT_TIMEOUT = 16
 ALERT_CHECK_DELAY = 2
 ALERT_CHECK_INTERVAL = timedelta(minutes=1)
 # Push alone keeps state otherwise. After an alert, and while a door reports open,
-# a follow-up check also runs its interval after the last pushed update, for this
-# long after an alert and for a door that stays open.
+# a follow-up check also runs this long after the last pushed update, for the
+# watch below after an alert and for a door that stays open.
+FOLLOW_UP_CHECK_INTERVAL = timedelta(minutes=3)
 ALERT_WATCH = timedelta(minutes=10)
 DOOR_WATCH = timedelta(minutes=15)
+# With the shared connection check on, one appliance's channel is checked whenever
+# the connection goes this long without a message.
+CONNECTION_CHECK_INTERVAL = timedelta(minutes=3)
 # Sequence 0 does not tell events apart, so a live event with it copies an earlier
 # Firebase alert only within this many seconds of it.
 SEQUENCE_ZERO_COPY_WINDOW = timedelta(seconds=5)
@@ -134,27 +132,9 @@ def sidebar_panel_enabled(entry: ConfigEntry) -> bool:
     return entry.options.get(CONF_SHOW_SIDEBAR_PANEL, DEFAULT_SHOW_SIDEBAR_PANEL) is not False
 
 
-def follow_up_check_minutes(entry: ConfigEntry) -> int:
-    """Return how many minutes without an update start each follow-up check."""
-    minutes = entry.options.get(CONF_FOLLOW_UP_CHECK_INTERVAL)
-    low, high = FOLLOW_UP_CHECK_MINUTES
-    if type(minutes) is int and low <= minutes <= high:
-        return minutes
-    return DEFAULT_FOLLOW_UP_CHECK_MINUTES
-
-
 def shared_connection_check_enabled(entry: ConfigEntry) -> bool:
     """The shared connection check is used only when the owner turns it on."""
     return entry.options.get(CONF_SHARED_CONNECTION_CHECK) is True
-
-
-def shared_connection_check_minutes(entry: ConfigEntry) -> int:
-    """Return how many minutes without a message start the shared connection check."""
-    minutes = entry.options.get(CONF_SHARED_CONNECTION_CHECK_INTERVAL)
-    low, high = SHARED_CHECK_MINUTES
-    if type(minutes) is int and low <= minutes <= high:
-        return minutes
-    return DEFAULT_SHARED_CHECK_MINUTES
 
 
 def firebase_alerts_enabled(entry: ConfigEntry) -> bool:
@@ -214,8 +194,6 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         self._watch_until: datetime | None = None
         # Since when a door has reported open.
         self._door_opened: datetime | None = None
-        # Changing it in Configure reloads the entry.
-        self._watch_interval = timedelta(minutes=follow_up_check_minutes(entry))
         # A silent check's record, when it started, and the connection it used, until
         # a snapshot shows whether its answer was only late.
         self._late_snapshot: tuple[dict, float, object] | None = None
@@ -284,7 +262,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         if (self._watch_until is not None and now < self._watch_until) or (
             self._door_opened is not None and now < self._door_opened + DOOR_WATCH
         ):
-            return self._watch_interval
+            return FOLLOW_UP_CHECK_INTERVAL
         return None
 
     @callback
@@ -1248,9 +1226,6 @@ class SubZeroAccount:
         self._push_error: Exception | None = None
         # When a working connection dropped, until a new one delivers.
         self._push_lost_at: float | None = None
-        # With the shared connection check on, one appliance's channel is checked after
-        # the connection goes this long without a message.
-        self.connection_check_interval = timedelta(minutes=shared_connection_check_minutes(entry))
         self._unsub_connection_check: CALLBACK_TYPE | None = None
         self._connection_check_job = HassJob(
             self._start_connection_check, f"{DOMAIN} connection check", cancel_on_shutdown=True
@@ -1260,7 +1235,7 @@ class SubZeroAccount:
     def _schedule_connection_check(self, delay: timedelta | None = None) -> None:
         self._cancel_connection_check()
         self._unsub_connection_check = async_call_later(
-            self.hass, delay or self.connection_check_interval, self._connection_check_job
+            self.hass, delay or CONNECTION_CHECK_INTERVAL, self._connection_check_job
         )
 
     @callback
@@ -1283,9 +1258,9 @@ class SubZeroAccount:
         now = dt_util.utcnow()
         received = self.client.notification_stats.get("last_received")
         last = dt_util.parse_datetime(received) if isinstance(received, str) else None
-        if last is not None and now < last + self.connection_check_interval:
+        if last is not None and now < last + CONNECTION_CHECK_INTERVAL:
             # A message shows the connection delivers, so the wait starts from it.
-            self._schedule_connection_check(last + self.connection_check_interval - now)
+            self._schedule_connection_check(last + CONNECTION_CHECK_INTERVAL - now)
             return
         self._schedule_connection_check()
         if not self.client.push_connected:

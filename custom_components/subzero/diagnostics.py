@@ -2,6 +2,7 @@
 
 import logging
 import time
+from datetime import timedelta
 
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
@@ -11,13 +12,13 @@ from . import SubZeroConfigEntry
 from .api import fault_record, request_counts
 from .const import DOMAIN, PRIVATE_KEYS
 from .coordinator import (
+    CONNECTION_CHECK_INTERVAL,
+    FOLLOW_UP_CHECK_INTERVAL,
     SubZeroCoordinator,
     SubZeroFaultsCoordinator,
     firebase_alerts_enabled,
-    follow_up_check_minutes,
     follow_up_checks_enabled,
     shared_connection_check_enabled,
-    shared_connection_check_minutes,
     sidebar_panel_enabled,
 )
 from .frontend import panel_module_url
@@ -79,9 +80,10 @@ async def async_get_config_entry_diagnostics(
         "connection": "cloud_push",
         "push_connected": account.client.push_connected,
         "follow_up_checks": follow_up_checks_enabled(entry),
-        "follow_up_check_minutes": follow_up_check_minutes(entry),
+        # Fixed now; until 1.12 the owner could choose them.
+        "follow_up_check_minutes": FOLLOW_UP_CHECK_INTERVAL // timedelta(minutes=1),
         "shared_connection_check": shared_connection_check_enabled(entry),
-        "shared_connection_check_minutes": shared_connection_check_minutes(entry),
+        "shared_connection_check_minutes": CONNECTION_CHECK_INTERVAL // timedelta(minutes=1),
         "polling_disabled": entry.pref_disable_polling,
         "notifications": dict(account.client.notification_stats),
         "connections": [dict(connection) for connection in account.client.connection_history],

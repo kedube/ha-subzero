@@ -284,7 +284,7 @@ async def test_appliances_without_a_snapshot_are_read_together(hass, tokens):
     entry = MockConfigEntry(
         domain=DOMAIN,
         version=2,
-        minor_version=5,
+        minor_version=6,
         title="Account",
         data={
             "tokens": token_state(tokens),

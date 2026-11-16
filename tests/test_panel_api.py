@@ -376,7 +376,7 @@ async def setup_entry(hass, tokens, title: str, appliances: dict[str, dict | Non
     entry = MockConfigEntry(
         domain=DOMAIN,
         version=2,
-        minor_version=5,
+        minor_version=6,
         title=title,
         data={
             "tokens": token_state(tokens),
@@ -701,7 +701,7 @@ async def test_removing_an_entry_drops_its_appliances_appearance(hass, hass_stor
         MockConfigEntry(
             domain=DOMAIN,
             version=2,
-            minor_version=5,
+            minor_version=6,
             data={"tokens": {}, "devices": {device_id: {"name": device_id}}},
         )
         for device_id in ("kept", "removed")

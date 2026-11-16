@@ -999,8 +999,8 @@ A full state that arrives on the same connection after a check stopped waiting i
 | Check | When |
 | --- | --- |
 | Alert | 2 s after a new event from Firebase or the live connection (`ALERT_CHECK_DELAY`), at most one per appliance per minute (`ALERT_CHECK_INTERVAL`). A check that started after the event covers it. An event found in a history starts none |
-| Watch | The **Follow-up checks** option, on by default. For 10 minutes after an event (`ALERT_WATCH`), and for up to 15 minutes while a door property (`*door_ajar`) is true (`DOOR_WATCH`): the follow-up check interval after the last pushed change, 2 minutes by default, 1–10 in the options |
-| Connection | Optional. Whenever the whole connection goes its interval without any `ConnectedApplianceMessage`: 3 minutes by default, 1–60 in the options. It checks the available appliance checked least recently, and skips a round while another check runs. It relies on silence hitting every appliance at once (§14) |
+| Watch | The **Follow-up checks** option, on by default. For 10 minutes after an event (`ALERT_WATCH`), and for up to 15 minutes while a door property (`*door_ajar`) is true (`DOOR_WATCH`): 3 minutes after the last pushed change (`FOLLOW_UP_CHECK_INTERVAL`). Until 1.12 this was an option, 1–10 minutes, 2 by default |
+| Connection | Optional. Whenever the whole connection goes 3 minutes without any `ConnectedApplianceMessage` (`CONNECTION_CHECK_INTERVAL`). Until 1.12 the interval was an option, 1–60 minutes, 3 by default. It checks the available appliance checked least recently, and skips a round while another check runs. It relies on silence hitting every appliance at once (§14) |
 | Manual | The `subzero.refresh` action, which joins a check already running |
 
 - There are no periodic checks; versions up to 0.8.7 also checked each appliance 10 minutes after its last pushed change.
@@ -1010,7 +1010,7 @@ A full state that arrives on the same connection after a check stopped waiting i
 
 ### 13.4 Cost
 
-Each check is one `open_cloud_async`, plus a `get` when it goes unanswered; each renewal is one `negotiateUser` plus one `open_cloud_async` per appliance. With nothing happening, the integration makes no checks. An event or an open door adds at most one check per follow-up check interval (2 minutes by default) for 10 or 15 minutes, and none while the appliance keeps pushing changes or with follow-up checks off. The connection check adds at most one per interval, and only while the connection is quiet. [I]
+Each check is one `open_cloud_async`, plus a `get` when it goes unanswered; each renewal is one `negotiateUser` plus one `open_cloud_async` per appliance. With nothing happening, the integration makes no checks. An event or an open door adds at most one check every 3 minutes for 10 or 15 minutes, and none while the appliance keeps pushing changes or with follow-up checks off. The connection check adds at most one every 3 minutes, and only while the connection is quiet. [I]
 
 ### 13.5 Diagnostics
 
@@ -1040,7 +1040,7 @@ Per account (`async_get_config_entry_diagnostics`) [I]:
   - `signalr_close`: a SignalR close message (type 7) arrived, with its `error` and `allow_reconnect`;
 - `failed_connections`: the last 10 attempts that failed before the handshake, each with `time`, `error`, and `renewal`, which is `true` when the attempt was replacing a connection that kept delivering (§5.9). The error is the integration's message, plus the type of the network error behind it, such as `Could not connect to Sub-Zero. (ClientConnectorDNSError)`;
 - the Firebase client's state, last sync, and alert count;
-- `push_connected`, `shared_connection_check`, `shared_connection_check_minutes`, and `polling_disabled`.
+- `push_connected`, `follow_up_checks`, `follow_up_check_minutes`, `shared_connection_check`, `shared_connection_check_minutes`, and `polling_disabled`. Since the intervals became fixed, the two `_minutes` fields always show 3.
 
 ## 14. Observations
 

@@ -235,4 +235,12 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             key: value for key, value in entry.options.items() if key != "status_poll_interval"
         }
         hass.config_entries.async_update_entry(entry, options=options, minor_version=5)
+    if entry.minor_version < 6:
+        # The follow-up and shared connection check intervals became fixed.
+        options = {
+            key: value
+            for key, value in entry.options.items()
+            if key not in {"follow_up_check_interval", "shared_connection_check_interval"}
+        }
+        hass.config_entries.async_update_entry(entry, options=options, minor_version=6)
     return True
