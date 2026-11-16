@@ -60,7 +60,10 @@ def appliance_type(data: dict) -> tuple[int, int, int, int] | None:
     parts = value.split(".")
     if len(parts) == 3:
         parts.insert(0, "0")
-    if len(parts) != 4 or not all(part.isascii() and part.isdecimal() for part in parts):
+    # Python won't read an integer over 4,300 digits, so parts are kept short.
+    if len(parts) != 4 or not all(
+        part.isascii() and part.isdecimal() and len(part) <= 9 for part in parts
+    ):
         return None
     return tuple(int(part) for part in parts)
 
@@ -309,7 +312,11 @@ def clock_zone(value) -> tzinfo | None:
     if offset is None:
         return None
     home = dt_util.get_default_time_zone()
-    return home if parsed.astimezone(home).utcoffset() == offset else timezone(offset)
+    try:
+        local = parsed.astimezone(home)
+    except OverflowError:
+        return None
+    return home if local.utcoffset() == offset else timezone(offset)
 
 
 def appliance_datetime(value, zone: tzinfo | None = None) -> datetime | None:

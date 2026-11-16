@@ -8,7 +8,6 @@ import secrets
 import time
 import uuid
 from collections.abc import Callable, Iterable
-from contextlib import suppress
 from datetime import UTC, datetime
 
 from firebase_messaging import FcmPushClient, FcmRegisterConfig
@@ -220,8 +219,7 @@ class FcmAlerts:
         self._stop.set()
         if self._task is not None:
             self._task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._task
+            await asyncio.wait([self._task])
         await self._close_push()
 
     async def _close_push(self) -> None:

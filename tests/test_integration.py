@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.data_entry_flow import FlowResultType
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
@@ -804,6 +804,82 @@ async def test_refresh_action_joins_a_running_check(hass, loaded):
     await asyncio.gather(running, action)
     client.open_channel.assert_awaited_once()
     assert coordinator.push_stats["manual_checks"] == 1
+
+
+async def test_refresh_cut_short_by_unloading_is_an_error(hass, loaded):
+    """Saving Configure reloads the entry, which cancels a check under way."""
+    entry, client, _, _, _ = loaded
+    device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, "test-fridge"), entry.entry_id
+    )
+    reopened = asyncio.Event()
+
+    async def reopen(device_id):
+        reopened.set()
+        await asyncio.Event().wait()
+
+    client.open_channel.side_effect = reopen
+    action = hass.async_create_task(
+        hass.services.async_call(DOMAIN, "refresh", {"device_id": device.id}, blocking=True)
+    )
+    await reopened.wait()
+    await hass.config_entries.async_unload(entry.entry_id)
+    await asyncio.wait([action])
+    assert not action.cancelled()
+    with pytest.raises(HomeAssistantError, match="unloaded"):
+        action.result()
+
+
+async def test_status_read_cut_short_by_unloading_is_an_error(hass, loaded):
+    entry, client, _, _, _ = loaded
+    coordinator = entry.runtime_data.coordinators["test-fridge"]
+    reading = asyncio.Event()
+
+    async def state(device_id):
+        reading.set()
+        await asyncio.Event().wait()
+
+    client.state.side_effect = state
+    read = hass.async_create_task(coordinator.async_refresh())
+    await reading.wait()
+    await hass.config_entries.async_unload(entry.entry_id)
+    await asyncio.wait([read])
+    assert not read.cancelled()
+    with pytest.raises(HomeAssistantError, match="unloaded"):
+        read.result()
+
+
+async def test_an_out_of_range_appliance_clock_keeps_push_going(hass, loaded, caplog):
+    entry, client, updates, _, _ = loaded
+    coordinator = entry.runtime_data.coordinators["test-fridge"]
+    for properties in ({"time": "0001-01-01T00:00:00+05:00"}, {"ref_set_temp": 40}):
+        await updates.put(StateUpdate(properties, full=False))
+        await hass.async_block_till_done()
+    assert coordinator.data["ref_set_temp"] == 40
+    assert coordinator.clock_zone is None
+    assert "failed unexpectedly" not in caplog.text
+    assert len(client.watched) == 1
+
+
+async def test_an_update_that_cannot_be_applied_is_skipped(hass, loaded, caplog, monkeypatch):
+    """One bad update used to end push for every appliance, again on each reconnect."""
+    entry, client, updates, _, _ = loaded
+    coordinator = entry.runtime_data.coordinators["test-fridge"]
+    apply_update = coordinator.apply_update
+
+    def apply(update):
+        if update.properties.get("ref_set_temp") == 99:
+            raise RuntimeError("unexpected")
+        apply_update(update)
+
+    monkeypatch.setattr(coordinator, "apply_update", apply)
+    for temperature in (99, 40):
+        await updates.put(StateUpdate({"ref_set_temp": temperature}, full=False))
+        await hass.async_block_till_done()
+    assert coordinator.data["ref_set_temp"] == 40
+    assert "Skipped a Sub-Zero update for Kitchen that could not be applied" in caplog.text
+    assert "failed unexpectedly" not in caplog.text
+    assert len(client.watched) == 1
 
 
 async def test_snapshot_after_a_silent_check_records_how_late_it_was(hass, loaded):

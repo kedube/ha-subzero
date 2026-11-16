@@ -8,6 +8,7 @@ import time
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
@@ -87,6 +88,32 @@ def test_recursion_errors_while_decoding_are_invalid_notifications(monkeypatch):
     monkeypatch.setattr(api.json, "loads", loads)
     with pytest.raises(api.ApiError, match="invalid notification"):
         api._object("{}")
+
+
+def test_string_layers_are_limited():
+    encoded = json.dumps({})
+    for _ in range(api.MAX_STRING_LAYERS - 1):
+        encoded = json.dumps(encoded)
+    assert api._object(encoded) == {}
+    with pytest.raises(api.ApiError, match="invalid notification"):
+        api._object(json.dumps(encoded))
+
+
+def test_escaped_string_chains_are_read_a_limited_number_of_times(monkeypatch):
+    """Each pass of this chain shortens it by only five characters."""
+    chain = "\\" + "u005c" * 50_000
+    loads = json.loads
+    calls = 0
+
+    def counting_loads(value):
+        nonlocal calls
+        calls += 1
+        return loads(value)
+
+    monkeypatch.setattr(api.json, "loads", counting_loads)
+    with pytest.raises(api.ApiError, match="invalid notification"):
+        api._object(chain)
+    assert calls <= 2 * api.MAX_STRING_LAYERS
 
 
 @pytest.mark.parametrize("message_type", [1, 2, 9])
@@ -216,8 +243,12 @@ async def api_server(aiohttp_server, monkeypatch, socket_enabled):
         data = await request.post()
         assert data["grant_type"] == "refresh_token"
         renewed = make_tokens(behavior["user_id"], refresh_token="rotated-refresh", expires_in=7200)
+        # Like B2C, the lifetimes also come relative to now.
+        renewed["expires_in"] = 7200
         if behavior.get("omit_id_token"):
             renewed.pop("id_token")
+        else:
+            renewed["id_token_expires_in"] = 7200
         return web.json_response(renewed)
 
     async def devices(request):
@@ -233,6 +264,8 @@ async def api_server(aiohttp_server, monkeypatch, socket_enabled):
             return web.json_response({}, status=429, headers={"Retry-After": "300"})
         if status == 401 and (behavior["refreshes"] == 0 or behavior.get("reject_refreshed")):
             return web.json_response({}, status=401)
+        if status == 403:
+            return web.json_response({}, status=403)
         return web.json_response(
             {
                 "devices": [
@@ -1062,6 +1095,56 @@ def test_notification_expiry_is_independent_of_account_token(monkeypatch):
     claims = base64.urlsafe_b64encode(json.dumps({"exp": 1900}).encode()).decode().rstrip("=")
     assert api.notification_lifetime(f"header.{claims}.signature") == 840
     assert api.notification_lifetime("opaque-token") == 3000
+
+
+def encoded_claims(claims: dict) -> str:
+    payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+    return f"header.{payload}.signature"
+
+
+def test_notification_lifetime_follows_the_token_not_the_host_clock(monkeypatch):
+    """A host clock an hour fast once renewed every connection as soon as it opened."""
+    monkeypatch.setattr(api.time, "time", lambda: 1000 + 3600)
+    assert api.notification_lifetime(encoded_claims({"iat": 1000, "exp": 4600})) == 3000
+    assert api.notification_lifetime(encoded_claims({"iat": 1000, "exp": 1900})) == 840
+    # Without an issue time, a token that looks expired still lasts five minutes.
+    assert api.notification_lifetime(encoded_claims({"exp": 4600})) == 300
+
+
+def test_unreadable_token_expiry(tokens):
+    huge = encoded_claims({"mergedId": "test-owner", "iat": 10**400, "exp": 10**400})
+    assert api.notification_lifetime(huge) == 3000
+    with pytest.raises(InvalidAuth):
+        api.token_state({**tokens, "id_token": huge})
+    with pytest.raises(InvalidAuth):
+        api.token_state({**tokens, "id_token_expires_in": 10**400})
+
+
+async def test_fast_host_clock_refreshes_the_token_once(api_server, tokens, monkeypatch):
+    """A token issued now looks expired to a clock two hours fast, but only once.
+
+    Only the integration's clock is fast; the token service stamps tokens in real time.
+    """
+    fast = SimpleNamespace(time=lambda: time.time() + 7200, monotonic=time.monotonic)
+    monkeypatch.setattr(api, "time", fast)
+    async with aiohttp.ClientSession() as session:
+        client = api.SubZeroClient(session, "test-key", tokens)
+        for _ in range(4):
+            await client.appliances()
+    assert api_server["refreshes"] == 1
+
+
+async def test_forbidden_with_a_fresh_token_is_not_a_sign_in_failure(api_server, tokens):
+    """A refusal a new token doesn't fix, such as for one appliance, needs no new sign-in."""
+    api_server["status"] = 403
+    async with aiohttp.ClientSession() as session:
+        client = api.SubZeroClient(session, "test-key", tokens)
+        with pytest.raises(api.ApiError) as raised:
+            await client.appliances()
+    assert raised.value.status == 403
+    assert not isinstance(raised.value, InvalidAuth)
+    assert api_server["refreshes"] == 1
+    assert len(api_server["requests"]) == 2
 
 
 @pytest.mark.parametrize("user_id", ["test-owner", "TEST-OWNER"])

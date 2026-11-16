@@ -31,6 +31,7 @@ from custom_components.subzero.api import (
 from custom_components.subzero.auth import InvalidAuth
 from custom_components.subzero.const import DOMAIN
 from custom_components.subzero.controls import clock_zone
+from custom_components.subzero.coordinator import MAX_UNRECOGNIZED_KEYS
 from custom_components.subzero.diagnostics import (
     async_get_config_entry_diagnostics,
     async_get_device_diagnostics,
@@ -1537,7 +1538,14 @@ def test_clock_zone_prefers_home_time_zone_when_offsets_match(hass):
     home = dt_util.get_default_time_zone()
     assert clock_zone(dt_util.now().isoformat()) is home
     assert clock_zone("2026-10-05T15:29:24+05:30") == timezone(timedelta(hours=5, minutes=30))
-    for value in ("2026-10-05T15:29:24", "not a time", None):
+    for value in (
+        "2026-10-05T15:29:24",
+        "not a time",
+        None,
+        # Too close to the ends of the calendar to convert.
+        "0001-01-01T00:00:00+05:00",
+        "9999-12-31T23:00:00-05:00",
+    ):
         assert clock_zone(value) is None
 
 
@@ -2121,6 +2129,19 @@ async def test_diagnostics_list_unrecognized_keys_without_values(hass, appliance
         "private-snapshot-value",
     ):
         assert private not in encoded
+
+
+async def test_unrecognized_keys_are_limited(hass, appliances):
+    """A cloud that invents keys can't grow the diagnostics list without end."""
+    coordinator = appliances.entry.runtime_data.coordinators["fridge"]
+    coordinator.unrecognized_keys.clear()
+    invented = {f"invented_{number:03}": number for number in range(150)}
+    await appliances.update("fridge", {**invented, "x" * 101: True})
+    assert len(coordinator.unrecognized_keys) == MAX_UNRECOGNIZED_KEYS
+    assert "invented_000" in coordinator.unrecognized_keys
+    assert "x" * 101 not in coordinator.unrecognized_keys
+    await appliances.update("fridge", {"another_feature": True})
+    assert "another_feature" not in coordinator.unrecognized_keys
 
 
 async def test_stream_error_only_affects_its_appliance(hass, appliances):

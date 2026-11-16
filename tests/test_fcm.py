@@ -720,6 +720,30 @@ async def test_cleanup_runs_in_the_background_and_stops_with_the_entry(cloud_app
     assert manager._task.cancelled()
 
 
+@oven
+async def test_stopping_alerts_can_itself_be_cancelled(cloud_appliance):
+    """Stopping waits for the listener's cleanup, but not past its own cancellation."""
+    manager = cloud_appliance.entry.runtime_data.alerts
+    cleaning = asyncio.Event()
+
+    async def run():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            # Like closing the Firebase connection, which can take a while.
+            cleaning.set()
+            await asyncio.Event().wait()
+
+    manager._task = asyncio.create_task(run())
+    stopping = asyncio.create_task(manager.stop())
+    await asyncio.wait_for(cleaning.wait(), timeout=1)
+    stopping.cancel()
+    await asyncio.wait([stopping])
+    assert stopping.cancelled()
+    manager._task.cancel()
+    await asyncio.wait([manager._task])
+
+
 @pytest.mark.parametrize(
     ("properties", "family", "healthy"),
     [

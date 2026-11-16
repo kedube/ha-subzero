@@ -1,6 +1,6 @@
 # Sub-Zero Group cloud protocol
 
-A reference for the cloud service behind the Sub-Zero Group Owner's App, as used by this Home Assistant integration (`custom_components/subzero/`). Sub-Zero doesn't document the service. Everything here comes from the integration's code and tests, the decompiled Android app, and traffic and diagnostics from real appliances. Last updated 2026-10-22.
+A reference for the cloud service behind the Sub-Zero Group Owner's App, as used by this Home Assistant integration (`custom_components/subzero/`). Sub-Zero doesn't document the service. Everything here comes from the integration's code and tests, the decompiled Android app, and traffic and diagnostics from real appliances. Last updated 2026-11-16.
 
 **Contents:** [About this document](#about-this-document) · [1. Architecture](#1-architecture) · [2. Sign-in](#2-sign-in) · [3. REST API](#3-rest-api) · [4. Direct methods](#4-direct-methods) · [5. Live updates](#5-live-updates) · [6. Firebase alerts](#6-firebase-alerts) · [7. Appliance state](#7-appliance-state) · [8. Events](#8-events) · [9. Enumerations](#9-enumerations) · [10. Writes](#10-writes) · [11. Faults](#11-faults) · [12. Errors and rate limits](#12-errors-and-rate-limits) · [13. Keeping state current](#13-keeping-state-current) · [14. Observations](#14-observations) · [15. Other app features](#15-other-app-features) · [16. Open questions](#16-open-questions) · [Source map](#source-map)
 
@@ -113,7 +113,7 @@ The verification page may require a CAPTCHA before a code is sent: when `config.
 
 | Step | Request | Success |
 | --- | --- | --- |
-| Get a challenge | `GET /SelfAsserted/DisplayControlAction/vbeta/captchaControlChallengeCode/GetChallenge?tx=…&p=…&challengeType=Visual` | `{"status":"200","challengeId":"…","challengeString":"<base64 PNG or data: URI>","azureRegion":"…"}` |
+| Get a challenge | `GET /SelfAsserted/DisplayControlAction/vbeta/captchaControlChallengeCode/GetChallenge?tx=…&p=…&challengeType=Visual` | `{"status":"200","challengeId":"…","challengeString":"<base64 PNG or data: URI>","azureRegion":"…"}`. A data URI's header must be exactly `data:image/<png, jpeg, gif, bmp or webp>;base64`, since the image goes into the form's Markdown text (`auth.py: CAPTCHA_HEADER`) [I] |
 | Answer it | `POST …/captchaControlChallengeCode/VerifyChallenge?tx=…&p=…`, form `challengeId`, `captchaEntered`, `challengeType=Visual`, `azureRegion` | `status` `"200"`, `reason` `"Solved"` (any case), `isCaptchaSolved` `"true"`, and the same `challengeId`. `reason` `"UserMessageIfBypass"` also counts as solved. |
 
 A `reason` of `WrongAnswer` or `NoChallengeSession`, or `status` `400`, means the answer was wrong. `azureRegion` is sent back as received, or empty; B2C's own script sends it empty (`get_captcha_challenge`). [I]
@@ -129,7 +129,8 @@ The verification page defines `var UV_PHONE = {"PhoneNumbers":[{"Id":1,"MaskedNu
 | Poll a call | `request_type=VALIDATION_REQUEST`, without a code | `200` answered, `449` still pending, `448` unreachable |
 
 - After a `449` for a code, the code counts as expired once `config.retryLimit` attempts are used (default 3), or once `pollIntervalInMilliseconds × pollLimit` has passed (default 5000 ms × 20; `pollLimit` is capped at 20). [I]
-- A call is polled every `pollIntervalInMilliseconds`, up to `pollLimit` times. [I]
+- A call is polled every `pollIntervalInMilliseconds`, at most 30 s, up to `pollLimit` times. [I]
+- A `config` that isn't an object, or a value that isn't a whole number, gets the defaults (`auth.py: SubZeroLogin._call_polling`). [I]
 - After a `200`, `confirmed` is requested again without `rememberMe`, and the code it returns is exchanged. [I]
 
 ### 2.6 Tokens
@@ -137,8 +138,8 @@ The verification page defines `var UV_PHONE = {"PhoneNumbers":[{"Id":1,"MaskedNu
 **Code exchange**: `POST TOKEN_URL` with the form `grant_type=authorization_code&client_id=…&redirect_uri=…&code=…&code_verifier=…&scope=…`. HTTP 400, 401, or 403 means the sign-in failed. The answer must contain `access_token` and `refresh_token`; B2C also returns `id_token`, which the integration prefers (§2.7). [I]
 
 **Refresh**: `POST TOKEN_URL` with the form `grant_type=refresh_token&client_id=…&refresh_token=…&scope=…` (`api.py: SubZeroClient.refresh`). [I]
-- It runs before any request once the stored expiry is less than 300 s away. The expiry is `expires_at` in the stored state, or the bearer token's `exp` claim.
-- It also runs once after an API 401 or 403, and the request is retried with the new token.
+- It runs before any request once the stored expiry is less than 300 s away. The expiry is `expires_at` in the stored state. For a new token it's Home Assistant's time plus B2C's `id_token_expires_in` (`expires_in` without an ID token), or the bearer token's `exp` claim when neither is sent. The relative lifetime keeps a host clock that runs fast from refreshing before every request.
+- It also runs once after an API 401 or 403, and the request is retried with the new token. A 403 that the new token also gets is an error for that request (`ApiError` with status 403), not a reason to sign in again, since a new sign-in couldn't change it.
 - A 400, 401, or 403 from the token endpoint, or a refresh that returns a different user ID, asks the user to sign in again.
 - A rotated refresh token is saved; an answer without one keeps the old one.
 - A saved sign-in without an ID token is refreshed once at startup to get one.
@@ -244,11 +245,12 @@ Both the HTTP status and the body matter (`api.py: SubZeroClient._json` with `ap
 | 2xx | A JSON object, possibly encoded as a string one or more times | Parsed, then checked (§4.3) |
 | 500 | `{"Message":"OK"}` or `{"message":"OK"}` | Success, no data. Whether the cloud really sends this is open (§16) |
 | 500 | Anything else, such as `{"Message":"Device offline"}` | Error |
-| 401, 403 | n/a | Refresh the token and retry once, then ask to sign in again |
+| 401 | n/a | Refresh the token and retry once, then ask to sign in again |
+| 403 | n/a | Refresh the token and retry once, then an error for that request |
 | 429 | n/a | Rate limited (§12) |
 | other | n/a | Error |
 
-String layers are decoded until an object remains; a string that isn't valid JSON is tried once more as an escaped string literal (`api.py: _object`). [I] The app instead strips backslashes and replaces `"{` and `}"` with `{` and `}` before one decode. [A]
+String layers are decoded until an object remains, up to 8; a string that isn't valid JSON is tried once more as an escaped string literal (`api.py: _object`, `MAX_STRING_LAYERS`). Each layer reads the whole string again, so the limit keeps a crafted string from blocking Home Assistant for seconds. [I] The app instead strips backslashes and replaces `"{` and `}"` with `{` and `}` before one decode. [A]
 
 Shapes seen or accepted:
 
@@ -407,7 +409,7 @@ Messages reach every live connection on the account. [O]
 | --- | --- | --- |
 | Client ping | `{"type":6}` every 15 s [I] | `signalr_netcore` defaults [A?] |
 | Silence timeout | Reconnect after 60 s without any frame [I] | The library's default [?] |
-| Renewal | At `min(3000 s, exp(accessToken) − now − 60 s)`, at least 1 s, or 3000 s when `exp` can't be read; or within one ping interval of a request (§13). Renewal opens a new connection, starting over from `negotiateUser`, while the current one keeps delivering. Once the new one's handshake completes, the current one closes and the new one reopens every channel. Messages are read on the current connection until then, so one that reached both may arrive twice, but none is lost. If the new connection fails, as with a 429 from the SignalR negotiate, the current one stays and renewal is retried after 30 s, doubling to 900 s, plus 0–5 s of jitter, and at least `Retry-After`. Each failed attempt is in `failed_connections` with `renewal: true`, and the current connection ends only if it fails itself [I] | A new connection 55 minutes after the last (`Future.delayed`, then "Refreshing SignalR connection"), without reopening channels [A] |
+| Renewal | At `min(3000 s, exp − iat − 60 s)` of the access token, at least 300 s, or 3000 s when `exp` can't be read. Without `iat`, Home Assistant's time stands in for it. Measuring from `iat` keeps a host clock that runs fast from renewing every connection as soon as it opens; or within one ping interval of a request (§13). Renewal opens a new connection, starting over from `negotiateUser`, while the current one keeps delivering. Once the new one's handshake completes, the current one closes and the new one reopens every channel. Messages are read on the current connection until then, so one that reached both may arrive twice, but none is lost. If the new connection fails, as with a 429 from the SignalR negotiate, the current one stays and renewal is retried after 30 s, doubling to 900 s, plus 0–5 s of jitter, and at least `Retry-After`. Each failed attempt is in `failed_connections` with `renewal: true`, and the current connection ends only if it fails itself [I] | A new connection 55 minutes after the last (`Future.delayed`, then "Refreshing SignalR connection"), without reopening channels [A] |
 | Reconnect after an error | Within 1 s, or after `Retry-After`, when a connection that lasted 120 s or more and delivered messages drops. Otherwise 30 s, doubling to 900 s, plus 0–5 s of jitter, and at least `Retry-After`. The delay starts over after a connection that lasted 120 s or more [I] | 3 connection attempts, then up to 5 automatic reconnects [A] |
 | Availability during a reconnect | When a connection that delivered messages drops, appliances stay available for up to 120 s while it reconnects. Only the live reporting sensor shows Disconnected. If no connection is open after 120 s, every appliance becomes unavailable with the latest error. Checks during that time read status without reopening a channel (result `disconnected`). Not during setup [I] | — |
 
@@ -580,7 +582,7 @@ Oven temperatures while off:
 - **Only a pushed `time` carries the appliance's offset.** Pushes reported `"2026-10-05T15:29:24-04:00"` while `get` answers reported `"2026-10-08T02:53:29+00:00"`, and both were correct instants: the push arrived 8 s after its `time`, and the `get` value was 14 s before the download. So the appliance clock was within about 15 s. [O]
 - The app never reads `time` except to set the clock over Bluetooth. [A]
 - **Kitchen timer start times are unreliable.** Ovens have reported a start about 27 years in the past (a Wolf range) and a 30-minute timer's start 63 minutes in the future, after its end (an SO3050PMSP), while the end times were right. [O] The app never reads `kitchen_timer*_start_time`: its timer tile and overlay count down from the end (`kitchen_timer.dart: KitchenTimer.timerDuration`, end minus now). [A] The integration does the same and has no start-time entities (`controls.py: timer_minutes`, `const.py: RETIRED_ENTITY_KEYS`). [I]
-- The integration reads a time without an offset in the zone of the appliance's last pushed `time`, or Home Assistant's zone until one arrives. When the pushed offset matches Home Assistant's zone, it uses that zone, which follows daylight saving time. Explicit offsets are kept (`controls.py: clock_zone`, `appliance_datetime`). `time` is left out of change detection (`UNCOMPARED_READ_KEYS`). [I]
+- The integration reads a time without an offset in the zone of the appliance's last pushed `time`, or Home Assistant's zone until one arrives. When the pushed offset matches Home Assistant's zone, it uses that zone, which follows daylight saving time. Explicit offsets are kept (`controls.py: clock_zone`, `appliance_datetime`). A pushed `time` too close to year 1 or 9999 to convert gives no zone. `time` is left out of change detection (`UNCOMPARED_READ_KEYS`). [I]
 - The time zone itself is set through the time settings endpoint (§3.4), and live messages may carry `timezone_id_name`. [A]
 
 ### 7.6 `uptime`
@@ -966,7 +968,9 @@ Active faults come from this endpoint, not from the `active_faults` property, wh
 | 429 during a check's read | The read is skipped and the appliance keeps its state; updates continue | [I] |
 | 429 during setup | Setup is retried later (`ConfigEntryNotReady`) | [I] |
 | 429 while opening channels | On a new connection's first round of opens, the connection ends and the reconnect waits at least `Retry-After`. On a retry of a channel that already failed, the connection stays and the retry waits at least `Retry-After` | [I] |
-| 401 or 403 from APIM | Refresh the token and retry once, then ask to sign in again | [I] |
+| 401 from APIM | Refresh the token and retry once, then ask to sign in again | [I] |
+| 403 from APIM | Refresh the token and retry once, then fail that request with `ApiError` (status 403). Which answer Sub-Zero gives for an appliance that left the account isn't known | [I][?] |
+| A pushed update that can't be applied | Logged and skipped; the connection and the other appliances carry on (`coordinator.py: SubZeroAccount._listen`) | [I] |
 | 400, 401, or 403 from `TOKEN_URL` | Ask to sign in again | [I] |
 | 404 for the fault list | No faults | [I][A] |
 | Fault details fail | Ignored | [I] |
@@ -1028,7 +1032,7 @@ Per appliance (`diagnostics.py: appliance_diagnostics`) [I]:
 | `missed_updates`, `unpushed_changes` | Door changes, and changes per property, that a check found before an update |
 | `recent_checks` | The last 20 checks: `time`, `reason`, `result` (`answered`, `silent`, `failed`, `disconnected`), `snapshot_seconds`, `renewed`, `late_snapshot_seconds` |
 | `clock_zone` | The zone used for times without an offset |
-| `unrecognized_state_keys` | Property names the integration doesn't know, without values |
+| `unrecognized_state_keys` | Property names the integration doesn't know, without values: up to 100, each up to 100 characters |
 
 Per account (`async_get_config_entry_diagnostics`) [I]:
 - `notifications`: `received`, `ignored` (which includes messages without state), `invalid`, and `last_received`;

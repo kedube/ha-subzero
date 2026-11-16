@@ -20,6 +20,9 @@ TOKEN_URL = POLICY_BASE + "/oauth2/v2.0/token"
 CLIENT_ID = "6eefabd0-49a3-4b92-b329-81b9f638e940"
 REDIRECT_URI = "com.szg.szgdigitalproductexperience://oauth/redirect"
 SCOPES = "openid offline_access " + CLIENT_ID
+# The CAPTCHA image's data URI header. The image goes into the sign-in form's text, which
+# is Markdown, so nothing else may come before its base64.
+CAPTCHA_HEADER = re.compile(r"data:image/(?:png|jpeg|gif|bmp|webp);base64", re.IGNORECASE)
 
 
 class LoginError(Exception):
@@ -200,7 +203,7 @@ class SubZeroLogin:
             if not encoded:
                 encoded = header
                 header = "data:image/png;base64"
-            elif not header.startswith("data:image/"):
+            elif not CAPTCHA_HEADER.fullmatch(header):
                 raise LoginError("Sub-Zero returned an invalid CAPTCHA challenge.")
             b64decode(encoded, validate=True)
             self.captcha_challenge_id = challenge_id
@@ -290,22 +293,37 @@ class SubZeroLogin:
         except KeyError, TypeError, ValueError:
             raise LoginError("Sub-Zero returned an invalid MFA verification response.") from None
 
-    def _mfa_verification_expired(self) -> bool:
-        config = (self.settings.get("config") if isinstance(self.settings, dict) else None) or {}
+    @property
+    def _config(self) -> dict:
+        """The verification settings on the sign-in page, or none if they aren't a mapping."""
+        config = self.settings.get("config") if isinstance(self.settings, dict) else None
+        return config if isinstance(config, dict) else {}
+
+    def _call_polling(self) -> tuple[float, int]:
+        """Seconds between phone call polls, and how many, as the page sets them.
+
+        Values the page gets wrong give its usual 5 seconds and 20 polls, and a wait
+        is at most 30 seconds, so a poll always ends.
+        """
+        config = self._config
         try:
-            retry_limit = max(1, int(config.get("retryLimit", 3)))
-        except TypeError, ValueError:
+            interval = int(config.get("pollIntervalInMilliseconds", 5000)) / 1000.0
+            limit = int(config.get("pollLimit", 20))
+        except TypeError, ValueError, OverflowError:
+            return 5.0, 20
+        return min(max(0.0, interval), 30.0), max(1, min(limit, 20))
+
+    def _mfa_verification_expired(self) -> bool:
+        try:
+            retry_limit = max(1, int(self._config.get("retryLimit", 3)))
+        except TypeError, ValueError, OverflowError:
             retry_limit = 3
         if self.mfa_attempts >= retry_limit:
             return True
         if self.mfa_requested_at is None:
             return False
-        try:
-            poll_interval = max(0.0, int(config.get("pollIntervalInMilliseconds", 5000)) / 1000.0)
-            poll_limit = max(1, min(int(config.get("pollLimit", 20)), 20))
-            timeout = poll_interval * poll_limit or 100.0
-        except TypeError, ValueError:
-            timeout = 100.0
+        poll_interval, poll_limit = self._call_polling()
+        timeout = poll_interval * poll_limit or 100.0
         return (time.monotonic() - self.mfa_requested_at) >= timeout
 
     async def verify_mfa_code(self, verification_code: str) -> dict:
@@ -338,9 +356,7 @@ class SubZeroLogin:
     async def poll_mfa_call(self) -> dict:
         try:
             settings = self.settings
-            config = settings.get("config") or {}
-            poll_interval = max(0.0, int(config.get("pollIntervalInMilliseconds", 5000)) / 1000.0)
-            poll_limit = max(1, min(int(config.get("pollLimit", 20)), 20))
+            poll_interval, poll_limit = self._call_polling()
             path = settings["hosts"]["tenant"] + "/" + settings["api"] + "/verify"
             params = {"tx": settings["transId"], "p": settings["hosts"]["policy"]}
             data = {"request_type": "VALIDATION_REQUEST"}
@@ -386,9 +402,8 @@ class SubZeroLogin:
                     ]
                 except LoginError:
                     self.phone_numbers = []
-                config = self.settings.get("config") or {}
                 self.captcha_required = (
-                    str(config.get("enableCaptchaChallenge", "")).lower() == "true"
+                    str(self._config.get("enableCaptchaChallenge", "")).lower() == "true"
                 )
                 self.captcha_solved = not self.captcha_required
             raise LoginChallenge("Sub-Zero requires another verification step.")

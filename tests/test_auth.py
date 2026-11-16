@@ -492,6 +492,12 @@ async def test_phone_step_without_phone_numbers_is_not_a_phone_challenge(
             "challengeId": "challenge-1",
             "challengeString": "data:image/png;base64,not base64!",
         },
+        # The image goes into the form's Markdown, which this would add a remote image to.
+        {
+            "status": "200",
+            "challengeId": "challenge-1",
+            "challengeString": "data:image/png)![x](https://example.invalid/x.png),AAAA",
+        },
     ],
 )
 async def test_unusable_captcha_challenge_is_rejected(login_server, login_client, challenge):
@@ -607,3 +613,20 @@ async def test_code_expiry_without_usable_limits_from_the_page(login_client, mon
     assert not login_client._mfa_verification_expired()
     login_client.mfa_requested_at = 900.0
     assert login_client._mfa_verification_expired()
+
+
+@pytest.mark.parametrize(
+    ("config", "polling"),
+    [
+        (["not", "a", "mapping"], (5.0, 20)),
+        ("text", (5.0, 20)),
+        ({"pollIntervalInMilliseconds": float("inf")}, (5.0, 20)),
+        ({"pollIntervalInMilliseconds": 10**9, "pollLimit": 99}, (30.0, 20)),
+        ({"pollIntervalInMilliseconds": "0", "pollLimit": "2"}, (0.0, 2)),
+    ],
+)
+async def test_call_polling_settings_from_the_page(login_client, config, polling):
+    """Settings the page gets wrong use its defaults, and a poll never waits long."""
+    login_client.settings = {"config": config}
+    assert login_client._call_polling() == polling
+    assert not login_client._mfa_verification_expired()

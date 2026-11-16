@@ -2,6 +2,24 @@
 
 Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then 2.00.
 
+## Unreleased
+
+### Fixed
+
+- **A Home Assistant clock running fast no longer floods Sub-Zero with requests.** With the clock about an hour fast, the integration replaced its live connection as soon as each one opened, and refreshed its sign-in before every request. That kind of reconnecting is what Sub-Zero refuses (HTTP 429). Token lifetimes are now measured from the tokens themselves, and the connection is replaced at most every 5 minutes.
+- **One update that can't be applied no longer stops live updates for every appliance.** Before, such an update ended the shared connection. The appliance sent the same value again after each reconnect, so updates kept stopping and appliances went unavailable. Now the update is logged and skipped. One such value, an appliance clock near year 1 or 9999, is now simply ignored.
+- **A request Sub-Zero refuses with HTTP 403 no longer asks you to sign in again** when a fresh sign-in token is refused too, since signing in again couldn't change it. Only that request fails, such as one appliance's.
+- **A refresh, control, or status read that's under way when the integration reloads now fails with an error.** Saving Configure reloads it. Before, the action ended as if cancelled, and the frontend got no answer.
+- Data Sub-Zero's services send in an unexpected shape is now handled instead of raising an error or tying up Home Assistant:
+  - A notification wrapped in more than 8 layers of JSON strings is skipped. A crafted string used to block Home Assistant for several seconds.
+  - Sign-in pages with unusable phone-call settings use the defaults, and a poll waits at most 30 seconds.
+  - A CAPTCHA image is accepted only with a plain image header, since it's shown in the sign-in form's text.
+  - Appliance types and token expiry times too large to read are treated as unreadable.
+
+### Diagnostics
+
+- `unrecognized_state_keys` lists at most 100 property names, each up to 100 characters.
+
 ## 1.13
 
 ### Changed

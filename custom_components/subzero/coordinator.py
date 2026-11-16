@@ -104,10 +104,25 @@ SEQUENCE_ZERO_COPY_WINDOW = timedelta(seconds=5)
 RECENT_PUSH_EVENTS = 10
 # How many recent channel checks diagnostics list, newest last.
 RECENT_CHECKS = 20
+# How many unrecognized property keys diagnostics list, and the longest kept, so a
+# cloud that invents keys can't grow them without end.
+MAX_UNRECOGNIZED_KEYS = 100
+MAX_UNRECOGNIZED_KEY_LENGTH = 100
 # Set to "check" while a channel check that got no snapshot reads status. That read
 # compares state with what push reported, and is skipped on a rate limit while state
 # is healthy.
 _read_reason: ContextVar[str | None] = ContextVar("subzero_read_reason", default=None)
+
+
+async def _await_unless_unloaded(task: asyncio.Task) -> None:
+    """Wait for a background task, which unloading the entry cancels, even if the
+    caller is cancelled; a cancellation the caller didn't get becomes an error."""
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        if (current := asyncio.current_task()) is not None and current.cancelling():
+            raise
+        raise HomeAssistantError("The Sub-Zero integration unloaded first.") from None
 
 
 def selected_devices(entry: ConfigEntry) -> dict[str, dict]:
@@ -401,7 +416,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         caller is cancelled.
         """
         task = self._check_task if self.check_running else self._start_check_task("manual")
-        await asyncio.shield(task)
+        await _await_unless_unloaded(task)
 
     async def async_shutdown(self) -> None:
         self._checks_stopped = True
@@ -939,7 +954,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
 
     async def async_refresh(self) -> None:
         """Finish reading status even if the caller is cancelled."""
-        await asyncio.shield(
+        await _await_unless_unloaded(
             self.entry.async_create_background_task(
                 self.hass, super().async_refresh(), "Sub-Zero status read"
             )
@@ -947,7 +962,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
 
     async def async_request_refresh(self) -> None:
         """Finish a requested status read even if the caller is cancelled."""
-        await asyncio.shield(
+        await _await_unless_unloaded(
             self.entry.async_create_background_task(
                 self.hass, super().async_request_refresh(), "Sub-Zero status request"
             )
@@ -989,7 +1004,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
                     raise error
                 if reason == "check":
                     self._check_missed_updates(data, self._read_updates)
-                self.unrecognized_keys.update(data.keys() - STATE_KEYS)
+                self._note_unrecognized(data.keys())
                 if "notifs" in data:
                     data = {**data, "notifs": notification_records(data)}
                     self._process_events(data, history=True)
@@ -1016,6 +1031,19 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             finally:
                 self._read_updates = None
                 self._read_error = None
+
+    def _note_unrecognized(self, keys: Collection[str]) -> None:
+        """Remember property keys the integration doesn't use, for diagnostics."""
+        room = MAX_UNRECOGNIZED_KEYS - len(self.unrecognized_keys)
+        if room > 0:
+            new = {
+                key
+                for key in keys
+                if key not in STATE_KEYS
+                and key not in self.unrecognized_keys
+                and len(key) <= MAX_UNRECOGNIZED_KEY_LENGTH
+            }
+            self.unrecognized_keys.update(sorted(new)[:room])
 
     def _check_missed_updates(self, data: dict, pushed: Collection[str] = ()) -> None:
         """Note changes, and door changes in particular, a check found before push.
@@ -1086,7 +1114,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
 
     @callback
     def apply_update(self, update: StateUpdate) -> None:
-        self.unrecognized_keys.update(update.properties.keys() - STATE_KEYS)
+        self._note_unrecognized(update.properties.keys())
         if zone := clock_zone(update.properties.get("time")):
             self.clock_zone = zone
         properties = {key: value for key, value in update.properties.items() if key in STATE_KEYS}
@@ -1510,7 +1538,14 @@ class SubZeroAccount:
                     elif isinstance(update, ChannelOpened):
                         coordinator.async_channel_opened()
                     else:
-                        coordinator.apply_update(update)
+                        try:
+                            coordinator.apply_update(update)
+                        except Exception:
+                            _LOGGER.exception(
+                                "Skipped a Sub-Zero update for %s that could not be applied",
+                                coordinator.device["name"],
+                            )
+                            continue
                     if (
                         not coordinator.last_update_success
                         and device_id not in self._initial_states

@@ -789,7 +789,11 @@ def test_refrigerator_type_overrides_model_prefix(type_id, maximum):
     assert temperature_range("crisp_set_temp", data) == (maximum - 2, maximum)
 
 
-@pytest.mark.parametrize("type_id", [None, 13, "", "1.2", "1.x.2.3", "1.2.3.4.5", "1.-2.3.4"])
+@pytest.mark.parametrize(
+    "type_id",
+    # A part past 4,300 digits used to raise, since Python won't read it as an integer.
+    [None, 13, "", "1.2", "1.x.2.3", "1.2.3.4.5", "1.-2.3.4", f"1.{'1' * 5000}.3.4"],
+)
 def test_unusable_appliance_type_keeps_model_fallback(type_id):
     assert temperature_range(
         "ref_set_temp", {"appliance_type": type_id, "appliance_model": "BI-36U"}

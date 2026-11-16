@@ -51,6 +51,9 @@ MAX_LOGGED_REQUESTS = 5000
 # long: the first wait, which doubles with each refusal in a row, up to the longest.
 SIGNALR_RETRY_FIRST = 60
 SIGNALR_RETRY_MAX = 600
+# The most JSON string layers a value may be wrapped in. Sub-Zero's notifications wrap
+# each value in one, so this leaves room for more without decoding a string endlessly.
+MAX_STRING_LAYERS = 8
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -60,11 +63,18 @@ def notification_lifetime(token: str) -> float:
     try:
         claims = json.loads(base64.urlsafe_b64decode(token.split(".")[1] + "=="))
         expiry = float(claims["exp"])
-        if math.isfinite(expiry):
-            return max(1, min(3000, expiry - time.time() - 60))
-    except ValueError, TypeError, KeyError, IndexError:
+        issued = claims.get("iat")
+        start = float(issued) if type(issued) in (int, float) else time.time()
+        if math.isfinite(expiry - start):
+            # The socket outlasts its token, so renewing late is harmless; too often is not.
+            return max(300, min(3000, expiry - start - 60))
+    except ValueError, TypeError, KeyError, IndexError, OverflowError:
         pass
     return 3000
+
+
+class Forbidden(InvalidAuth):
+    """HTTP 403, which a fresh token may not fix."""
 
 
 class ApiError(Exception):
@@ -217,7 +227,13 @@ def token_state(tokens: dict, previous: dict | None = None) -> dict:
             raise ValueError
         user_id = claims.get("mergedId") or claims["sub"]
         refresh = tokens.get("refresh_token") or previous["refresh_token"]
-        expires_at = float(tokens.get("expires_at") or claims["exp"])
+        lifetime = tokens.get("id_token_expires_in" if identity else "expires_in")
+        if tokens.get("expires_at"):
+            expires_at = float(tokens["expires_at"])
+        elif lifetime is not None:
+            expires_at = time.time() + float(lifetime)
+        else:
+            expires_at = float(claims["exp"])
         if (
             not isinstance(user_id, str)
             or not user_id
@@ -226,7 +242,7 @@ def token_state(tokens: dict, previous: dict | None = None) -> dict:
             or not math.isfinite(expires_at)
         ):
             raise ValueError
-    except KeyError, ValueError, IndexError, TypeError:
+    except KeyError, ValueError, IndexError, TypeError, OverflowError:
         raise InvalidAuth("Sub-Zero returned incomplete login tokens.") from None
     if user_id != user_id.lower():
         _LOGGER.debug("Normalizing account ID casing for cloud notifications")
@@ -270,6 +286,9 @@ def signalr_retry_delay(refusals: int) -> float:
 def _object(value, expected=dict) -> dict | list:
     layers = 0
     while isinstance(value, str):
+        if layers == MAX_STRING_LAYERS:
+            # Each layer reads the whole string again.
+            raise ApiError("Sub-Zero sent an invalid notification.")
         try:
             try:
                 value = json.loads(value)
@@ -549,7 +568,9 @@ class SubZeroClient:
                     raise RateLimited(delay, name)
                 if scope == "signalr":
                     self._signalr_refusals = 0
-                if response.status in (401, 403) or (token_request and response.status == 400):
+                if response.status == 403 and not token_request:
+                    raise Forbidden("Sub-Zero requires a new sign-in.")
+                if response.status == 401 or (token_request and response.status in (400, 403)):
                     raise InvalidAuth("Sub-Zero requires a new sign-in.")
                 if appliance_command and (200 <= response.status < 300 or response.status == 500):
                     body = (await response.text(errors="replace")).strip()
@@ -642,9 +663,12 @@ class SubZeroClient:
             await self.refresh(rejected_token=token)
         headers["Authorization"] = "Bearer " + self._api_token
         headers["Userid"] = user_id or self.tokens["api_user_id"]
-        return await self._json(
-            method, url, name=name, headers=headers, list_response=list_response, **kwargs
-        )
+        try:
+            return await self._json(
+                method, url, name=name, headers=headers, list_response=list_response, **kwargs
+            )
+        except Forbidden:
+            raise ApiError("Sub-Zero refused the request (HTTP 403).", status=403) from None
 
     async def appliances(self) -> list[Appliance]:
         data = await self._request("GET", "/consumerapp/user/devices", name="appliance list")
