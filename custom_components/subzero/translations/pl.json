@@ -52,7 +52,7 @@
   "services": {
     "schedule_ice_delay": {
       "name": "Zaplanuj przerwę w produkcji lodu",
-      "description": "Wstrzymuje samodzielną kostkarkę do lodu na 1–12 godzin, od razu lub później tego dnia.",
+      "description": "Wstrzymuje samodzielną kostkarkę do lodu na 1–12 godzin, od razu lub w ciągu najbliższych 24 godzin.",
       "fields": {
         "device_id": {"name": "Kostkarka do lodu", "description": "Samodzielna kostkarka do lodu, którą chcesz wstrzymać."},
         "duration": {"name": "Czas trwania", "description": "Liczba godzin wstrzymania produkcji lodu."},

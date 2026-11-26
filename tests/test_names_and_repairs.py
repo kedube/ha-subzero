@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.config_entries import ConfigEntryDisabler, ConfigEntryState
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 
@@ -196,13 +196,11 @@ async def test_firebase_that_cannot_be_set_up_raises_a_repair(hass, cloud_applia
         async def stop(self):
             self.do_listen = False
 
+        def is_started(self):
+            return self.do_listen
+
     async def sync(psid, token):
         return True
-
-    async def until(condition):
-        async with asyncio.timeout(1):
-            while not condition():
-                await asyncio.sleep(0.005)
 
     monkeypatch.setattr("custom_components.subzero.fcm.PushClient", FakePush)
     monkeypatch.setattr("custom_components.subzero.fcm.RETRY_INTERVAL", 0.01)
@@ -224,6 +222,135 @@ async def test_firebase_that_cannot_be_set_up_raises_a_repair(hass, cloud_applia
         assert manager.last_error is None
     finally:
         await manager.stop()
+
+
+async def until(condition):
+    async with asyncio.timeout(1):
+        while not condition():
+            await asyncio.sleep(0.005)
+
+
+@pytest.mark.parametrize("cloud_appliance", [FRIDGE], indirect=True)
+async def test_a_firebase_listener_that_never_signs_in_raises_a_repair(
+    hass, cloud_appliance, monkeypatch
+):
+    entry = cloud_appliance.entry
+    manager = entry.runtime_data.alerts
+    issues = ir.async_get(hass)
+    issue_id = firebase_alerts_issue(entry.entry_id)
+    listeners = []
+    signs_in = False
+
+    class FakePush:
+        # Like firebase-messaging's: start() returns before signing in, and the listener
+        # stops after a few errors in a row.
+        def __init__(self, callback, config, credentials, save, **kwargs):
+            self.do_listen = False
+            self.tasks = []
+            self.credentials = {"fcm": {"registration": {"token": "test-token"}}}
+            self.started = False
+            listeners.append(self)
+
+        async def checkin_or_register(self):
+            return "test-token"
+
+        async def start(self):
+            self.do_listen = True
+            self.tasks = [asyncio.get_running_loop().create_future()]
+            if signs_in:
+                self.started = True
+            else:
+                self.tasks[0].set_result(None)
+
+        async def stop(self):
+            self.do_listen = False
+            for task in self.tasks:
+                task.cancel()
+
+        def is_started(self):
+            return self.started
+
+    async def sync(psid, token):
+        manager._sync_refused = False
+        return True
+
+    monkeypatch.setattr("custom_components.subzero.fcm.PushClient", FakePush)
+    monkeypatch.setattr("custom_components.subzero.fcm.HEALTH_CHECK_INTERVAL", 0.01)
+    monkeypatch.setattr(manager, "_sync", sync)
+    manager._task = asyncio.create_task(manager._run())
+    try:
+        await until(lambda: len(listeners) == FAILURES_BEFORE_REPAIR)
+        assert issues.async_get_issue(DOMAIN, issue_id) is None
+        await until(lambda: issues.async_get_issue(DOMAIN, issue_id) is not None)
+        signs_in = True
+        await until(lambda: issues.async_get_issue(DOMAIN, issue_id) is None)
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.parametrize("cloud_appliance", [FRIDGE], indirect=True)
+@pytest.mark.parametrize("refused", [True, False])
+async def test_alert_subscriptions_sub_zero_refuses_raise_a_repair(
+    hass, cloud_appliance, monkeypatch, refused
+):
+    entry = cloud_appliance.entry
+    manager = entry.runtime_data.alerts
+    issues = ir.async_get(hass)
+    issue_id = firebase_alerts_issue(entry.entry_id)
+    syncs = 0
+
+    class FakePush:
+        def __init__(self, callback, config, credentials, save, **kwargs):
+            self.do_listen = False
+            self.tasks = []
+            self.credentials = {"fcm": {"registration": {"token": "test-token"}}}
+
+        async def checkin_or_register(self):
+            return "test-token"
+
+        async def start(self):
+            self.do_listen = True
+
+        async def stop(self):
+            self.do_listen = False
+
+        def is_started(self):
+            return self.do_listen
+
+    async def sync(psid, token):
+        nonlocal syncs
+        syncs += 1
+        # Otherwise an appliance hasn't reported the state its alerts depend on.
+        manager._sync_refused = refused
+        return False
+
+    monkeypatch.setattr("custom_components.subzero.fcm.PushClient", FakePush)
+    monkeypatch.setattr("custom_components.subzero.fcm.RETRY_INTERVAL", 0.01)
+    monkeypatch.setattr("custom_components.subzero.fcm.HEALTH_CHECK_INTERVAL", 0.01)
+    monkeypatch.setattr(manager, "_sync", sync)
+    manager._task = asyncio.create_task(manager._run())
+    try:
+        await until(lambda: syncs > FAILURES_BEFORE_REPAIR)
+        assert (issues.async_get_issue(DOMAIN, issue_id) is not None) is refused
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.parametrize("cloud_appliance", [FRIDGE], indirect=True)
+async def test_disabling_the_integration_clears_the_firebase_repair(hass, cloud_appliance):
+    entry = cloud_appliance.entry
+    issues = ir.async_get(hass)
+    issue_id = firebase_alerts_issue(entry.entry_id)
+    for _ in range(FAILURES_BEFORE_REPAIR):
+        entry.runtime_data.alerts._attempt_failed()
+    assert issues.async_get_issue(DOMAIN, issue_id) is not None
+    # A reload, as Configure makes, keeps it until alerts work.
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert issues.async_get_issue(DOMAIN, issue_id) is not None
+    await hass.config_entries.async_set_disabled_by(entry.entry_id, ConfigEntryDisabler.USER)
+    await hass.async_block_till_done()
+    assert issues.async_get_issue(DOMAIN, issue_id) is None
 
 
 @pytest.mark.parametrize("cloud_appliance", [FRIDGE], indirect=True)
@@ -255,6 +382,9 @@ async def test_an_oven_says_what_it_is_doing(hass, cloud_appliance):
     assert action() == "heating"
     await cloud_appliance.update({"cav_unit_on": False, "cav_at_set_temp": False})
     assert action() == "off"
+    # Until the oven says whether it's preheated, neither preheating nor heating shows.
+    await cloud_appliance.update({"cav_unit_on": True, "cav_at_set_temp": None})
+    assert action() is None
 
 
 @pytest.mark.parametrize("cloud_appliance", [FRIDGE], indirect=True)

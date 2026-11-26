@@ -52,7 +52,7 @@
   "services": {
     "schedule_ice_delay": {
       "name": "安排制冰暂停",
-      "description": "将独立制冰机暂停 1 到 12 小时，可以立即开始，也可以在今天稍后开始。",
+      "description": "将独立制冰机暂停 1 到 12 小时，可以立即开始，也可以在接下来 24 小时内开始。",
       "fields": {
         "device_id": {"name": "制冰机", "description": "要暂停的独立制冰机。"},
         "duration": {"name": "时长", "description": "暂停制冰的小时数。"},

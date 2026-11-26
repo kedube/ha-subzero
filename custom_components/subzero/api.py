@@ -51,6 +51,11 @@ MAX_LOGGED_REQUESTS = 5000
 # long: the first wait, which doubles with each refusal in a row, up to the longest.
 SIGNALR_RETRY_FIRST = 60
 SIGNALR_RETRY_MAX = 600
+# What the SignalR service's 429 says when it holds as many connections as Sub-Zero's
+# capacity allows, as orienw/ha-subzero 0.7.5 found. One frees up only when another
+# client disconnects, so the wait doesn't grow: from this many seconds up to double.
+CONNECTION_LIMIT_TEXT = "Connection count reaches limit"
+CONNECTION_LIMIT_RETRY = 120
 # The most JSON string layers a value may be wrapped in. Sub-Zero's notifications wrap
 # each value in one, so this leaves room for more without decoding a string endlessly.
 MAX_STRING_LAYERS = 8
@@ -95,14 +100,28 @@ class RateLimited(ApiError):
     def __init__(self, retry_after: float, request: str | None = None):
         self.retry_after = max(1, retry_after)
         self.request = request
-        if request is None:
-            message = "Sub-Zero temporarily limited requests."
-        else:
-            message = (
-                f"Sub-Zero temporarily limited requests ({request}, "
-                f"retrying in {round(self.retry_after)} s)."
-            )
-        super().__init__(message)
+        super().__init__(self._message())
+
+    def _message(self) -> str:
+        if self.request is None:
+            return "Sub-Zero temporarily limited requests."
+        return (
+            f"Sub-Zero temporarily limited requests ({self.request}, "
+            f"retrying in {round(self.retry_after)} s)."
+        )
+
+
+class ConnectionLimitReached(RateLimited):
+    """Sub-Zero's live-update service has no free connections.
+
+    One frees up only when another client disconnects, so waiting longer doesn't help.
+    """
+
+    def _message(self) -> str:
+        return (
+            "Sub-Zero's live-update service has no free connections "
+            f"(retrying in {round(self.retry_after)} s)."
+        )
 
 
 def rate_limit_scope(url: URL) -> str:
@@ -281,6 +300,14 @@ def signalr_retry_delay(refusals: int) -> float:
     """
     wait = SIGNALR_RETRY_FIRST * 2 ** min(refusals, 10) * random.uniform(1, 1.25)
     return min(SIGNALR_RETRY_MAX, wait)
+
+
+async def _connection_limit(response: aiohttp.ClientResponse) -> bool:
+    """Whether a 429 from the SignalR service says it has no free connections."""
+    try:
+        return CONNECTION_LIMIT_TEXT in await response.text(errors="replace")
+    except aiohttp.ClientError, TimeoutError:
+        return False
 
 
 def _object(value, expected=dict) -> dict | list:
@@ -471,9 +498,9 @@ class SubZeroClient:
             self.tokens["expires_at"] = 0
         self.on_tokens = on_tokens
         self._refresh_lock = asyncio.Lock()
-        # Until when each API (rate_limit_scope) is held back by a 429, and which
-        # request it refused.
-        self._holds: dict[str, tuple[float, str]] = {}
+        # Until when each API (rate_limit_scope) is held back by a 429, which request
+        # it refused, and whether the SignalR service had no free connections.
+        self._holds: dict[str, tuple[float, str, bool]] = {}
         # 429s in a row from the SignalR service, for signalr_retry_delay.
         self._signalr_refusals = 0
         # Recent 429s: when, which request, and the wait Sub-Zero asked for.
@@ -524,10 +551,10 @@ class SubZeroClient:
         """Send a request named `name` for diagnostics, a name without IDs in it."""
         scope = rate_limit_scope(URL(url))
         now = time.monotonic()
-        held_until, refused = self._holds.get(scope, (0.0, ""))
+        held_until, refused, full = self._holds.get(scope, (0.0, "", False))
         if held_until > now:
             self.request_log.append((now, name, True))
-            raise RateLimited(held_until - now, refused)
+            raise (ConnectionLimitReached if full else RateLimited)(held_until - now, refused)
         self.request_log.append((now, name, False))
         try:
             async with self.session.request(
@@ -540,17 +567,23 @@ class SubZeroClient:
             ) as response:
                 if response.status == 429:
                     header = response.headers.get("Retry-After")
-                    if header is None and scope == "signalr":
+                    full = (
+                        header is None and scope == "signalr" and await _connection_limit(response)
+                    )
+                    if full:
+                        delay = random.uniform(CONNECTION_LIMIT_RETRY, 2 * CONNECTION_LIMIT_RETRY)
+                    elif header is None and scope == "signalr":
                         delay = signalr_retry_delay(self._signalr_refusals)
                         self._signalr_refusals += 1
                     else:
                         delay = retry_delay(header)
-                    self._holds[scope] = (time.monotonic() + delay, name)
+                    self._holds[scope] = (time.monotonic() + delay, name, full)
                     # Once per refusal: requests held back meanwhile aren't sent or logged.
                     _LOGGER.warning(
-                        "Sub-Zero refused a %s request (HTTP 429); requests to its %s API "
+                        "Sub-Zero refused a %s request (HTTP 429)%s; requests to its %s API "
                         "wait %d s%s",
                         name,
+                        ", as its live-update service has no free connections" if full else "",
                         scope,
                         round(delay),
                         "" if header is not None else ", as it gave no Retry-After",
@@ -563,9 +596,11 @@ class SubZeroClient:
                             "retry_after": round(delay),
                             # Whether Sub-Zero said how long to wait, or the default applies.
                             "retry_after_sent": header is not None,
+                            # Whether the SignalR service had no free connections.
+                            "connection_limit": full,
                         }
                     )
-                    raise RateLimited(delay, name)
+                    raise (ConnectionLimitReached if full else RateLimited)(delay, name)
                 if scope == "signalr":
                     self._signalr_refusals = 0
                 if response.status == 403 and not token_request:

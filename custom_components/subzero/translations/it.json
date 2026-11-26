@@ -52,7 +52,7 @@
   "services": {
     "schedule_ice_delay": {
       "name": "Programma pausa del fabbricatore di ghiaccio",
-      "description": "Mette in pausa un fabbricatore di ghiaccio indipendente da 1 a 12 ore, subito o più tardi oggi.",
+      "description": "Mette in pausa un fabbricatore di ghiaccio indipendente da 1 a 12 ore, da subito o entro le prossime 24 ore.",
       "fields": {
         "device_id": {"name": "Fabbricatore di ghiaccio", "description": "Il fabbricatore di ghiaccio indipendente da mettere in pausa."},
         "duration": {"name": "Durata", "description": "Ore di pausa della produzione di ghiaccio."},

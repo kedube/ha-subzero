@@ -359,11 +359,7 @@ class SubZeroSensor(SubZeroEntity, SensorEntity):
     def native_value(self) -> int | float | str | datetime | None:
         key = self.entity_description.key
         if key == "live_reporting_mode":
-            return (
-                "Cloud push"
-                if self.coordinator.client.push_connected and self.coordinator.last_update_success
-                else "Disconnected"
-            )
+            return "Cloud push" if self.coordinator.push_current else "Disconnected"
         value = self.coordinator.data.get(key)
         if self.entity_description.device_class == SensorDeviceClass.TIMESTAMP:
             return appliance_datetime(value, self.coordinator.clock_zone)

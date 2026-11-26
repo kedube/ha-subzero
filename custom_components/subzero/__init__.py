@@ -128,6 +128,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: SubZeroConfigEntry) -> 
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded and (alerts := getattr(entry.runtime_data, "alerts", None)) is not None:
         await alerts.stop()
+    if unloaded and entry.disabled_by is not None:
+        # Nothing tries again while the integration is disabled, as the repair says.
+        ir.async_delete_issue(hass, DOMAIN, firebase_alerts_issue(entry.entry_id))
     if unloaded:
         # Usually to reload: the panel keeps the appliances, unavailable, until they're back.
         async_panel_entry_unloaded(hass, entry)

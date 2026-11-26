@@ -52,7 +52,7 @@
   "services": {
     "schedule_ice_delay": {
       "name": "Eisbereiter-Pause planen",
-      "description": "Pausiert einen separaten Eisbereiter für 1 bis 12 Stunden, sofort oder später am Tag.",
+      "description": "Pausiert einen separaten Eisbereiter für 1 bis 12 Stunden, ab sofort oder innerhalb der nächsten 24 Stunden.",
       "fields": {
         "device_id": {"name": "Eisbereiter", "description": "Der separate Eisbereiter, der pausiert werden soll."},
         "duration": {"name": "Dauer", "description": "Stunden, für die die Eisproduktion pausiert."},

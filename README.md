@@ -151,7 +151,7 @@ Things that apply to every appliance:
 
 Dedicated ice makers have an On and Off ice control and a door open delay setting. They report Sabbath mode, the door, the water filter, the delay schedule, the cleaning stage and next cleaning, and fault and winterization flags.
 
-- **Sub-Zero: Schedule ice delay** pauses production for 1 to 12 hours, now or later today, once or daily. See [Actions](#actions).
+- **Sub-Zero: Schedule ice delay** pauses production for 1 to 12 hours, starting now or within the next 24 hours, once or daily. See [Actions](#actions).
 - **End current ice delay** resumes production but keeps a repeating schedule. **Cancel ice delay schedule** removes the schedule.
 - Cleaning happens at the appliance; the cleaning sensors report its progress.
 
@@ -180,7 +180,7 @@ Each oven cavity has its own entities. A second cavity's entities start with **L
 | Dismiss kitchen timer | Stops a running timer or clears a finished one, like the app's Cancel and Tap to Dismiss. |
 
 - Turn on **Remote Ready** at the oven before each remote start; opening the door cancels it. See [Wolf's Remote Ready guide](https://www.subzero-wolf.com/assistance/answers/wolf/m-series-oven/sub-zero-group-owners-app---set-up-remote-access).
-- Except on E series and M series ovens, which start with the mode and temperature set at the oven, choose the cooking mode and temperature in Home Assistant while the oven waits in Remote Ready, then press **Start oven**. These ovens report no mode or temperature while they wait, so, as the app does, Home Assistant keeps your choice and sends it with the start. Choosing a mode fills in the app's usual temperature for it, which you can change. The choice is discarded when Remote Ready ends, on an appliance error, or when the connection to Sub-Zero drops, and can't be made while it's reconnecting. To choose a temperature and start in one step, call `climate.set_temperature` with `hvac_mode: heat`.
+- Except on older E series and M series ovens, which start with the mode and temperature set at the oven, choose the cooking mode and temperature in Home Assistant while the oven waits in Remote Ready, then press **Start oven**. Newer E series and M series ovens work like the others. These ovens report no mode or temperature while they wait, so, as the app does, Home Assistant keeps your choice and sends it with the start. Choosing a mode fills in the app's usual temperature for it, which you can change. The choice is discarded when Remote Ready ends, on an appliance error, or when the connection to Sub-Zero drops, and can't be made while it's reconnecting. To choose a temperature and start in one step, call `climate.set_temperature` with `hvac_mode: heat`.
 - Broil, Convection broil, Proof, Self clean, and Gourmet programs must be started at the oven, including from automations.
 - While either cavity self-cleans, the only change allowed is turning it off. The interior light is unavailable during Proof.
 - The oven temperature is shown even while the cavity is off. An oven that's off keeps reporting its last reading, so it stays stale until the cavity turns on again. Probe readings show as unknown when no probe is in use.
@@ -291,7 +291,7 @@ Appliances report events over their live update connection. Turning on **Firebas
 
 ## How live updates work
 
-All the appliances on an account share one live connection to Sub-Zero's cloud. Each appliance pushes its full state when the connection opens, then each change as it happens. Nothing is polled on a timer by default.
+All the appliances on an account share one live connection to Sub-Zero's cloud. Each appliance pushes its full state when the connection opens, then each change as it happens. Nothing is polled on a timer by default, except while the connection is down.
 
 Sometimes the cloud stops delivering updates for a while, for every appliance at once, even though the connection stays open. A door could then stay open in Home Assistant after it has closed. To catch this, the integration checks the connection at the moments a missed update matters most. A check asks one appliance to resend its full state, the same way the Sub-Zero app does each time it opens:
 
@@ -302,15 +302,19 @@ Sometimes the cloud stops delivering updates for a while, for every appliance at
 
 If the appliance doesn't answer within 16 seconds, the integration reads its state directly and reconnects, which usually restores updates for every appliance. The connection is also renewed at least every 50 minutes, which brings every appliance up to date. The new connection opens before the old one closes, so if Sub-Zero refuses it, updates keep arriving on the old one and the integration tries again later.
 
-**If the connection drops,** for example when your internet connection blips, the integration reconnects: right away if the connection had been up for at least 2 minutes, then after 30 seconds, then 60, and so on. Appliances stay available for up to 2 minutes meanwhile, so a short drop doesn't make every entity unavailable or log an error for each appliance. Entities keep their last values during that time, and the **Live reporting mode** sensor shows **Disconnected**. Reconnecting brings every appliance up to date. If the integration still can't reconnect after 2 minutes, the appliances become unavailable until it does. If Sub-Zero's live-update service refuses to connect (HTTP 429) without saying how long to wait, the integration tries again after about a minute, then about 2, doubling up to 10, with a random spread so that many homes don't retry at the same moment.
+**If the connection drops,** for example when your internet connection blips, the integration reconnects: right away if the connection had been up for at least 2 minutes, then after 30 seconds, then 60, and so on. Appliances stay available meanwhile, so a short drop doesn't make every entity unavailable or log an error for each appliance. Entities keep their last values, and the **Live reporting mode** sensor shows **Disconnected** until each appliance's state arrives on the new connection, which brings it up to date.
+
+While the connection stays down, the integration reads each appliance's status once a minute, which keeps it available, and its controls working, as long as those reads work. Readings can then be up to a minute old, and a brief change between two reads, such as a door opened and closed, isn't seen. A read that fails makes the appliance unavailable until a later one works or the connection is back. With **Enable polling for changes** off, there are no such reads, and appliances become unavailable 2 minutes after the drop if the integration still can't reconnect.
+
+If Sub-Zero's live-update service refuses to connect (HTTP 429) without saying how long to wait, the integration tries again after about a minute, then about 2, doubling up to 10, with a random spread so that many homes don't retry at the same moment. When the service says it has no free connections, which frees up only when someone else's connection ends, it tries again every 2 to 4 minutes instead.
 
 Appliances that are busy sending updates need no checks, since each update shows the connection works. A status read the integration makes for another reason, such as confirming a control, doesn't delay a check.
 
-**Cloud requests.** Sub-Zero publishes no request limit. Each check is one request, plus one more when the appliance doesn't answer. With nothing happening, the integration makes none. An event or a door left open adds at most one check every 3 minutes for 10 or 15 minutes: up to 3 or 5, and none with **Follow-up checks** off. The shared connection check adds one every 3 minutes while the connection is quiet: up to 20 an hour. If Sub-Zero asks the integration to slow down, it waits as long as asked, and updates keep arriving in the meantime.
+**Cloud requests.** Sub-Zero publishes no request limit. Each check is one request, plus one more when the appliance doesn't answer. With nothing happening, the integration makes none. An event or a door left open adds at most one check every 3 minutes for 10 or 15 minutes: up to 3 or 5, and none with **Follow-up checks** off. The shared connection check adds one every 3 minutes while the connection is quiet: up to 20 an hour. While the connection is down, each appliance's status is read once a minute. If Sub-Zero asks the integration to slow down, it waits as long as asked, and updates keep arriving in the meantime.
 
 **The check intervals are fixed**, as Home Assistant's guidelines ask of integrations. For checks on another schedule, turn off **Enable polling for changes** and run the Refresh action from an automation.
 
-**Turning off Enable polling for changes** stops the follow-up checks, the open-door checks, the shared connection check, and the 30-minute fault refresh. A new event still gets its one check.
+**Turning off Enable polling for changes** stops the follow-up checks, the open-door checks, the shared connection check, the status reads while the connection is down, and the 30-minute fault refresh. A new event still gets its one check.
 
 **Controls are confirmed from the appliance.** After a change, the integration waits for the appliance to report the new value, trying up to three times, eight seconds each. If the appliance still doesn't report it, the change fails with the last error the cloud gave. Changes the app makes in a fixed order, such as an oven start or an ice mode change, are sent in that order.
 
@@ -327,7 +331,7 @@ The integration download shows:
 - the last 10 connections: when each started and ended, and why it ended (`lifetime`, `renewal`, `closed`, or an error). When the connection was closed or lost, `socket` shows how: whether Sub-Zero sent a close, with its code and reason, or the network dropped it;
 - the last 10 connection attempts that failed, with when and why, such as a network error looking up Sub-Zero's address. `renewal` is `true` when the attempt was replacing a connection, which kept delivering updates meanwhile;
 - the requests sent to Sub-Zero in the last hour, by kind, such as `get` for a status read or `negotiateUser` for a new connection, and those held back by a rate limit;
-- the last 10 times Sub-Zero limited requests (HTTP 429): which request it refused, the API that then waits, how long, and whether Sub-Zero said how long to wait;
+- the last 10 times Sub-Zero limited requests (HTTP 429): which request it refused, the API that then waits, how long, whether Sub-Zero said how long to wait, and whether the live-update service had no free connections (`connection_limit`);
 - whether the sidebar panel is on and in the sidebar.
 
 Each appliance's download shows its state, how the panel draws it (the layout read from its model number, and its Appearance), and these counters:
@@ -337,6 +341,7 @@ Each appliance's download shows its state, how the panel draws it (the layout re
 | `snapshots`, `updates`, `last_received` | Full states and changes received, and when the last arrived |
 | `channel_reopens` | Checks of every kind |
 | `alert_checks`, `watch_checks`, `connection_checks`, `manual_checks` | Checks after an event, follow-up and open-door checks, shared connection checks, and Refresh actions |
+| `outage_reads` | Status reads while the connection was down |
 | `silent_channels` | Checks the appliance didn't answer within 16 seconds |
 | `connection_renewals` | Reconnects those silent checks caused |
 | `check_reads`, `skipped_reads` | Checks that compared state, and reads skipped because Sub-Zero asked to slow down |
@@ -344,7 +349,7 @@ Each appliance's download shows its state, how the panel draws it (the layout re
 | `recent_checks` | The last 20 checks: time, reason, result, how long the answer took, whether it reconnected, and how late an answer came after the check stopped waiting |
 | `recent_silent_channels`, `recent_connection_renewals` | The times of the last 10 of each. The same times on several appliances mean the whole connection went quiet. |
 
-**Repairs.** Home Assistant raises a repair when an appliance you selected is no longer on your Sub-Zero account, which is why it stopped reporting, and when Firebase appliance alerts can't be set up after several tries. Each says what to do and clears itself once the cause is gone.
+**Repairs.** Home Assistant raises a repair when an appliance you selected is no longer on your Sub-Zero account, which is why it stopped reporting, and when Firebase appliance alerts fail several times in a row: Home Assistant can't connect to Firebase, or Sub-Zero refuses the alert subscriptions. Each says what to do and clears itself once the cause is gone. The Firebase repair also clears when you turn the alerts off or disable the integration.
 
 **Debug logging.** Turn on debug logging for `custom_components.subzero` to record connection attempts, message types, state changes, door changes that updates missed, and checks and reconnects. Logged values leave out network identifiers.
 

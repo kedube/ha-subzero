@@ -2484,6 +2484,7 @@ async def test_diagnostics_count_push_updates(hass, appliances):
         "watch_checks": 0,
         "connection_checks": 0,
         "manual_checks": 0,
+        "outage_reads": 0,
         "silent_channels": 0,
         "connection_renewals": 0,
         "unpushed_changes": {},

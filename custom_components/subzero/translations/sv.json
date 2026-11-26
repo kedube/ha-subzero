@@ -52,7 +52,7 @@
   "services": {
     "schedule_ice_delay": {
       "name": "Schemalägg ispaus",
-      "description": "Pausar en fristående ismaskin i 1 till 12 timmar, nu eller senare i dag.",
+      "description": "Pausar en fristående ismaskin i 1 till 12 timmar, från nu eller inom de närmaste 24 timmarna.",
       "fields": {
         "device_id": {"name": "Ismaskin", "description": "Den fristående ismaskin som ska pausas."},
         "duration": {"name": "Varaktighet", "description": "Antal timmar som isproduktionen pausas."},

@@ -52,7 +52,7 @@
   "services": {
     "schedule_ice_delay": {
       "name": "IJspauze plannen",
-      "description": "Pauzeert een losse ijsmachine 1 tot 12 uur, nu of later vandaag.",
+      "description": "Pauzeert een losse ijsmachine 1 tot 12 uur, vanaf nu of binnen de komende 24 uur.",
       "fields": {
         "device_id": {"name": "IJsmachine", "description": "De losse ijsmachine die gepauzeerd moet worden."},
         "duration": {"name": "Duur", "description": "Aantal uren dat de ijsproductie pauzeert."},

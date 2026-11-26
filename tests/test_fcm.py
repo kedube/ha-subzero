@@ -618,6 +618,9 @@ async def test_firebase_listener_saves_credentials_and_stops(cloud_appliance, mo
         async def stop(self):
             self.do_listen = False
 
+        def is_started(self):
+            return self.do_listen
+
     async def sync(psid, token):
         assert psid == manager.entry.data["fcm_psid"]
         assert token == "test-token"
@@ -659,6 +662,9 @@ async def test_stopped_firebase_listener_task_is_restarted(cloud_appliance, monk
 
         async def stop(self):
             self.do_listen = False
+
+        def is_started(self):
+            return False
 
     async def sync(psid, token):
         return True
@@ -774,6 +780,8 @@ async def test_subscriptions_follow_the_kind_of_appliance(
     client.unsubscribe_alerts = AsyncMock()
     client.subscribe_alerts = AsyncMock()
     assert await manager._sync("test-psid", "test-token") is healthy
+    # An appliance that hasn't reported its kind waits; Sub-Zero refused nothing.
+    assert not manager._sync_refused
     if family is None:
         client.register_for_alerts.assert_not_awaited()
         client.subscribe_alerts.assert_not_awaited()
@@ -792,6 +800,7 @@ async def test_an_appliance_whose_alerts_cannot_be_set_is_tried_again(cloud_appl
     client.register_for_alerts = AsyncMock(side_effect=ApiError("HTTP 503", status=503))
     client.subscribe_alerts = AsyncMock()
     assert not await manager._sync("test-psid", "test-token")
+    assert manager._sync_refused
     client.subscribe_alerts.assert_not_awaited()
     assert "Could not subscribe to alerts for Kitchen" in caplog.text
     # The id made for it is kept, so the next try registers the same one.

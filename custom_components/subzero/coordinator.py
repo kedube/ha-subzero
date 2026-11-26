@@ -28,6 +28,7 @@ from .api import (
     ApiError,
     ApplianceFault,
     ChannelOpened,
+    ConnectionLimitReached,
     RateLimited,
     StateUpdate,
     SubZeroClient,
@@ -97,6 +98,9 @@ DOOR_WATCH = timedelta(minutes=15)
 # With the shared connection check on, one appliance's channel is checked whenever
 # the connection goes this long without a message.
 CONNECTION_CHECK_INTERVAL = timedelta(minutes=3)
+# While push can't confirm an appliance's state, its status is read this often. Each
+# read that works keeps it available for another PUSH_LOSS_GRACE.
+OUTAGE_READ_INTERVAL = timedelta(minutes=1)
 # Sequence 0 does not tell events apart, so a live event with it copies an earlier
 # Firebase alert only within this many seconds of it.
 SEQUENCE_ZERO_COPY_WINDOW = timedelta(seconds=5)
@@ -212,6 +216,17 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         # A silent check's record, when it started, and the connection it used, until
         # a snapshot shows whether its answer was only late.
         self._late_snapshot: tuple[dict, float, object] | None = None
+        # Why push can't vouch for the state since a connection ended, until a pushed
+        # snapshot, or a status read once the channel reopened, confirms it.
+        self._unconfirmed: Exception | None = None
+        # Meanwhile, the timer that makes the appliance unavailable PUSH_LOSS_GRACE
+        # after its state was last confirmed.
+        self._unsub_hold: CALLBACK_TYPE | None = None
+        self._hold_job = HassJob(
+            self._hold_ended, f"{DOMAIN} {device['name']} push hold", cancel_on_shutdown=True
+        )
+        # Whether the appliance accepted its update channel on the current connection.
+        self._channel_open = False
         self.client = client
         self.data = {}
         self.entry = entry
@@ -233,6 +248,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             "watch_checks": 0,
             "connection_checks": 0,
             "manual_checks": 0,
+            "outage_reads": 0,
             "silent_channels": 0,
             "connection_renewals": 0,
         }
@@ -351,6 +367,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         """The appliance did not open its update channel, so it can't report."""
         self._read_error = error
         self._channel_error = error
+        self._channel_open = False
         self.async_set_update_error(error)
 
     @callback
@@ -358,12 +375,102 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         """The appliance accepted its update channel."""
         self._read_error = None
         self._channel_error = None
+        self._channel_open = True
 
     @callback
     def async_push_failed(self, error: Exception) -> None:
         """Push stopped for every appliance, which also fails a status read under way."""
         self._read_error = error
         self.async_set_update_error(error)
+
+    @property
+    def push_current(self) -> bool:
+        """Whether push keeps the appliance's state current."""
+        return self.client.push_connected and self.last_update_success and self._unconfirmed is None
+
+    @property
+    def needs_outage_read(self) -> bool:
+        """Whether a status read has to stand in for push to keep the state current."""
+        if self._unconfirmed is None or (
+            not self.last_update_success
+            and isinstance(self.last_exception, ConfigEntryAuthFailed | InvalidAuth)
+        ):
+            return False
+        if not self.client.push_connected:
+            return True
+        # Connected again. Once its channel opens, recovery restores an unavailable
+        # appliance, and one whose channel failed waits for it to reopen.
+        return self.last_update_success and self._channel_error is None
+
+    @callback
+    def async_connection_lost(self, error: Exception, *, hold: bool) -> None:
+        """Push stopped for every appliance, as their channels closed with the connection.
+
+        With `hold`, which a working connection's drop gives, an available appliance
+        stays available for PUSH_LOSS_GRACE, and each status read that confirms its
+        state meanwhile keeps it available longer. One already held stays held.
+        """
+        # Remote Ready may end and return unseen while push is down.
+        self.start_settings = {}
+        # A channel error belonged to the connection that ended, so status reads can
+        # restore the appliance until the next connection opens its channel.
+        self._channel_error = None
+        self._channel_open = False
+        self._unconfirmed = error
+        if not self.data:
+            # Before the first state nothing can go stale, and setup reads the state.
+            return
+        if self.last_update_success and (hold or self._unsub_hold is not None):
+            if self._unsub_hold is None:
+                self._start_hold()
+            # The live reporting sensor shows that the connection is down.
+            self.async_update_listeners()
+        else:
+            self.async_set_update_error(error)
+
+    @callback
+    def _start_hold(self) -> None:
+        self._cancel_hold()
+        self._unsub_hold = async_call_later(self.hass, PUSH_LOSS_GRACE, self._hold_job)
+
+    @callback
+    def _cancel_hold(self) -> None:
+        if self._unsub_hold is not None:
+            self._unsub_hold()
+            self._unsub_hold = None
+
+    @callback
+    def _hold_ended(self, _now: datetime) -> None:
+        self._unsub_hold = None
+        if self._unconfirmed is None or not self.last_update_success:
+            return
+        if self.client.push_connected and self._channel_open:
+            # Its channel opened again, so updates arrive from here.
+            self._push_confirmed()
+            self.async_update_listeners()
+            return
+        self.async_set_update_error(self._unconfirmed)
+
+    @callback
+    def _push_confirmed(self) -> None:
+        self._unconfirmed = None
+        self._cancel_hold()
+
+    @callback
+    def _read_confirmed(self) -> None:
+        """Count a status read's state as current, though push couldn't confirm it."""
+        if self._unconfirmed is None:
+            return
+        if self.client.push_connected and self._channel_open:
+            # Its channel opened again, and the read caught up on what push missed.
+            self._push_confirmed()
+        else:
+            self._start_hold()
+
+    async def async_outage_read(self) -> None:
+        """Read status in place of push, which keeps the appliance available."""
+        self.push_stats["outage_reads"] += 1
+        await self._async_refresh_for("outage")
 
     @callback
     def _start_check_task(self, reason: str) -> asyncio.Task:
@@ -421,6 +528,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
     async def async_shutdown(self) -> None:
         self._checks_stopped = True
         self._cancel_check()
+        self._cancel_hold()
         if self._unsub_alert_check is not None:
             self._unsub_alert_check()
             self._unsub_alert_check = None
@@ -544,6 +652,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
     @callback
     def async_set_update_error(self, error: Exception) -> None:
         self._cancel_check()
+        self._cancel_hold()
         self.start_settings = {}
         super().async_set_update_error(error)
 
@@ -799,7 +908,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         An oven idle in Remote Ready drops a cooking mode sent on its own, so like the
         app's start dialog the choice waits for the start, which sends it.
         """
-        if self._channel_error is not None or not self.client.push_connected:
+        if self._channel_error is not None or not self.push_current:
             # Remote Ready could end and return unseen before the start.
             raise ServiceValidationError(
                 "Home Assistant is reconnecting to the appliance; try again."
@@ -984,6 +1093,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
             self._shorten_check()
         else:
             self._cancel_check()
+            self._cancel_hold()
             self._read_failed(self)
 
     async def _async_update_data(self) -> dict:
@@ -1015,6 +1125,7 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
                     **{key: value for key, value in data.items() if key in STATE_KEYS},
                     **self._read_updates,
                 }
+                self._read_confirmed()
                 return self._discard_excluded(data)
             except InvalidAuth as error:
                 raise ConfigEntryAuthFailed(str(error)) from error
@@ -1127,7 +1238,9 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         if properties:
             self._read_error = None
             self._channel_error = None
-            if not update.full:
+            if update.full:
+                self._push_confirmed()
+            else:
                 # A pushed change ends a silent spell, so a later one may renew again.
                 self._renewed = False
             snapshot = self._channel_snapshot
@@ -1248,12 +1361,19 @@ class SubZeroAccount:
         }
         self._initial_states = {device_id: asyncio.Event() for device_id in self.coordinators}
         self._recoveries: dict[str, asyncio.Task] = {}
-        # While push reconnects after a drop, appliances stay available until this
-        # timer reports the latest error.
-        self._unsub_push_grace: CALLBACK_TYPE | None = None
+        # Why push failed last.
         self._push_error: Exception | None = None
         # When a working connection dropped, until a new one delivers.
         self._push_lost_at: float | None = None
+        # The timer for the status reads that stand in for push while it can't confirm
+        # every appliance's state, and the reads under way.
+        self._unsub_outage_reads: CALLBACK_TYPE | None = None
+        self._outage_reads_job = HassJob(
+            self._start_outage_reads, f"{DOMAIN} outage status reads", cancel_on_shutdown=True
+        )
+        self._outage_reads: dict[str, asyncio.Task] = {}
+        # Sub-Zero refused the sign-in, so status reads would only be refused too.
+        self._sign_in_failed = False
         self._unsub_connection_check: CALLBACK_TYPE | None = None
         self._connection_check_job = HassJob(
             self._start_connection_check, f"{DOMAIN} connection check", cancel_on_shutdown=True
@@ -1378,6 +1498,9 @@ class SubZeroAccount:
                 and self.client.push_connected
             ):
                 self._start_recovery(coordinator)
+        if self._push_error is not None and not self.client.push_connected:
+            # Push failed while setting up, so status reads stand in for it.
+            self._schedule_outage_reads()
         if metadata_error is not None:
             _LOGGER.warning(
                 "Could not refresh appliance units; using cached units where available: %s",
@@ -1431,42 +1554,88 @@ class SubZeroAccount:
 
         `dropped` means a connection that delivered messages ended. A new connection
         reopens every channel, and each pushes a snapshot of current state, so a
-        reconnect within the grace period leaves nothing to report. Until then, only
-        the live reporting sensor shows the connection is down.
+        reconnect within PUSH_LOSS_GRACE leaves nothing to report. Until then, only
+        the live reporting sensor shows the connection is down. Unless polling is
+        off, status reads meanwhile keep each appliance available while they work.
         """
         self._push_error = error
-        for coordinator in self.coordinators.values():
-            # Remote Ready may end and return unseen while push is down.
-            coordinator.start_settings = {}
-        if (
-            dropped
-            and not self._initial_states
-            and self.entry.state is ConfigEntryState.LOADED
-            and not self.hass.is_stopping
-        ):
-            self._cancel_push_grace()
+        setting_up = (
+            bool(self._initial_states)
+            or self.entry.state is not ConfigEntryState.LOADED
+            or self.hass.is_stopping
+        )
+        if dropped and not setting_up:
             self._push_lost_at = time.monotonic()
-            self._unsub_push_grace = async_call_later(
-                self.hass, PUSH_LOSS_GRACE, self._push_grace_ended
-            )
             _LOGGER.warning(
                 "Lost Sub-Zero's notification connection, reconnecting "
-                "(appliances stay available for up to %d seconds): %s",
-                PUSH_LOSS_GRACE,
+                "(appliances stay available %s): %s",
+                f"for up to {PUSH_LOSS_GRACE} seconds"
+                if self.entry.pref_disable_polling
+                else "while status reads work",
                 error_summary(error),
             )
-            for coordinator in self.coordinators.values():
-                coordinator.async_update_listeners()
-        elif self._unsub_push_grace is None:
-            self.set_error(error)
+        for coordinator in self.coordinators.values():
+            coordinator.async_connection_lost(error, hold=dropped and not setting_up)
+        for ready in self._initial_states.values():
+            ready.set()
+        if not self._initial_states and not self.hass.is_stopping:
+            self._schedule_outage_reads()
 
     @callback
-    def _push_grace_ended(self, _now: datetime) -> None:
-        self._unsub_push_grace = None
-        if self.client.push_connected:
-            # Connected again. An appliance whose channel fails reports it itself.
+    def _schedule_outage_reads(self) -> None:
+        if (
+            self._unsub_outage_reads is None
+            and not self.entry.pref_disable_polling
+            and not self._sign_in_failed
+        ):
+            self._unsub_outage_reads = async_call_later(
+                self.hass, OUTAGE_READ_INTERVAL, self._outage_reads_job
+            )
+
+    @callback
+    def _cancel_outage_reads(self) -> None:
+        if self._unsub_outage_reads is not None:
+            self._unsub_outage_reads()
+            self._unsub_outage_reads = None
+
+    @callback
+    def _start_outage_reads(self, _now: datetime) -> None:
+        """Read the status of each appliance whose state push can't confirm.
+
+        Each read that works keeps the appliance available for another
+        PUSH_LOSS_GRACE, and one that fails makes it unavailable. They repeat until
+        push confirms every appliance again.
+        """
+        self._unsub_outage_reads = None
+        if self.hass.is_stopping or self._sign_in_failed:
             return
-        self.set_error(self._push_error or ApiError("Sub-Zero's notification stream ended."))
+        due = [
+            coordinator
+            for coordinator in self.coordinators.values()
+            if coordinator.needs_outage_read
+        ]
+        if not due:
+            return
+        for coordinator in due:
+            read = self._outage_reads.get(coordinator.device_id)
+            if read is None or read.done():
+                self._outage_reads[coordinator.device_id] = self.entry.async_create_background_task(
+                    self.hass, self._outage_read(coordinator), f"{coordinator.name} - outage read"
+                )
+        self._schedule_outage_reads()
+
+    async def _outage_read(self, coordinator: SubZeroCoordinator) -> None:
+        try:
+            await coordinator.async_outage_read()
+        except HomeAssistantError:
+            # The integration unloaded first.
+            return
+        if not coordinator.last_update_success and isinstance(
+            coordinator.last_exception, ConfigEntryAuthFailed
+        ):
+            # Home Assistant asks for a new sign-in. Until then, reads would be refused.
+            self._sign_in_failed = True
+            self._cancel_outage_reads()
 
     @callback
     def _push_restored(self) -> None:
@@ -1477,13 +1646,6 @@ class SubZeroAccount:
                 time.monotonic() - self._push_lost_at,
             )
             self._push_lost_at = None
-        self._cancel_push_grace()
-
-    @callback
-    def _cancel_push_grace(self) -> None:
-        if self._unsub_push_grace is not None:
-            self._unsub_push_grace()
-            self._unsub_push_grace = None
 
     @callback
     def _start_recovery(self, coordinator: SubZeroCoordinator) -> None:
@@ -1508,7 +1670,7 @@ class SubZeroAccount:
         try:
             await self._listen()
         finally:
-            self._cancel_push_grace()
+            self._cancel_outage_reads()
 
     async def _listen(self) -> None:
         backoff = RECONNECT_DELAY
@@ -1559,18 +1721,21 @@ class SubZeroAccount:
                         self._start_recovery(coordinator)
                 raise ApiError("Sub-Zero's notification stream ended.")
             except InvalidAuth as error:
-                self._cancel_push_grace()
                 self._push_lost_at = None
+                self._sign_in_failed = True
+                self._cancel_outage_reads()
                 self.set_error(error)
                 self.entry.async_start_reauth(self.hass)
                 return
             except ApiError as error:
                 self._push_failed(error, dropped=delivered)
                 retry_after = error.retry_after if isinstance(error, RateLimited) else 0
+                full = isinstance(error, ConnectionLimitReached)
             except Exception as error:
                 _LOGGER.exception("Sub-Zero's notification stream failed unexpectedly")
                 self._push_failed(error, dropped=delivered)
                 retry_after = 0
+                full = False
             finally:
                 pending = {*recoveries.values(), *canceled}
                 for recovery in pending:
@@ -1578,6 +1743,11 @@ class SubZeroAccount:
                 if pending:
                     await asyncio.gather(*pending, return_exceptions=True)
                 recoveries.clear()
+            if full:
+                # A full service admits a connection only once another client leaves,
+                # so the wait, already random, doesn't grow.
+                await asyncio.sleep(retry_after)
+                continue
             if time.monotonic() - started >= STABLE_CONNECTION:
                 backoff = RECONNECT_DELAY
                 if delivered:

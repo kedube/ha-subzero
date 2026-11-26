@@ -452,10 +452,10 @@ def cook_mode_offered(data: dict, key: str, mode: int) -> bool:
 def held_for_start(data: dict, key: str) -> bool:
     """Whether a cooking mode or temperature waits for the remote start.
 
-    Ovens outside E series and M series report no cooking mode or temperature while
-    idle in Remote Ready, and drop a cooking mode sent on its own, so like the app's
-    start dialog the choice is kept and sent with the start. E series and M series
-    start with the settings made at the oven.
+    Ovens outside series 3 and 4 report no cooking mode or temperature while idle in
+    Remote Ready, and drop a cooking mode sent on its own, so like the app's start
+    dialog the choice is kept and sent with the start. Older E series and M series
+    ovens, series 3 and 4, start with the settings made at the oven.
     """
     prefix, _, name = key.partition("_")
     parts = appliance_type(data)
@@ -679,7 +679,7 @@ def validate_control_properties(
                     raise ServiceValidationError("The ice maker mode is unknown.")
                 if data["max_ice_on"]:
                     raise ServiceValidationError(
-                        "Turn off Max Ice before changing the freezer setpoint."
+                        "Turn off Max ice before changing the freezer setpoint."
                     )
             if key == "crisp_set_temp":
                 if type(data.get("crisp_temp_mode")) is not int or data["crisp_temp_mode"] != 0:

@@ -52,7 +52,7 @@
   "services": {
     "schedule_ice_delay": {
       "name": "Programmer une pause de la machine à glaçons",
-      "description": "Met en pause une machine à glaçons autonome pendant 1 à 12 heures, maintenant ou plus tard dans la journée.",
+      "description": "Met en pause une machine à glaçons autonome pendant 1 à 12 heures, dès maintenant ou dans les 24 prochaines heures.",
       "fields": {
         "device_id": {"name": "Machine à glaçons", "description": "La machine à glaçons autonome à mettre en pause."},
         "duration": {"name": "Durée", "description": "Nombre d'heures de pause de la production de glaçons."},

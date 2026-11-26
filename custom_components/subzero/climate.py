@@ -107,11 +107,11 @@ class SubZeroClimate(SubZeroEntity, ClimateEntity):
         on = data.get(f"{self._prefix}_unit_on")
         if on is False:
             return HVACAction.OFF
-        if on is not True:
+        at_temperature = data.get(f"{self._prefix}_at_set_temp")
+        if on is not True or type(at_temperature) is not bool:
+            # Without the Preheated reading, preheating and heating look the same.
             return None
-        if data.get(f"{self._prefix}_at_set_temp") is False:
-            return HVACAction.PREHEATING
-        return HVACAction.HEATING
+        return HVACAction.HEATING if at_temperature else HVACAction.PREHEATING
 
     @property
     def native_current_temperature(self) -> int | float | None:

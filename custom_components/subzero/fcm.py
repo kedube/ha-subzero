@@ -35,7 +35,8 @@ _LOGGER = logging.getLogger(__name__)
 RETRY_INTERVAL = 300
 REFRESH_INTERVAL = 3600
 HEALTH_CHECK_INTERVAL = 60
-# Failed attempts in a row, RETRY_INTERVAL apart, before a repair says alerts aren't working.
+# Failed attempts in a row before a repair says alerts aren't working: setup errors,
+# syncs with a request Sub-Zero refused, or a listener that stopped.
 FAILURES_BEFORE_REPAIR = 3
 
 
@@ -150,6 +151,9 @@ class FcmAlerts:
         self.last_error: str | None = None
         self.last_sync: str | None = None
         self.subscription_healthy = False
+        # Whether Sub-Zero refused a request in the last sync, as opposed to an
+        # appliance that hasn't reported the state its alerts depend on.
+        self._sync_refused = False
         self._failures = 0
 
     @callback
@@ -259,11 +263,18 @@ class FcmAlerts:
             while not self._stop.is_set():
                 delay = HEALTH_CHECK_INTERVAL
                 try:
+                    failed = False
                     if (
                         self.push is None
                         or not self.push.do_listen
                         or (self.push.tasks and self.push.tasks[0].done())
                     ):
+                        if self.push is not None and self.push.tasks:
+                            # The listener stopped, as firebase-messaging's does after a
+                            # few errors in a row, whether or not it ever connected. One
+                            # whose setup failed never listened, and that error counted.
+                            _LOGGER.debug("The Firebase alert listener stopped; restarting it")
+                            failed = True
                         await self._close_push()
                         self.push = PushClient(
                             self._on_alert,
@@ -284,8 +295,14 @@ class FcmAlerts:
                             self.last_sync = datetime.now(UTC).isoformat()
                         interval = REFRESH_INTERVAL if self.subscription_healthy else RETRY_INTERVAL
                         next_sync = time.monotonic() + interval
+                        failed |= self._sync_refused
                     delay = min(delay, max(1, next_sync - time.monotonic()))
-                    self._attempt_succeeded()
+                    if failed:
+                        self._attempt_failed()
+                    elif self.push.is_started() and not self._sync_refused:
+                        # start() returns before the listener signs in to Firebase, so
+                        # only one that has signed in shows that alerts work.
+                        self._attempt_succeeded()
                 # Firebase and appliance requests can fail independently.
                 except Exception as error:
                     self.last_error = type(error).__name__
@@ -303,11 +320,13 @@ class FcmAlerts:
     async def _sync(self, psid: str, token: str) -> bool:
         """Renew our own appliance registrations and subscribe to supported codes."""
         succeeded = await self._remove_subscriptions(psid, set(self.coordinators))
+        # Appliances whose alerts depend on state they haven't reported yet.
+        waiting = False
         ids = dict(self.entry.data.get("fcm_registration_ids", {}))
         for device_id, coordinator in self.coordinators.items():
             data = coordinator.data
             if not data:
-                succeeded = False
+                waiting = True
                 continue
             if is_dishwasher(data):
                 family = 3
@@ -316,7 +335,7 @@ class FcmAlerts:
             elif is_fridge(data) or is_wine(data) or is_ice_maker(data):
                 family = 1
             elif appliance_type(data) is None:
-                succeeded = False
+                waiting = True
                 continue
             else:
                 # Hoods do not have an appliance alert family in the app.
@@ -372,7 +391,8 @@ class FcmAlerts:
                     "Could not subscribe to alerts for %s: %s", coordinator.device["name"], error
                 )
                 succeeded = False
-        return succeeded
+        self._sync_refused = not succeeded
+        return succeeded and not waiting
 
     async def _remove_subscriptions(self, psid: str, retain: set[str]) -> bool:
         """Unsubscribe appliances removed from this entry or all when turned off."""

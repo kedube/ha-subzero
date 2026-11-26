@@ -530,6 +530,7 @@ async def test_a_rate_limit_holds_back_only_the_api_that_sent_it(
             "api": "signal-r",
             "retry_after": 600,
             "retry_after_sent": False,
+            "connection_limit": False,
         }
     ]
     assert client.request_counts() == {
@@ -1449,6 +1450,58 @@ async def test_signalr_refusals_without_retry_after_wait_longer_each_time(
         False,
         True,
     ]
+
+
+async def test_a_full_signalr_service_is_retried_without_a_growing_wait(
+    aiohttp_server, monkeypatch, socket_enabled, tokens, caplog
+):
+    answers = iter(["full", "full", 429, "full"])
+
+    async def negotiate(request):
+        answer = next(answers)
+        if answer == "full":
+            return web.Response(status=429, text="Connection count reaches limit.")
+        return web.json_response({}, status=429)
+
+    app = web.Application()
+    app.router.add_post("/client/negotiate", negotiate)
+    server = await aiohttp_server(app)
+    monkeypatch.setattr(api, "SIGNALR_ORIGIN", str(server.make_url("/")).rstrip("/"))
+    monkeypatch.setattr(api.random, "uniform", lambda low, high: low)
+    errors = []
+    async with aiohttp.ClientSession() as session:
+        client = api.SubZeroClient(session, "test-key", tokens)
+        for _ in range(4):
+            client._holds.clear()
+            with pytest.raises(api.RateLimited) as refused:
+                await client._json(
+                    "POST", api.SIGNALR_ORIGIN + "/client/negotiate", name="SignalR negotiate"
+                )
+            errors.append(refused.value)
+        # A request held back after it says the same.
+        with pytest.raises(api.ConnectionLimitReached) as held:
+            await client._json(
+                "POST", api.SIGNALR_ORIGIN + "/client/negotiate", name="SignalR negotiate"
+            )
+    assert [type(error) for error in errors] == [
+        api.ConnectionLimitReached,
+        api.ConnectionLimitReached,
+        api.RateLimited,
+        api.ConnectionLimitReached,
+    ]
+    assert str(errors[0]) == (
+        "Sub-Zero's live-update service has no free connections (retrying in 120 s)."
+    )
+    assert held.value.retry_after <= 120
+    # A full service doesn't count toward the doubling wait other refusals get.
+    assert [limit["retry_after"] for limit in client.rate_limits] == [120, 120, 60, 120]
+    assert [limit["connection_limit"] for limit in client.rate_limits] == [
+        True,
+        True,
+        False,
+        True,
+    ]
+    assert "as its live-update service has no free connections" in caplog.text
 
 
 def test_signalr_retry_delay_is_random_and_capped(monkeypatch):

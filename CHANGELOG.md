@@ -4,7 +4,19 @@ Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then
 
 ## Unreleased
 
+### Changed
+
+- **Appliances stay available while the live connection is down.** The integration reads each appliance's status once a minute until the appliance's state arrives on a new connection. Each read that works keeps the appliance available, and its controls working, for 2 more minutes. Before, every appliance became unavailable 2 minutes after the connection dropped, until a reconnect got through, which can take a while when Sub-Zero's live-update service is full. Readings can lag by up to a minute meanwhile, and a brief change between two reads, such as a door opened and closed, isn't seen. Turning off **Enable polling for changes** turns these reads off. As in orienw/ha-subzero 0.7.5.
+- **When Sub-Zero's live-update service has no free connections, the integration tries again every 2 to 4 minutes.** A connection frees up only when someone else's ends, so waiting longer doesn't help. Before, the wait doubled up to 10 minutes, and to 15 after several failed reconnects. The log says when this is the reason. orienw/ha-subzero found the service's answer, `Connection count reaches limit.`
+- After a reconnect, **Live reporting mode** shows **Disconnected** until the appliance's state arrives on the new connection.
+
 ### Fixed
+
+- **The Firebase appliance alerts repair now appears when Firebase never connects.** Starting the Firebase listener counted as success before it had signed in, so a listener that kept failing to connect, as with the `Incorrect padding` error fixed in 1.08, reset the count every minute and the repair never showed. It now also appears when Sub-Zero keeps refusing the alert subscriptions. An appliance that hasn't reported yet doesn't count. As in orienw/ha-subzero 0.8.1.
+- **Disabling the integration clears the Firebase appliance alerts repair**, which said Home Assistant keeps trying.
+- **A live connection refused while the integration starts no longer logs `Error requesting … data` for every appliance.** Their status is read next anyway.
+- **An oven's climate entity shows neither preheating nor heating until the oven says whether it's preheated.** Before, it showed heating.
+- The **Schedule ice delay** action's description says the pause can start within the next 24 hours, as it can, instead of later today. The freezer setpoint error says **Max ice**, the entity's name.
 
 - **A Home Assistant clock running fast no longer floods Sub-Zero with requests.** With the clock about an hour fast, the integration replaced its live connection as soon as each one opened, and refreshed its sign-in before every request. That kind of reconnecting is what Sub-Zero refuses (HTTP 429). Token lifetimes are now measured from the tokens themselves, and the connection is replaced at most every 5 minutes.
 - **One update that can't be applied no longer stops live updates for every appliance.** Before, such an update ended the shared connection. The appliance sent the same value again after each reconnect, so updates kept stopping and appliances went unavailable. Now the update is logged and skipped. One such value, an appliance clock near year 1 or 9999, is now simply ignored.
@@ -19,6 +31,12 @@ Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then
 ### Diagnostics
 
 - `unrecognized_state_keys` lists at most 100 property names, each up to 100 characters.
+- Each appliance's `push` section counts `outage_reads`, its status reads while the connection was down.
+- Each entry in `rate_limits` has `connection_limit`, which is `true` when Sub-Zero's live-update service had no free connections.
+
+### Documentation
+
+- The README says only older E series and M series ovens start with the mode and temperature set at the oven. Newer ones work like other ovens, as they always have here.
 
 ## 1.13
 

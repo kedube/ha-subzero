@@ -52,7 +52,7 @@
   "services": {
     "schedule_ice_delay": {
       "name": "Programar pausa de la máquina de hielo",
-      "description": "Pausa una máquina de hielo independiente entre 1 y 12 horas, ahora o más tarde hoy.",
+      "description": "Pausa una máquina de hielo independiente entre 1 y 12 horas, desde ahora o dentro de las próximas 24 horas.",
       "fields": {
         "device_id": {"name": "Máquina de hielo", "description": "La máquina de hielo independiente que se va a pausar."},
         "duration": {"name": "Duración", "description": "Horas que se pausa la producción de hielo."},

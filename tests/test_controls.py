@@ -641,7 +641,7 @@ async def test_queued_write_revalidates_after_the_previous_one(hass, controls):
     assert controls.client.set_property.await_count == 1
     release.set()
     await first
-    with pytest.raises(ServiceValidationError, match="Max Ice"):
+    with pytest.raises(ServiceValidationError, match="Max ice"):
         await second
     assert controls.client.set_property.await_args_list == [
         call("test-fridge", "night_ice_on", False),
