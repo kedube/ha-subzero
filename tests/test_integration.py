@@ -374,6 +374,7 @@ async def test_pushed_change_lets_a_later_silent_spell_renew_push(hass, loaded):
     assert client.renew_connection.call_count == 2
 
 
+@pytest.mark.logs_errors
 async def test_unexpected_check_error_keeps_watching(hass, loaded):
     _, client, updates, _, _ = loaded
     client.state.return_value = {**client.state.return_value, "ref_door_ajar": True}
@@ -862,6 +863,7 @@ async def test_an_out_of_range_appliance_clock_keeps_push_going(hass, loaded, ca
     assert len(client.watched) == 1
 
 
+@pytest.mark.logs_errors
 async def test_an_update_that_cannot_be_applied_is_skipped(hass, loaded, caplog, monkeypatch):
     """One bad update used to end push for every appliance, again on each reconnect."""
     entry, client, updates, _, _ = loaded
@@ -1158,7 +1160,7 @@ async def test_firmware_updates_device_registry_without_reload(hass, loaded, pus
         await coordinator.async_refresh()
     await hass.async_block_till_done()
     assert registry.async_get(device.id).sw_version == "2.0"
-    assert coordinator.device_info["sw_version"] == "2.0"
+    assert coordinator.device_fields["sw_version"] == "2.0"
     await hass.config_entries.async_unload(entry.entry_id)
     coordinator.apply_update(StateUpdate({"version": {"fw": "3.0"}}, full=False))
     assert registry.async_get(device.id).sw_version == "2.0"
@@ -1369,7 +1371,11 @@ async def test_stream_failure_marks_entities_unavailable(hass, loaded, error):
 
 @pytest.mark.parametrize(
     ("error", "delay"),
-    [(ApiError("Disconnected"), 30), (RateLimited(300), 300), (RecursionError("nested"), 30)],
+    [
+        (ApiError("Disconnected"), 30),
+        (RateLimited(300), 300),
+        pytest.param(RecursionError("nested"), 30, marks=pytest.mark.logs_errors),
+    ],
 )
 async def test_reconnect_waits_then_recovers_from_push_without_polling(
     hass, loaded, monkeypatch, error, delay
@@ -1543,7 +1549,11 @@ async def test_canceling_one_recovery_does_not_block_other_appliance_updates(has
 
 @pytest.mark.parametrize(
     ("error", "delay"),
-    [(ApiError("Offline"), 30), (RateLimited(300), 300), (ValueError("Unexpected"), 30)],
+    [
+        (ApiError("Offline"), 30),
+        (RateLimited(300), 300),
+        pytest.param(ValueError("Unexpected"), 30, marks=pytest.mark.logs_errors),
+    ],
 )
 async def test_failed_recovery_retries_with_backoff(hass, loaded, monkeypatch, error, delay):
     _, client, updates, _, _ = loaded
@@ -1864,9 +1874,10 @@ async def test_status_reads_keep_appliances_available_while_push_is_down(
     assert hass.states.get("sensor.kitchen_refrigerator_setpoint").state == "38"
     assert "Error requesting" not in caplog.text
     # A read that fails makes the appliance unavailable; the next one that works restores it.
-    client.state.side_effect = [ApiError("Status timed out"), client.state.return_value]
+    client.state.side_effect = ApiError("Status timed out")
     await fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=61))
     assert hass.states.get("sensor.kitchen_refrigerator_setpoint").state == "unavailable"
+    client.state.side_effect = None
     await fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=61))
     assert hass.states.get("sensor.kitchen_refrigerator_setpoint").state == "38"
     # Push returns, and its snapshot confirms the state, so the reads stop.

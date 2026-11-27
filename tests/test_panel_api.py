@@ -712,6 +712,7 @@ async def test_removing_an_entry_drops_its_appliances_appearance(hass, hass_stor
     assert saved_appearance(hass_storage) == {"kept": {"finish": "black"}}
 
 
+@pytest.mark.logs_errors
 @pytest.mark.parametrize("cloud_appliance", [FRIDGE], indirect=True)
 async def test_diagnostics_never_fail_over_the_panel(hass, cloud_appliance, caplog):
     with patch(
@@ -746,6 +747,7 @@ def test_a_spec_is_copied_as_the_panel_receives_it():
     assert spec["ovens"][0]["width"] == 30
 
 
+@pytest.mark.logs_errors
 def test_a_failing_spec_is_drawn_generic_and_logged_once(caplog):
     with patch.object(panel_api, "appliance_spec", side_effect=ValueError):
         for _ in range(2):

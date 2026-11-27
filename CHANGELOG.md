@@ -2,6 +2,22 @@
 
 Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then 2.00.
 
+## Unreleased
+
+### Fixed
+
+- **Ready for Home Assistant 2026.12.** It deprecates using device details as a dictionary, and logged that Sub-Zero "calls `DeviceInfo.update()`" and "unpacks it", asking for a bug report. That use would stop working in Home Assistant 2027.12. As in orienw/ha-subzero.
+
+### Documentation
+
+- The README describes installing through the Marketplace that's built into Home Assistant 2026.11 and newer, as well as HACS. On the Marketplace's page for Sub-Zero, from Home Assistant 2026.12, the README leaves out the parts that only make sense on GitHub: the badges, the contents links, installation, and development.
+
+### Development
+
+- A test now fails if the integration logs an exception, adds an entity twice, or makes Home Assistant report deprecated use. Tests that cause one of the first two on purpose are marked `logs_errors`. This found tests that had passed over errors: the reload after a Configure change and Home Assistant's unload at the end of a test ran the real unload after setup had been patched, and a test of the status reads while the connection is down ran out of fake status answers. None of these were bugs in the integration.
+- With pytest-homeassistant-custom-component, the tests' HTTP client keeps its router open for routes added later, as Home Assistant's server does. Otherwise the sidebar panel's files couldn't be served in tests on Home Assistant 2026.8.
+- CI tests Home Assistant 2026.11.3 instead of 2026.11.1, and ruff is 0.17.6.
+
 ## 1.14
 
 ### Changed

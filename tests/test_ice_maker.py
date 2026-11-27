@@ -255,6 +255,9 @@ async def test_schedule_service_reaches_a_shared_appliance_through_a_loaded_acco
     cloud_appliance.client.set_ice_delay.assert_awaited_once_with("appliance", 7200, 0, False)
 
 
+# Entity IDs don't name the account, so the second account's entities for the shared
+# appliance are refused as duplicates.
+@pytest.mark.logs_errors
 @pytest.mark.parametrize(
     ("target", "broken", "tried", "error"),
     [

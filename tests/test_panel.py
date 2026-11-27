@@ -210,6 +210,7 @@ async def test_a_missing_bundle_leaves_the_panel_out(hass, bundle, caplog):
     assert frontend.panel_module_url(hass) is None
 
 
+@pytest.mark.logs_errors
 async def test_a_registration_failure_is_retried_by_the_next_entry(hass, caplog):
     entry = _entry(hass, "a")
     with patch.object(
@@ -226,6 +227,7 @@ async def test_a_registration_failure_is_retried_by_the_next_entry(hass, caplog)
     assert list(_sidebar(hass)) == [PANEL_URL_PATH]
 
 
+@pytest.mark.logs_errors
 async def test_the_panel_waits_until_its_files_are_served(hass, caplog):
     hass.http = MagicMock(async_register_static_paths=AsyncMock(side_effect=[RuntimeError, None]))
     entry = _entry(hass, "a")
@@ -332,6 +334,7 @@ async def test_configure_turns_the_sidebar_panel_off_and_on(hass, cloud_applianc
     assert list(_sidebar(hass)) == [PANEL_URL_PATH]
 
 
+@pytest.mark.logs_errors
 @pytest.mark.parametrize("cloud_appliance", [FRIDGE], indirect=True)
 async def test_a_sidebar_failure_never_fails_entry_setup(hass, cloud_appliance, caplog):
     entry = cloud_appliance.entry

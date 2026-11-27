@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from functools import partial
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -13,7 +14,6 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.device_registry import DeviceInfo
 
 from .api import ApiError, SubZeroClient
 from .app_config import SUBSCRIPTION_KEY
@@ -78,15 +78,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: SubZeroConfigEntry) -> b
     await account.async_setup()
     entry.runtime_data = account
     registry = dr.async_get(hass)
-    registered: dict[str, DeviceInfo] = {}
+    registered: dict[str, dict[str, Any]] = {}
 
     @callback
     def update_device(coordinator: SubZeroCoordinator) -> None:
         # Coordinators update on every push; the registry needs only changes.
-        info = coordinator.device_info
-        if registered.get(coordinator.device_id) != info:
-            registered[coordinator.device_id] = info
-            registry.async_get_or_create(config_entry_id=entry.entry_id, **info)
+        fields = coordinator.device_fields
+        if registered.get(coordinator.device_id) != fields:
+            registered[coordinator.device_id] = fields
+            registry.async_get_or_create(config_entry_id=entry.entry_id, **fields)
 
     for coordinator in account.coordinators.values():
         update_device(coordinator)

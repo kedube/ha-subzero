@@ -1,13 +1,17 @@
 """Synthetic fixtures; tests never use the owner's saved account data."""
 
 import asyncio
+import logging
+import os
 import time
+import traceback
 from functools import partial
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import jwt
 import pytest
+from aiohttp import web
 from homeassistant.helpers import device_registry as dr
 
 from custom_components.subzero.api import Appliance, StateUpdate, SubZeroClient, token_state
@@ -32,6 +36,70 @@ def make_tokens(user_id="test-owner", *, expires_in=3600, refresh_token="test-re
 @pytest.fixture
 def tokens():
     return make_tokens()
+
+
+_INTEGRATION_PATH = f"{os.sep}custom_components{os.sep}subzero{os.sep}"
+
+
+def _integration_exception(record: logging.LogRecord) -> bool:
+    """Whether a record logs an exception from the integration's code.
+
+    Home Assistant logs some under its own loggers, such as an entity that failed to update.
+    """
+    if not record.exc_info or record.levelno < logging.ERROR:
+        return False
+    if record.name.startswith("custom_components.subzero"):
+        return True
+    return any(
+        _INTEGRATION_PATH in frame.filename for frame in traceback.extract_tb(record.exc_info[2])
+    )
+
+
+def _swallowed_error(record: logging.LogRecord) -> bool:
+    return _integration_exception(record) or (
+        record.levelno >= logging.ERROR and "does not generate unique IDs" in record.getMessage()
+    )
+
+
+def _deprecated_use(record: logging.LogRecord) -> bool:
+    return record.name == "homeassistant.helpers.frame" and "'subzero'" in record.getMessage()
+
+
+@pytest.fixture(autouse=True)
+def no_swallowed_errors(request, caplog):
+    """Fail a test in which the integration logged an exception, added an entity twice,
+    or used Home Assistant in a way that it reports as deprecated.
+
+    Home Assistant logs each and carries on, so a test's own assertions can pass over
+    them. A test that causes one of the first two on purpose is marked `logs_errors`.
+    """
+    yield
+    records = [
+        record for when in ("setup", "call", "teardown") for record in caplog.get_records(when)
+    ]
+    deprecated = [record for record in records if _deprecated_use(record)]
+    assert not deprecated, deprecated[0].getMessage()
+    if request.node.get_closest_marker("logs_errors"):
+        return
+    swallowed = [record for record in records if _swallowed_error(record)]
+    assert not swallowed, f"{swallowed[0].name}: {swallowed[0].getMessage()}"
+
+
+@pytest.fixture
+def aiohttp_client(aiohttp_client):
+    """Keep the HTTP router open for routes added after the client starts.
+
+    Home Assistant's server does that when it starts, and the sidebar panel's files are
+    served once an entry sets up. Home Assistant's own test client does it too, but with
+    pytest-homeassistant-custom-component the hass clients get pytest-aiohttp's.
+    """
+
+    async def create(app, *args, **kwargs):
+        if isinstance(app, web.Application):
+            app._router.freeze = lambda: None
+        return await aiohttp_client(app, *args, **kwargs)
+
+    return create
 
 
 @pytest.fixture(autouse=True)

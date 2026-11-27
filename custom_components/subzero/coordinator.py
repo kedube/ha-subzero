@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator, Callable, Collection
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from datetime import datetime, timedelta, tzinfo
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import CALLBACK_TYPE, HassJob, HomeAssistant, callback
@@ -750,24 +751,30 @@ class SubZeroCoordinator(DataUpdateCoordinator[dict]):
         return True
 
     @property
-    def device_info(self) -> DeviceInfo:
-        info = DeviceInfo(identifiers={(DOMAIN, self.device_id)}, name=self.device["name"])
+    def device_fields(self) -> dict[str, Any]:
+        """The appliance's device registry details, as keyword arguments.
+
+        A plain dict, since Home Assistant 2026.12 deprecates using DeviceInfo as one.
+        """
+        fields: dict[str, Any] = {
+            "identifiers": {(DOMAIN, self.device_id)},
+            "name": self.device["name"],
+        }
         if not self.data.get("appliance_model"):
             # Until the appliance reports, keep the details the registry saved from
             # its last status rather than clearing them.
-            return info
+            return fields
         version = self.data.get("version")
         serial = self.data.get("appliance_serial")
-        # From Home Assistant 2026.11, DeviceInfo.update takes only a mapping.
-        info.update(
-            {
-                "manufacturer": appliance_brand(self.data),
-                "model": self.data["appliance_model"],
-                "serial_number": serial if isinstance(serial, str) else None,
-                "sw_version": version.get("fw") if isinstance(version, dict) else None,
-            }
-        )
-        return info
+        fields["manufacturer"] = appliance_brand(self.data)
+        fields["model"] = self.data["appliance_model"]
+        fields["serial_number"] = serial if isinstance(serial, str) else None
+        fields["sw_version"] = version.get("fw") if isinstance(version, dict) else None
+        return fields
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(**self.device_fields)
 
     @asynccontextmanager
     async def _command(self, properties: dict | None = None) -> AsyncIterator[None]:

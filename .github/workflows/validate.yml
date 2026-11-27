@@ -23,8 +23,8 @@ jobs:
         include:
           - homeassistant: '2026.8.0'
             test-package: pytest-homeassistant-custom-component==0.13.354
-          - homeassistant: '2026.11.1'
-            test-package: pytest-homeassistant==2026.11.1
+          - homeassistant: '2026.11.3'
+            test-package: pytest-homeassistant==2026.11.3
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7

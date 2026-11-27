@@ -1,3 +1,4 @@
+<!-- ha-marketplace:exclude-start -->
 # (Unofficial) Sub-Zero Appliances integration for Home Assistant
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz/docs/faq/custom_repositories/)
@@ -7,6 +8,7 @@
 [![License](https://img.shields.io/github/license/kedube/ha-subzero)](LICENSE)
 
 <img src="custom_components/subzero/brand/icon.png" alt="Sub-Zero integration icon" width="80">
+<!-- ha-marketplace:exclude-end -->
 
 Monitor and control Sub-Zero refrigerators, freezers, wine storage, and ice makers, Wolf ovens, ranges, and hoods, and Cove dishwashers in Home Assistant.
 
@@ -19,31 +21,43 @@ This is an unofficial integration. It is not affiliated with or endorsed by Sub-
   <img src="docs/images/panel-hero-light.png" alt="The Sub-Zero panel opened from Home Assistant's sidebar, with Kitchen cards for a Sub-Zero refrigerator with its door open, a Wolf range with its right oven preheated to 375 degrees, and a Cove dishwasher running with 46 minutes left">
 </picture>
 
+<!-- ha-marketplace:exclude-start -->
 **Contents:** [Requirements](#requirements) · [Installation](#installation) · [Setup](#setup) · [Options](#options) · [Sidebar panel](#sidebar-panel) · [Appliances](#appliances) · [Events and automations](#events-and-automations) · [Actions](#actions) · [How live updates work](#how-live-updates-work) · [Diagnostics](#diagnostics) · [Compatibility](#compatibility) · [Privacy and security](#privacy-and-security) · [Getting help](#getting-help) · [Development](#development)
+<!-- ha-marketplace:exclude-end -->
 
 ## Requirements
 
-- Home Assistant **2026.8.0** or newer, with [HACS](https://hacs.xyz) for the recommended installation.
+- Home Assistant **2026.8.0** or newer.
 - Appliances already connected to Wi-Fi and added to your account in the Sub-Zero Group Owner's App.
 - An account in a country the app supports: **Canada, Mexico, and the United States**. See [Sub-Zero's country availability](https://www.subzero-wolf.com/assistance/answers/multi-brand/sub-zero-group-owner-s-app-location-availability).
 
+<!-- ha-marketplace:exclude-start -->
 ## Installation
 
-### HACS
+### Marketplace or HACS
 
-[![Open this repository in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=kedube&repository=ha-subzero&category=integration)
+[![Open this repository in the Marketplace or HACS](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=kedube&repository=ha-subzero&category=integration)
 
-Use the button above, or add the repository yourself:
+Sub-Zero isn't in the Marketplace's catalog, so it's added as a custom repository. Use the button above, or add it yourself.
+
+On Home Assistant 2026.11 or newer, with its built-in Marketplace:
+
+1. Open **Settings → Marketplace**, then **⋮ → Custom repositories**.
+2. Add `https://github.com/kedube/ha-subzero` with the type **Integration**. Adding a custom repository needs the Marketplace connected to a GitHub account, and it asks you to connect one first. The connection only reads public information.
+3. Install **Sub-Zero**, then restart Home Assistant.
+
+On earlier versions, with [HACS](https://hacs.xyz):
 
 1. In HACS, open **⋮ → Custom repositories**.
 2. Add `https://github.com/kedube/ha-subzero` with the type **Integration**.
 3. Download **Sub-Zero**, then restart Home Assistant.
 
-HACS offers each new release as an update. [Release notes](https://github.com/kedube/ha-subzero/releases) list what each one changes, and [CHANGELOG.md](CHANGELOG.md) collects them.
+Both offer each new release as an update. If you installed Sub-Zero with HACS, the Marketplace takes over HACS and its repositories when you upgrade to Home Assistant 2026.11, so updates keep coming without adding it again. [Release notes](https://github.com/kedube/ha-subzero/releases) list what each one changes, and [CHANGELOG.md](CHANGELOG.md) collects them.
 
 ### Manual
 
 Copy the `custom_components/subzero` folder into the `custom_components` folder of your Home Assistant configuration, then restart Home Assistant.
+<!-- ha-marketplace:exclude-end -->
 
 ## Setup
 
@@ -381,6 +395,7 @@ Not supported: local network control, multi-factor methods other than text messa
 
 [Open an issue](https://github.com/kedube/ha-subzero/issues) with your Home Assistant version, the integration version, your appliance model, and the steps that lead to the problem. Say whether the same thing works in the Sub-Zero app, and attach a diagnostics download and any `custom_components.subzero` log messages. Remove account details and tokens from logs before posting them.
 
+<!-- ha-marketplace:exclude-start -->
 ## Development
 
 [PROTOCOL.md](PROTOCOL.md) describes Sub-Zero's cloud API, the live update connection, Firebase alerts, and the appliance properties, with the source of each detail.
@@ -419,7 +434,8 @@ Either way, the workflow commits the version to manifest.json on `main` and rena
 
 Versions have two decimal places and go up by 0.01: 1.00, 1.01, up to 1.99, then 2.00. Tags use the bare version, such as `1.01`, with no `v`. A new version must be higher than every existing tag, including the earlier `v0.x.y` tags. There are no pre-releases, because Home Assistant doesn't accept a version such as `1.01b1`.
 
-The workflow tags the release, attaches the `ha_subzero.zip` that HACS downloads, and uses the changelog section as the notes, with a link comparing it with the previous release. Pushing a version tag yourself also works if it matches manifest.json, but the workflow can't change a tagged commit, so head its changelog section with the version first. Pushing a tag that already has a release replaces its zip.
+The workflow tags the release, attaches the `ha_subzero.zip` that the Marketplace and HACS download, and uses the changelog section as the notes, with a link comparing it with the previous release. Pushing a version tag yourself also works if it matches manifest.json, but the workflow can't change a tagged commit, so head its changelog section with the version first. Pushing a tag that already has a release replaces its zip.
+<!-- ha-marketplace:exclude-end -->
 
 ## License & Credit
 

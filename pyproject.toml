@@ -1,6 +1,10 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "logs_errors: the test makes the integration log an exception, or add an entity twice, on purpose",
+]
 # Let Home Assistant install its httpx alias before respx is imported.
 addopts = "-p no:respx"
 

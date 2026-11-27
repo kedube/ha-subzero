@@ -8,6 +8,7 @@ import aiohttp
 import pytest
 from homeassistant.data_entry_flow import FlowResultType, UnknownFlow
 
+import custom_components.subzero as integration
 from custom_components.subzero.api import ApiError, Appliance, RateLimited, token_state
 from custom_components.subzero.auth import (
     InvalidAuth,
@@ -34,6 +35,25 @@ APPLIANCES = [
     Appliance("test-fridge", "Kitchen", "F"),
     Appliance("test-oven", "Wall oven", "C"),
 ]
+
+
+@pytest.fixture(autouse=True)
+def unload_entries_set_up_by_a_mock():
+    """Unload entries that a patched `async_setup_entry` left loaded without an account.
+
+    The hass fixture unloads every loaded entry after the test, once the test's own
+    patches are gone, so the real `async_unload_entry` would find no runtime data.
+    Set up before hass, this lasts until after it.
+    """
+    unload_entry = integration.async_unload_entry
+
+    async def unload(hass, entry):
+        if not hasattr(entry, "runtime_data"):
+            return True
+        return await unload_entry(hass, entry)
+
+    with patch("custom_components.subzero.async_unload_entry", unload):
+        yield
 
 
 def _phonefactor_login(*, captcha_required: bool = True):
